@@ -1,0 +1,94 @@
+{
+  "reports": {
+    "dashboard": {
+      "component_rate": 1.0,
+      "text_rate": 0.7188,
+      "structure_rate": 0.4861,
+      "overall": 0.7847,
+      "detail": {
+        "design_components": {
+          "navbar": 1,
+          "stat-block": 3,
+          "chart": 1,
+          "table": 1
+        },
+        "code_tags": {
+          "div": 9,
+          "nav": 1,
+          "strong": 1,
+          "a": 2,
+          "span": 7,
+          "table": 1,
+          "thead": 1,
+          "tr": 4,
+          "th": 3,
+          "tbody": 1,
+          "td": 9
+        },
+        "missing_texts": [
+          "本月营收",
+          "¥1,284,500",
+          "↑ 12.6%",
+          "新增用户",
+          "8,642",
+          "↑ 8.3%",
+          "客单价",
+          "¥148.6",
+          "↓ 2.4%"
+        ]
+      }
+    },
+    "ecommerce": {
+      "component_rate": 1.0,
+      "text_rate": 1.0,
+      "structure_rate": 0.4978,
+      "overall": 0.8996,
+      "detail": {
+        "design_components": {
+          "navbar": 1,
+          "title-text": 1,
+          "button": 7,
+          "image": 4,
+          "tag": 4
+        },
+        "code_tags": {
+          "div": 25,
+          "nav": 1,
+          "strong": 1,
+          "a": 3,
+          "h2": 1,
+          "button": 7,
+          "img": 4,
+          "span": 4
+        },
+        "missing_texts": []
+      }
+    },
+    "login": {
+      "component_rate": 1.0,
+      "text_rate": 0.7143,
+      "structure_rate": 0.5,
+      "overall": 0.7857,
+      "detail": {
+        "design_components": {
+          "avatar": 1,
+          "title-text": 1,
+          "input": 2,
+          "button": 1
+        },
+        "code_tags": {
+          "div": 2,
+          "h3": 1,
+          "label": 2,
+          "input": 2,
+          "button": 1
+        },
+        "missing_texts": [
+          "请输入邮箱或手机号",
+          "请输入密码"
+        ]
+      }
+    }
+  },
+  "average": 0.8233
+}
