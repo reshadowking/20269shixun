@@ -1,0 +1,519 @@
+{
+  "id": "ecommerce-root",
+  "type": "frame",
+  "style": {
+    "layout": "column",
+    "gap": 16,
+    "background": "#FFF0F0",
+    "padding": 32,
+    "width": 920
+  },
+  "children": [
+    {
+      "id": "ecom-nav",
+      "type": "component",
+      "componentType": "navbar",
+      "props": {
+        "title": "优选商城",
+        "links": [
+          {
+            "label": "首页",
+            "href": "#"
+          },
+          {
+            "label": "分类",
+            "href": "#"
+          },
+          {
+            "label": "购物车",
+            "href": "#"
+          }
+        ]
+      }
+    },
+    {
+      "id": "ecom-title",
+      "type": "component",
+      "componentType": "title-text",
+      "props": {
+        "text": "618 狂欢 · 限时领券",
+        "level": 2
+      },
+      "style": {
+        "align": "center",
+        "color": "text-primary"
+      }
+    },
+    {
+      "id": "ecom-sub",
+      "type": "text",
+      "props": {
+        "text": "满减优惠券，先到先得，每人限领 3 张"
+      },
+      "style": {
+        "align": "center",
+        "color": "text-secondary",
+        "fontSize": 13
+      }
+    },
+    {
+      "id": "ecom-coupons",
+      "type": "frame",
+      "style": {
+        "layout": "row",
+        "gap": 24,
+        "justify": "center"
+      },
+      "children": [
+        {
+          "id": "ecom-c1",
+          "type": "component",
+          "componentType": "button",
+          "props": {
+            "text": "¥50 满199可用",
+            "variant": "primary"
+          },
+          "style": {
+            "width": 220,
+            "height": 96,
+            "radius": 12,
+            "background": "#FFFFFF",
+            "color": "danger",
+            "fontSize": 16
+          }
+        },
+        {
+          "id": "ecom-c2",
+          "type": "component",
+          "componentType": "button",
+          "props": {
+            "text": "¥100 满399可用"
+          },
+          "style": {
+            "width": 220,
+            "height": 96,
+            "radius": 12,
+            "background": "#FFFFFF",
+            "color": "danger",
+            "fontSize": 16
+          }
+        },
+        {
+          "id": "ecom-c3",
+          "type": "component",
+          "componentType": "button",
+          "props": {
+            "text": "¥200 满799可用"
+          },
+          "style": {
+            "width": 220,
+            "height": 96,
+            "radius": 12,
+            "background": "#FFFFFF",
+            "color": "danger",
+            "fontSize": 16
+          }
+        }
+      ]
+    },
+    {
+      "id": "ecom-products",
+      "type": "frame",
+      "style": {
+        "layout": "row",
+        "gap": 16,
+        "justify": "center"
+      },
+      "children": [
+        {
+          "id": "ecom-p1",
+          "type": "frame",
+          "style": {
+            "layout": "column",
+            "gap": 8,
+            "background": "#FFFFFF",
+            "padding": 12,
+            "radius": 12,
+            "width": 200
+          },
+          "children": [
+            {
+              "id": "ecom-p1-img",
+              "type": "component",
+              "componentType": "image",
+              "props": {
+                "alt": "Air Run Pro 跑步鞋"
+              },
+              "style": {
+                "width": 180,
+                "height": 140
+              }
+            },
+            {
+              "id": "ecom-p1-name",
+              "type": "text",
+              "props": {
+                "text": "Air Run Pro 跑步鞋"
+              },
+              "style": {
+                "fontSize": 14,
+                "fontWeight": 600
+              }
+            },
+            {
+              "id": "ecom-p1-price",
+              "type": "frame",
+              "style": {
+                "layout": "row",
+                "gap": 8,
+                "alignItems": "flex-end"
+              },
+              "children": [
+                {
+                  "id": "ecom-p1-now",
+                  "type": "text",
+                  "props": {
+                    "text": "¥299"
+                  },
+                  "style": {
+                    "color": "danger",
+                    "fontSize": 18,
+                    "fontWeight": 700
+                  }
+                },
+                {
+                  "id": "ecom-p1-old",
+                  "type": "text",
+                  "props": {
+                    "text": "¥599"
+                  },
+                  "style": {
+                    "color": "text-light",
+                    "fontSize": 12,
+                    "textDecoration": "line-through"
+                  }
+                }
+              ]
+            },
+            {
+              "id": "ecom-p1-tag",
+              "type": "component",
+              "componentType": "tag",
+              "props": {
+                "text": "限时 5 折",
+                "color": "danger"
+              }
+            },
+            {
+              "id": "ecom-p1-btn",
+              "type": "component",
+              "componentType": "button",
+              "props": {
+                "text": "加入购物车",
+                "variant": "primary"
+              },
+              "style": {
+                "width": 180,
+                "height": 36
+              }
+            }
+          ]
+        },
+        {
+          "id": "ecom-p2",
+          "type": "frame",
+          "style": {
+            "layout": "column",
+            "gap": 8,
+            "background": "#FFFFFF",
+            "padding": 12,
+            "radius": 12,
+            "width": 200
+          },
+          "children": [
+            {
+              "id": "ecom-p2-img",
+              "type": "component",
+              "componentType": "image",
+              "props": {
+                "alt": "Flex Trainer 训练鞋"
+              },
+              "style": {
+                "width": 180,
+                "height": 140
+              }
+            },
+            {
+              "id": "ecom-p2-name",
+              "type": "text",
+              "props": {
+                "text": "Flex Trainer 训练鞋"
+              },
+              "style": {
+                "fontSize": 14,
+                "fontWeight": 600
+              }
+            },
+            {
+              "id": "ecom-p2-price",
+              "type": "frame",
+              "style": {
+                "layout": "row",
+                "gap": 8,
+                "alignItems": "flex-end"
+              },
+              "children": [
+                {
+                  "id": "ecom-p2-now",
+                  "type": "text",
+                  "props": {
+                    "text": "¥259"
+                  },
+                  "style": {
+                    "color": "danger",
+                    "fontSize": 18,
+                    "fontWeight": 700
+                  }
+                },
+                {
+                  "id": "ecom-p2-old",
+                  "type": "text",
+                  "props": {
+                    "text": "¥459"
+                  },
+                  "style": {
+                    "color": "text-light",
+                    "fontSize": 12,
+                    "textDecoration": "line-through"
+                  }
+                }
+              ]
+            },
+            {
+              "id": "ecom-p2-tag",
+              "type": "component",
+              "componentType": "tag",
+              "props": {
+                "text": "立减 200",
+                "color": "danger"
+              }
+            },
+            {
+              "id": "ecom-p2-btn",
+              "type": "component",
+              "componentType": "button",
+              "props": {
+                "text": "加入购物车",
+                "variant": "primary"
+              },
+              "style": {
+                "width": 180,
+                "height": 36
+              }
+            }
+          ]
+        },
+        {
+          "id": "ecom-p3",
+          "type": "frame",
+          "style": {
+            "layout": "column",
+            "gap": 8,
+            "background": "#FFFFFF",
+            "padding": 12,
+            "radius": 12,
+            "width": 200
+          },
+          "children": [
+            {
+              "id": "ecom-p3-img",
+              "type": "component",
+              "componentType": "image",
+              "props": {
+                "alt": "Court Classic 板鞋"
+              },
+              "style": {
+                "width": 180,
+                "height": 140
+              }
+            },
+            {
+              "id": "ecom-p3-name",
+              "type": "text",
+              "props": {
+                "text": "Court Classic 板鞋"
+              },
+              "style": {
+                "fontSize": 14,
+                "fontWeight": 600
+              }
+            },
+            {
+              "id": "ecom-p3-price",
+              "type": "frame",
+              "style": {
+                "layout": "row",
+                "gap": 8,
+                "alignItems": "flex-end"
+              },
+              "children": [
+                {
+                  "id": "ecom-p3-now",
+                  "type": "text",
+                  "props": {
+                    "text": "¥329"
+                  },
+                  "style": {
+                    "color": "danger",
+                    "fontSize": 18,
+                    "fontWeight": 700
+                  }
+                },
+                {
+                  "id": "ecom-p3-old",
+                  "type": "text",
+                  "props": {
+                    "text": "¥529"
+                  },
+                  "style": {
+                    "color": "text-light",
+                    "fontSize": 12,
+                    "textDecoration": "line-through"
+                  }
+                }
+              ]
+            },
+            {
+              "id": "ecom-p3-tag",
+              "type": "component",
+              "componentType": "tag",
+              "props": {
+                "text": "限时 6 折",
+                "color": "danger"
+              }
+            },
+            {
+              "id": "ecom-p3-btn",
+              "type": "component",
+              "componentType": "button",
+              "props": {
+                "text": "加入购物车",
+                "variant": "primary"
+              },
+              "style": {
+                "width": 180,
+                "height": 36
+              }
+            }
+          ]
+        },
+        {
+          "id": "ecom-p4",
+          "type": "frame",
+          "style": {
+            "layout": "column",
+            "gap": 8,
+            "background": "#FFFFFF",
+            "padding": 12,
+            "radius": 12,
+            "width": 200
+          },
+          "children": [
+            {
+              "id": "ecom-p4-img",
+              "type": "component",
+              "componentType": "image",
+              "props": {
+                "alt": "Trail Blaze 越野鞋"
+              },
+              "style": {
+                "width": 180,
+                "height": 140
+              }
+            },
+            {
+              "id": "ecom-p4-name",
+              "type": "text",
+              "props": {
+                "text": "Trail Blaze 越野鞋"
+              },
+              "style": {
+                "fontSize": 14,
+                "fontWeight": 600
+              }
+            },
+            {
+              "id": "ecom-p4-price",
+              "type": "frame",
+              "style": {
+                "layout": "row",
+                "gap": 8,
+                "alignItems": "flex-end"
+              },
+              "children": [
+                {
+                  "id": "ecom-p4-now",
+                  "type": "text",
+                  "props": {
+                    "text": "¥399"
+                  },
+                  "style": {
+                    "color": "danger",
+                    "fontSize": 18,
+                    "fontWeight": 700
+                  }
+                },
+                {
+                  "id": "ecom-p4-old",
+                  "type": "text",
+                  "props": {
+                    "text": "¥699"
+                  },
+                  "style": {
+                    "color": "text-light",
+                    "fontSize": 12,
+                    "textDecoration": "line-through"
+                  }
+                }
+              ]
+            },
+            {
+              "id": "ecom-p4-tag",
+              "type": "component",
+              "componentType": "tag",
+              "props": {
+                "text": "新品 8 折",
+                "color": "danger"
+              }
+            },
+            {
+              "id": "ecom-p4-btn",
+              "type": "component",
+              "componentType": "button",
+              "props": {
+                "text": "加入购物车",
+                "variant": "primary"
+              },
+              "style": {
+                "width": 180,
+                "height": 36
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "ecom-note",
+      "type": "text",
+      "props": {
+        "text": "活动时间：9月1日 - 9月15日 · 领取后 7 天内有效"
+      },
+      "style": {
+        "align": "center",
+        "color": "text-light",
+        "fontSize": 12
+      }
+    }
+  ]
+}

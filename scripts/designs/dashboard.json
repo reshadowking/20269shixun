@@ -1,0 +1,157 @@
+{
+  "id": "dashboard-root",
+  "type": "frame",
+  "style": {
+    "layout": "column",
+    "gap": 16,
+    "background": "background",
+    "padding": 24,
+    "width": 720
+  },
+  "children": [
+    {
+      "id": "dash-nav",
+      "type": "component",
+      "componentType": "navbar",
+      "props": {
+        "title": "经营分析平台",
+        "links": [
+          {
+            "label": "总览",
+            "href": "#"
+          },
+          {
+            "label": "报表",
+            "href": "#"
+          }
+        ]
+      }
+    },
+    {
+      "id": "dash-stats",
+      "type": "frame",
+      "style": {
+        "layout": "row",
+        "gap": 16
+      },
+      "children": [
+        {
+          "id": "dash-s1",
+          "type": "component",
+          "componentType": "stat-block",
+          "props": {
+            "label": "本月营收",
+            "value": "¥1,284,500",
+            "trend": "↑ 12.6%"
+          }
+        },
+        {
+          "id": "dash-s2",
+          "type": "component",
+          "componentType": "stat-block",
+          "props": {
+            "label": "新增用户",
+            "value": "8,642",
+            "trend": "↑ 8.3%"
+          }
+        },
+        {
+          "id": "dash-s3",
+          "type": "component",
+          "componentType": "stat-block",
+          "props": {
+            "label": "客单价",
+            "value": "¥148.6",
+            "trend": "↓ 2.4%"
+          }
+        }
+      ]
+    },
+    {
+      "id": "dash-chart",
+      "type": "component",
+      "componentType": "chart",
+      "props": {
+        "chartType": "bar",
+        "title": "近 7 日营收趋势",
+        "data": [
+          {
+            "day": "周一",
+            "value": 45
+          },
+          {
+            "day": "周二",
+            "value": 68
+          },
+          {
+            "day": "周三",
+            "value": 52
+          },
+          {
+            "day": "周四",
+            "value": 82
+          },
+          {
+            "day": "周五",
+            "value": 60
+          },
+          {
+            "day": "周六",
+            "value": 92
+          },
+          {
+            "day": "周日",
+            "value": 74
+          }
+        ],
+        "xKey": "day",
+        "yKey": "value"
+      },
+      "style": {
+        "width": 680,
+        "height": 220
+      }
+    },
+    {
+      "id": "dash-table",
+      "type": "component",
+      "componentType": "table",
+      "props": {
+        "columns": [
+          {
+            "key": "name",
+            "title": "渠道"
+          },
+          {
+            "key": "amount",
+            "title": "成交额"
+          },
+          {
+            "key": "trend",
+            "title": "环比"
+          }
+        ],
+        "rows": [
+          {
+            "name": "直营门店",
+            "amount": "¥420,000",
+            "trend": "+6.2%"
+          },
+          {
+            "name": "线上商城",
+            "amount": "¥368,500",
+            "trend": "+15.8%"
+          },
+          {
+            "name": "分销渠道",
+            "amount": "¥210,000",
+            "trend": "-3.1%"
+          }
+        ]
+      },
+      "style": {
+        "width": 680
+      }
+    }
+  ]
+}

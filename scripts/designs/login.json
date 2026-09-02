@@ -1,0 +1,89 @@
+{
+  "id": "login-root",
+  "type": "frame",
+  "style": {
+    "layout": "column",
+    "gap": 16,
+    "background": "background",
+    "padding": 40,
+    "width": 380,
+    "radius": 12
+  },
+  "children": [
+    {
+      "id": "login-logo",
+      "type": "component",
+      "componentType": "avatar",
+      "props": {
+        "name": "P"
+      },
+      "style": {
+        "width": 44,
+        "height": 44,
+        "radius": 12,
+        "background": "primary",
+        "color": "#FFFFFF",
+        "fontSize": 18
+      }
+    },
+    {
+      "id": "login-title",
+      "type": "component",
+      "componentType": "title-text",
+      "props": {
+        "text": "欢迎回来",
+        "level": 3
+      }
+    },
+    {
+      "id": "login-field-user",
+      "type": "component",
+      "componentType": "input",
+      "props": {
+        "label": "账号",
+        "placeholder": "请输入邮箱或手机号"
+      },
+      "style": {
+        "width": 320
+      }
+    },
+    {
+      "id": "login-field-pass",
+      "type": "component",
+      "componentType": "input",
+      "props": {
+        "label": "密码",
+        "placeholder": "请输入密码",
+        "type_": "password"
+      },
+      "style": {
+        "width": 320
+      }
+    },
+    {
+      "id": "login-btn",
+      "type": "component",
+      "componentType": "button",
+      "props": {
+        "text": "登 录",
+        "variant": "primary"
+      },
+      "style": {
+        "width": 320,
+        "height": 44
+      }
+    },
+    {
+      "id": "login-links",
+      "type": "text",
+      "props": {
+        "text": "忘记密码 · 注册账号"
+      },
+      "style": {
+        "align": "center",
+        "color": "text-light",
+        "fontSize": 12
+      }
+    }
+  ]
+}

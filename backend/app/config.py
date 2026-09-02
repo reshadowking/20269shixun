@@ -1,0 +1,50 @@
+"""全局配置：从 .env / 环境变量读取，全部有本机开发兜底值。"""
+from functools import lru_cache
+from pathlib import Path
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=str(BASE_DIR / ".env"), extra="ignore")
+
+    # LLM（用户自填 key；填之前用 mock 模式）
+    llm_mode: str = "mock"  # mock | real
+    llm_base_url: str = "https://api.deepseek.com/v1"
+    llm_api_key: str = ""
+    llm_model: str = "deepseek-v4-flash"
+    llm_backup_model: str = "deepseek-v4-flash"
+    llm_timeout_seconds: float = 60.0  # 复杂需求（多模块落地页）生成需时较长，30s 会误杀
+    llm_max_tokens: int = 16384  # 输出上限：42K 字符的完整 DesignNode 树 ≈ 8200 token，8192 会截断（finish_reason=length）
+    llm_temperature_parse: float = 0.2
+    llm_temperature_fill: float = 0.6  # 0.3 太死板（相同提示词结果雷同），0.6 平衡多样与稳定
+
+    # 数据库（测试用 sqlite 覆盖此值）
+    pg_url: str = "postgresql+psycopg://postgres:postgres@localhost:5432/design"
+    redis_url: str = "redis://localhost:6380/0"
+
+    # 存储
+    storage_root: str = str(BASE_DIR / "designs" / "images")
+
+    # 鉴权（默认值仅本机开发兜底，生产必须 .env 覆盖；≥32 字节防 RFC7518 警告）
+    jwt_secret: str = "dev-secret-change-me-please-32bytes-minimum"
+    jwt_expire_hours: int = 24
+    demo_user: str = "demo"
+    demo_password: str = "demo123"
+
+    # 可观测
+    otel_exporter_otlp_endpoint: str = "http://localhost:4318"
+
+    # 生成链路日志目录（generate.log，分析生成失败）
+    log_dir: str = str(BASE_DIR / "logs")
+
+    # 端口
+    backend_port: int = 8000
+    y_websocket_url: str = "ws://localhost:1234"
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()

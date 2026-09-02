@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-native-design.tool/design-schema.json",
+  "title": "DesignNode",
+  "description": "AI原生设计工具的 DesignNode 树唯一数据源（v2.2 定稿 §3.1）。全链路（画布渲染/生成引擎/导出引擎/合规检查/存储）共读此 Schema，任何新需求先改此文件再改代码。",
+  "type": "object",
+  "required": ["id", "type"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "description": "唯一 ID（生成时分配）"
+    },
+    "type": {
+      "type": "string",
+      "enum": ["frame", "text", "rect", "component", "group"],
+      "description": "节点类型"
+    },
+    "componentType": {
+      "type": "string",
+      "enum": ["button", "card", "input", "select", "table", "chart", "stat-block", "navbar", "sidebar", "avatar", "tag", "divider", "title-text", "hero", "image"],
+      "description": "type=component 时的组件类型（15 个，v2.2 §5.2）"
+    },
+    "props": {
+      "type": "object",
+      "description": "组件参数。button/card/input 等组件各自约束；chart/image 有专门定义。",
+      "properties": {
+        "chartType": { "type": "string", "enum": ["line", "bar", "pie"] },
+        "title": { "type": "string", "maxLength": 200 },
+        "data": {
+          "type": "array",
+          "maxItems": 100,
+          "items": { "type": "object", "additionalProperties": true }
+        },
+        "xKey": { "type": "string", "maxLength": 64 },
+        "yKey": { "type": "string", "maxLength": 64 },
+        "src": { "type": "string", "maxLength": 512 },
+        "alt": { "type": "string", "maxLength": 200 },
+        "width": { "type": ["number", "string"], "description": "像素或百分比" },
+        "height": { "type": ["number", "string"], "description": "像素或百分比" },
+        "fit": { "type": "string", "enum": ["cover", "contain", "fill"] },
+        "text": { "type": "string", "maxLength": 5000, "description": "按钮/文本类内容" },
+        "label": { "type": "string", "maxLength": 200 },
+        "placeholder": { "type": "string", "maxLength": 200 },
+        "disabled": { "type": "boolean" },
+        "variant": { "type": "string", "maxLength": 64 },
+        "size": { "type": "string", "maxLength": 64 },
+        "options": { "type": "array", "maxItems": 50, "items": { "type": "string", "maxLength": 200 } },
+        "columns": { "type": "array", "maxItems": 50, "items": { "type": "object", "additionalProperties": true } },
+        "rows": { "type": "array", "maxItems": 200, "items": { "type": "object", "additionalProperties": true } },
+        "items": { "type": "array", "maxItems": 100, "items": { "type": "object", "additionalProperties": true } },
+        "links": { "type": "array", "maxItems": 50, "items": { "type": "object", "additionalProperties": true } },
+        "active": { "type": ["string", "number"], "description": "导航/侧边栏选中项" },
+        "name": { "type": "string", "maxLength": 200 },
+        "value": { "type": ["string", "number"], "maxLength": 200 },
+        "trend": { "type": "string", "maxLength": 64 },
+        "subtitle": { "type": "string", "maxLength": 500 },
+        "cta": { "type": "object", "additionalProperties": true, "description": "hero 按钮配置" },
+        "backgroundImage": { "type": "string", "maxLength": 512 },
+        "level": { "type": "number", "minimum": 1, "maximum": 6, "description": "title-text 的 h1-h6" },
+        "color": { "type": "string", "maxLength": 64, "description": "tag 颜色" },
+        "content": { "type": "string", "maxLength": 5000 },
+        "action": { "type": "object", "additionalProperties": true },
+        "type_": { "type": "string", "maxLength": 32, "description": "input 类型 text/password/email/number" }
+      },
+      "additionalProperties": true
+    },
+    "style": {
+      "type": "object",
+      "description": "样式：只允许引用令牌（token 名或令牌值）或常规 CSS 值；合规检查器以此为准（v2.2 §4.6）。",
+      "properties": {
+        "color": { "type": "string", "maxLength": 64, "description": "令牌名（如 primary）或 hex（如 #0052D9），非令牌 hex 会被合规检查器拉回" },
+        "fontSize": { "type": "number", "minimum": 8, "maximum": 96 },
+        "fontWeight": { "type": ["number", "string"], "description": "数字 100-900 或 CSS 值 normal/bold" },
+        "spacing": { "type": "number", "minimum": 0, "maximum": 200, "description": "内边距" },
+        "layout": { "type": "string", "enum": ["row", "column", "grid", "free"] },
+        "gap": { "type": "number", "minimum": 0, "maximum": 100 },
+        "width": { "type": ["number", "string"], "description": "像素或百分比" },
+        "height": { "type": ["number", "string"], "description": "像素或百分比" },
+        "radius": { "type": "number", "minimum": 0, "maximum": 64 },
+        "background": { "type": "string", "maxLength": 64 },
+        "align": { "type": "string", "enum": ["left", "center", "right"] },
+        "justify": { "type": "string", "enum": ["flex-start", "center", "flex-end", "space-between"] },
+        "alignItems": { "type": "string", "enum": ["flex-start", "center", "flex-end", "stretch"] },
+        "flexDirection": { "type": "string", "enum": ["row", "column"] }
+      },
+      "additionalProperties": true
+    },
+    "x": { "type": "number", "description": "layout=free 时绝对定位 X" },
+    "y": { "type": "number", "description": "layout=free 时绝对定位 Y" },
+    "hidden": { "type": "boolean", "description": "图层管理：隐藏节点（画布不渲染，数据保留）" },
+    "children": {
+      "type": "array",
+      "maxItems": 500,
+      "items": { "$ref": "#" }
+    }
+  }
+}

@@ -1,0 +1,38 @@
+import { escapeHtml } from '@/design/escape'
+
+/** ① 画布渲染：头像（样式参考 shadcn/ui Avatar；无 src 时显示姓名首字） */
+export function CanvasAvatar({ props, style }: { props: Record<string, unknown>; style?: React.CSSProperties }) {
+  const name = typeof props.name === 'string' ? props.name : '用户'
+  const src = typeof props.src === 'string' ? props.src : ''
+  const initial = escapeHtml(name.slice(0, 1))
+  return (
+    <span className="relative flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full bg-primary text-sm font-semibold text-primary-foreground" style={style as object}>
+      {src ? <img src={src} alt={escapeHtml(name)} className="aspect-square h-full w-full object-cover" /> : initial}
+    </span>
+  )
+}
+
+/** ② props 类型 */
+export interface AvatarProps {
+  name?: string
+  src?: string
+}
+
+/** ③ 导出模板 */
+export const exportAvatarTemplate = (props: Record<string, unknown>): string => {
+  const name = escapeHtml(typeof props.name === 'string' ? props.name : '用户')
+  const src = typeof props.src === 'string' ? props.src : ''
+  return src
+    ? `        <span className="relative flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full bg-primary text-sm font-semibold text-primary-foreground">
+          <img src="${escapeHtml(src)}" alt="${name}" className="aspect-square h-full w-full object-cover" />
+        </span>`
+    : `        <span className="relative flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full bg-primary text-sm font-semibold text-primary-foreground">
+          ${escapeHtml(name.slice(0, 1))}
+        </span>`
+}
+
+/** ④ 属性面板配置 */
+export const avatarSchema = [
+  { key: 'name', label: '姓名', control: 'text' as const },
+  { key: 'src', label: '图片 URL', control: 'text' as const },
+]

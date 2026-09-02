@@ -1,0 +1,102 @@
+# AI 原生设计工具 — Docker Compose（v2.2 §9.1 / §13）
+# 开发期拉起基础服务：docker compose up -d postgres redis jaeger y-websocket
+# 全量演示（含后端/前端容器）：docker compose up -d --build
+#
+# 本机端口特例（README 有说明）：
+#   Redis 宿主 6380（本机 6379 被 Windows 原生 Redis 服务占用）
+#   nginx  宿主 8080（本机 80 被 Apache 占用）
+#   PG 5432 / Jaeger 16686 / y-websocket 1234 无冲突
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: design-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: design
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d design"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: design-redis
+    ports:
+      - "6380:6379"          # 本机 6379 被占用，映射 6380
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: design-jaeger
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686"        # UI
+      - "4318:4318"          # OTLP HTTP
+    volumes:
+      - jaegerdata:/badger
+
+  y-websocket:
+    # 官方 y-websocket 镜像（无状态，不写 Node 代码，v2.2 §8.1）
+    # 官方镜像在部分镜像源 403，使用本地构建（docker/y-websocket/Dockerfile，同源做法）
+    build: ./y-websocket
+    container_name: design-y-websocket
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "1234"
+      ROOM: "design-room"
+      YPERSISTENCE: "./storage"   # leveldb 持久化，容器重启不丢（与 PG 双保险）
+    ports:
+      - "1234:1234"
+    volumes:
+      - yjsdata:/app/storage
+
+  backend:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+    container_name: design-backend
+    env_file: .env
+    environment:
+      PG_URL: postgresql+psycopg://postgres:postgres@postgres:5432/design
+      REDIS_URL: redis://redis:6379/0
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+      STORAGE_ROOT: /app/designs/images
+    volumes:
+      - images:/app/designs/images
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ..
+      dockerfile: frontend/Dockerfile
+    container_name: design-frontend
+    ports:
+      - "8080:80"            # 本机 80 被占用，映射 8080
+    depends_on:
+      - backend
+
+volumes:
+  pgdata:
+  redisdata:
+  jaegerdata:
+  yjsdata:
+  images:

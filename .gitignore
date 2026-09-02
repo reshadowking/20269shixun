@@ -1,0 +1,54 @@
+# --- 环境与密钥（绝不提交） ---
+.env
+backend/.env
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# --- Node / 前端 ---
+node_modules/
+dist/
+dist-ssr/
+*.local
+.vite/
+
+# --- 测试与工具 ---
+coverage/
+playwright-report/
+test-results/
+
+# --- 编辑器 ---
+.vscode/
+.idea/
+*.swp
+
+# --- Docker 数据卷（本地运行时挂载） ---
+docker/volumes/
+
+# --- 运行时产物 ---
+backend/designs/images/
+*.log
+.zcode/
+docker/.env
+*.zip
+
+# 测试数据库
+*.db
+
+# 生成链路日志
+backend/logs/
+logs/
+tmp_*.txt
+
+# 前端保存的 LLM 运行时配置（含 API Key，绝不提交）
+backend/data/
+
+# --- 覆盖率产物 ---
+backend/.coverage
+backend/.coverage.json

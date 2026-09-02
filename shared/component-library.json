@@ -1,0 +1,163 @@
+{
+  "_comment": "组件库唯一规范源（E5-2：MCP get_component_library 数据源）。15 个组件，与前端组件注册表、AI 生成白名单一致。新增/修改组件：改这里 → 同步前端 registry 与 AI Prompt 白名单。",
+  "components": [
+    {
+      "type": "button",
+      "name": "按钮",
+      "description": "触发操作的主要控件",
+      "props": {
+        "text": { "type": "string", "default": "按钮", "description": "按钮文本" },
+        "variant": { "type": "string", "enum": ["default", "primary", "secondary", "outline", "ghost", "destructive"], "default": "default", "description": "样式变体" },
+        "size": { "type": "string", "enum": ["sm", "default", "lg"], "default": "default", "description": "尺寸" }
+      },
+      "default_style": { "width": 120, "height": 40, "radius": 8, "background": "primary", "color": "#FFFFFF", "fontSize": 14, "fontWeight": 500 }
+    },
+    {
+      "type": "card",
+      "name": "卡片",
+      "description": "承载图文内容的容器",
+      "props": {
+        "title": { "type": "string", "default": "卡片标题", "description": "标题" },
+        "content": { "type": "string", "default": "卡片内容描述", "description": "正文内容" }
+      },
+      "default_style": { "width": 240, "height": 160, "radius": 12, "background": "card", "padding": 16 }
+    },
+    {
+      "type": "input",
+      "name": "输入框",
+      "description": "单行文本输入",
+      "props": {
+        "label": { "type": "string", "default": "", "description": "标签文本" },
+        "placeholder": { "type": "string", "default": "请输入", "description": "占位符" },
+        "type_": { "type": "string", "enum": ["text", "password", "email", "number"], "default": "text", "description": "输入类型" },
+        "disabled": { "type": "boolean", "default": false, "description": "禁用" }
+      },
+      "default_style": { "width": 280, "height": 40, "radius": 8, "background": "#FFFFFF", "border": "border" }
+    },
+    {
+      "type": "select",
+      "name": "下拉选择",
+      "description": "从选项列表中选择一项",
+      "props": {
+        "label": { "type": "string", "default": "", "description": "标签文本" },
+        "placeholder": { "type": "string", "default": "请选择", "description": "占位符" },
+        "options": { "type": "array", "itemType": "string", "default": ["选项 A", "选项 B"], "description": "选项列表" }
+      },
+      "default_style": { "width": 280, "height": 40, "radius": 8 }
+    },
+    {
+      "type": "table",
+      "name": "表格",
+      "description": "结构化数据展示",
+      "props": {
+        "columns": { "type": "array", "itemType": "object", "default": [{ "key": "name", "title": "名称" }], "description": "列定义 [{key,title}]" },
+        "rows": { "type": "array", "itemType": "object", "default": [], "description": "行数据 [{key: value}]" }
+      },
+      "default_style": { "width": 640, "radius": 8, "background": "card" }
+    },
+    {
+      "type": "chart",
+      "name": "图表",
+      "description": "数据可视化（line/bar/pie）",
+      "props": {
+        "chartType": { "type": "string", "enum": ["line", "bar", "pie"], "default": "bar", "description": "图表类型" },
+        "title": { "type": "string", "default": "数据趋势", "description": "标题" },
+        "xKey": { "type": "string", "default": "name", "description": "X 轴字段" },
+        "yKey": { "type": "string", "default": "value", "description": "Y 轴字段" },
+        "data": { "type": "array", "itemType": "object", "default": [], "description": "数据 [{xKey: yKey}]" }
+      },
+      "default_style": { "width": 480, "height": 240, "radius": 12, "background": "card", "padding": 16 }
+    },
+    {
+      "type": "stat-block",
+      "name": "指标块",
+      "description": "展示关键数字与趋势",
+      "props": {
+        "label": { "type": "string", "default": "指标", "description": "指标名" },
+        "value": { "type": "string", "default": "0", "description": "数值" },
+        "trend": { "type": "string", "default": "", "description": "趋势说明（如 ↑ 12.6%）" }
+      },
+      "default_style": { "width": 180, "height": 96, "radius": 12, "background": "card", "padding": 16 }
+    },
+    {
+      "type": "navbar",
+      "name": "顶部导航",
+      "description": "页面顶部品牌与导航栏",
+      "props": {
+        "title": { "type": "string", "default": "产品名", "description": "品牌名" },
+        "links": { "type": "array", "itemType": "object", "default": [{ "label": "首页", "href": "#" }], "description": "导航链接 [{label,href}]" }
+      },
+      "default_style": { "width": 720, "height": 56, "background": "background", "padding": 16 }
+    },
+    {
+      "type": "sidebar",
+      "name": "侧边栏",
+      "description": "左侧导航菜单",
+      "props": {
+        "items": { "type": "array", "itemType": "object", "default": [{ "label": "总览" }], "description": "菜单项 [{label}]" },
+        "active": { "type": "string", "default": "", "description": "选中项" }
+      },
+      "default_style": { "width": 200, "height": 480, "background": "#1D2129", "padding": 16 }
+    },
+    {
+      "type": "avatar",
+      "name": "头像",
+      "description": "用户头像或 Logo（无图时显示首字母）",
+      "props": {
+        "name": { "type": "string", "default": "用户", "description": "姓名/品牌名（用于首字母与占位）" },
+        "src": { "type": "string", "default": "", "description": "图片 URL" }
+      },
+      "default_style": { "width": 40, "height": 40, "radius": 20, "background": "primary", "color": "#FFFFFF", "fontSize": 16 }
+    },
+    {
+      "type": "tag",
+      "name": "标签",
+      "description": "短文本标记（状态/分类/角标）",
+      "props": {
+        "text": { "type": "string", "default": "标签", "description": "标签文本" },
+        "color": { "type": "string", "default": "primary", "description": "颜色（令牌名或 hex）" }
+      },
+      "default_style": { "height": 24, "radius": 4, "padding": 4 }
+    },
+    {
+      "type": "divider",
+      "name": "分割线",
+      "description": "内容分隔线",
+      "props": {},
+      "default_style": { "width": 640, "height": 1, "background": "border" }
+    },
+    {
+      "type": "title-text",
+      "name": "标题",
+      "description": "各级标题文本",
+      "props": {
+        "text": { "type": "string", "default": "标题", "description": "文本" },
+        "level": { "type": "number", "enum": [1, 2, 3, 4, 5, 6], "default": 2, "description": "标题级别" }
+      },
+      "default_style": { "fontSize": 20, "fontWeight": 600, "color": "text-primary" }
+    },
+    {
+      "type": "hero",
+      "name": "Hero 大图",
+      "description": "首屏主视觉区（标题+副标题+行动按钮）",
+      "props": {
+        "title": { "type": "string", "default": "主标题", "description": "主标题" },
+        "subtitle": { "type": "string", "default": "副标题说明", "description": "副标题" },
+        "cta": { "type": "object", "default": { "text": "立即开始" }, "description": "行动按钮 {text}" },
+        "backgroundImage": { "type": "string", "default": "", "description": "背景图 URL" }
+      },
+      "default_style": { "width": 720, "height": 300, "radius": 16, "background": "background", "padding": 48 }
+    },
+    {
+      "type": "image",
+      "name": "图片",
+      "description": "图片占位（可填 URL 或保持占位色块）",
+      "props": {
+        "src": { "type": "string", "default": "", "description": "图片 URL" },
+        "alt": { "type": "string", "default": "图片", "description": "替代文本" },
+        "fit": { "type": "string", "enum": ["cover", "contain", "fill"], "default": "cover", "description": "填充方式" }
+      },
+      "default_style": { "width": 200, "height": 150, "radius": 8 }
+    }
+  ]
+}

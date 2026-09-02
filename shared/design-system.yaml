@@ -1,0 +1,65 @@
+# 设计令牌唯一规范源（v2.2 定稿 §5.1）
+# 生成、渲染、导出、合规检查器四端共读此文件（经 scripts/generate_tokens.py 生成双端常量）。
+# 新增/修改令牌：改这里 → 重跑生成脚本 → 两端测试。
+
+# 两套令牌：default（默认品牌）/ dark（深色，仅工作台 UI 与演示）
+themes:
+  default:
+    colors:
+      primary: '#0052D9'
+      secondary: '#7C4DFF'
+      danger: '#E5352B'
+      success: '#00A870'
+      background: '#F5F5F5'
+      text-primary: '#1D2129'
+      text-secondary: '#4E5969'
+      text-light: '#86909C'
+      border: '#E5E8EF'
+    typography:
+      heading: { font: 'Inter', weight: 600, size: 24 }
+      body: { font: 'Inter', weight: 400, size: 14 }
+      caption: { font: 'Inter', weight: 400, size: 12 }
+    spacing:
+      xs: 4
+      sm: 8
+      md: 16
+      lg: 24
+      xl: 32
+    radius:
+      sm: 4
+      md: 8
+      lg: 12
+
+  dark:
+    colors:
+      primary: '#3D7FFF'
+      secondary: '#9578FF'
+      danger: '#F2645A'
+      success: '#35C08E'
+      background: '#14161A'
+      text-primary: '#E6E8EB'
+      text-secondary: '#A8B0BC'
+      text-light: '#6B7280'
+      border: '#2A2E36'
+    typography:
+      heading: { font: 'Inter', weight: 600, size: 24 }
+      body: { font: 'Inter', weight: 400, size: 14 }
+      caption: { font: 'Inter', weight: 400, size: 12 }
+    spacing:
+      xs: 4
+      sm: 8
+      md: 16
+      lg: 24
+      xl: 32
+    radius:
+      sm: 4
+      md: 8
+      lg: 12
+
+# 合规检查器允许的 hex 集合（含令牌值与白名单补充色）
+allowed_hex_colors:
+  - '#FF6B6B'      # 演示场景品牌色（电商优惠券）
+  - '#FFFFFF'
+  - '#000000'
+  - '#FFF0F0'      # 优惠券 tag 浅红底
+  - '#FF6B35'      # 用户常用橙色（问题8：运动鞋促销主色）

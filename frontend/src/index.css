@@ -1,0 +1,92 @@
+@import 'tailwindcss';
+@import 'tw-animate-css';
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  --background: #ffffff;
+  --foreground: #1d2129;
+  --card: #ffffff;
+  --card-foreground: #1d2129;
+  --popover: #ffffff;
+  --popover-foreground: #1d2129;
+  --primary: #0052d9;
+  --primary-foreground: #ffffff;
+  --secondary: #7c4dff;
+  --secondary-foreground: #ffffff;
+  --muted: #f5f5f5;
+  --muted-foreground: #86909c;
+  --accent: #eef2fb;
+  --accent-foreground: #0052d9;
+  --destructive: #e5352b;
+  --destructive-foreground: #ffffff;
+  --border: #e5e8ef;
+  --input: #e5e8ef;
+  --ring: #0052d9;
+  --radius: 0.5rem;
+}
+
+.dark {
+  --background: #14161a;
+  --foreground: #e6e8eb;
+  --card: #1a1d23;
+  --card-foreground: #e6e8eb;
+  --popover: #1a1d23;
+  --popover-foreground: #e6e8eb;
+  --primary: #3d7fff;
+  --primary-foreground: #ffffff;
+  --secondary: #9578ff;
+  --secondary-foreground: #ffffff;
+  --muted: #23272e;
+  --muted-foreground: #a8b0bc;
+  --accent: #1d2533;
+  --accent-foreground: #3d7fff;
+  --destructive: #f2645a;
+  --destructive-foreground: #ffffff;
+  --border: #2a2e36;
+  --input: #2a2e36;
+  --ring: #3d7fff;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+@layer base {
+  * {
+    border-color: var(--border);
+    outline-color: color-mix(in oklab, var(--ring) 50%, transparent);
+  }
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
+  }
+}
+
+/* P0-1 增量编辑：被修改节点高亮闪烁（3 次脉冲） */
+@keyframes highlight-pulse {
+  0%, 100% { box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.95); }
+  50% { box-shadow: 0 0 0 7px rgba(245, 158, 11, 0.15); }
+}
