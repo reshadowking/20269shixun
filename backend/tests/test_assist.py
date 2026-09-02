@@ -63,7 +63,7 @@ class TestOptimizer:
         assert report["spacing"] == 1
 
     def test_consistent_design_unchanged(self):
-        design, report = optimize_layout(_three_buttons([12, 12, 12]))
+        _design, _report = optimize_layout(_three_buttons([12, 12, 12]))
         # 三按钮 padding 一致、width 不一致 → size 会被改；去掉 width 差异后全一致
         clean = {
             "id": "root", "type": "frame",

@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "scripts"))
 
-from eval_export_quality import (  # noqa: E402
+from eval_export_quality import (
     component_rate,
     evaluate,
     extract_from_code,

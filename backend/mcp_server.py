@@ -13,8 +13,9 @@
       }
     }
 """
-from app.mcp_tools import get_component_library, get_design_tokens
 from mcp.server.mcpserver import MCPServer
+
+from app.mcp_tools import get_component_library, get_design_tokens
 
 mcp = MCPServer("design-skills")
 

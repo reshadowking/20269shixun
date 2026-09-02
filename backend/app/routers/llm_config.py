@@ -2,11 +2,10 @@
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException
-
-from ..security import get_current_user
 from pydantic import BaseModel, Field
 
-from ..llm_runtime import PROVIDERS, public_config, save_runtime_config
+from ..llm_runtime import public_config, save_runtime_config
+from ..security import get_current_user
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["llm-config"])

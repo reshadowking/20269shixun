@@ -20,8 +20,7 @@ async def main() -> None:
         args=[str(ROOT / "backend" / "mcp_server.py")],
         cwd=str(ROOT),
     )
-    async with stdio_client(params) as (read, write):
-        async with ClientSession(read, write) as session:
+    async with stdio_client(params) as (read, write), ClientSession(read, write) as session:
             await session.initialize()
             tools = await session.list_tools()
             names = [t.name for t in tools.tools]

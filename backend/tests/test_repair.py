@@ -2,7 +2,7 @@
 
 import json
 
-from app.design.validator import SchemaError, validate_design
+from app.design.validator import validate_design
 from app.services.generate import generate_design, repair_design
 from app.services.llm import LLMClient
 

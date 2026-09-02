@@ -1,9 +1,8 @@
 """E3 智能辅助接口：布局优化（E3-2）+ 组件推荐（E3-3）。"""
 from fastapi import APIRouter, Depends, HTTPException
-
-from ..security import get_current_user
 from pydantic import BaseModel
 
+from ..security import get_current_user
 from ..services.optimizer import optimize_layout
 from ..services.recommender import recommend_components
 

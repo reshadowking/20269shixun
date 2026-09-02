@@ -15,7 +15,7 @@ from ..config import get_settings
 from ..design.validator import SchemaError, validate_design
 from .compliance import compliance_rate, enforce_compliance
 from .llm import LLMClient, describe_api_error, to_llm_dict
-from .templates import KEYWORD_MAP, TEMPLATES, free_default_design, match_template
+from .templates import KEYWORD_MAP, TEMPLATES, free_default_design
 
 logger = logging.getLogger(__name__)
 gen_logger = logging.getLogger("ai.gen")  # 生成链路日志（backend/logs/generate.log）
@@ -357,10 +357,9 @@ def generate_design(prompt: str, client: LLMClient | None = None, current_design
             except Exception as exc:  # noqa: BLE001 - 网络/限流等异常 → 兜底并记录原因
                 error = f"意图解析调用失败：{type(exc).__name__} {str(exc)[:120]}"
                 intent = None
-            if intent is None:
+            if intent is None and not error:
                 # 意图解析失败：仅记录原因，不视为降级（模板选择仍可走关键词/自由生成，填充由 LLM 完成）
-                if not error:
-                    error = "意图解析未返回有效 JSON（模型限流或超时）"
+                error = "意图解析未返回有效 JSON（模型限流或超时）"
     times["intent_parse"] = time.perf_counter() - t0
     gen_logger.info("意图解析 ok=%s 耗时=%.2fs error=%s", intent is not None, times["intent_parse"], error or "-")
 

@@ -1,9 +1,8 @@
 """令牌库接口（v2.2 §9.2：GET /api/tokens）。"""
 from fastapi import APIRouter, Depends
 
-from ..security import get_current_user
-
 from ..design import tokens
+from ..security import get_current_user
 
 router = APIRouter(tags=["tokens"])
 

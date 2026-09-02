@@ -56,7 +56,6 @@ def generate(req: GenerateRequest, _user: str = Depends(get_current_user)):
 @router.get("/api/generate/templates")
 def list_templates(_user: str = Depends(get_current_user)):
     """模板列表（启动页选择用）。"""
-    from ..services.templates import TEMPLATES
 
     return {"templates": [{"key": k, "name": TEMPLATE_NAMES.get(k, k)} for k in TEMPLATE_KEYS]}
 
