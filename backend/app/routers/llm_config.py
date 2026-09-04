@@ -43,23 +43,30 @@ def public_config_after(values: dict) -> dict:
 
 @router.post("/api/llm-config/test")
 def test_connection(req: LLMConfigUpdate, _user: str = Depends(get_current_user)):
-    """用给定配置（或当前生效配置）发起最小对话调用，返回成功/失败与错误码。"""
+    """用给定配置（或当前生效配置）发起最小对话调用，返回成功/失败与错误码。
+
+    不落盘：测试用配置 = 当前生效配置 ∪ 本次请求值（内存合并）；
+    请求中的脱敏 key（含 ****）一律忽略，防止把回显值当真实 Key 测试/写坏。
+    """
     from openai import APITimeoutError, OpenAI
 
+    from ..llm_runtime import get_runtime_config, is_masked_key
     from ..services.llm import describe_api_error
 
-    values = {k: v for k, v in req.model_dump(exclude_none=True).items() if k != "llm_mode"}
-    if values:
-        # 临时保存（测试通过后用户可再点保存固化）
-        save_runtime_config(values)
-    from ..llm_runtime import get_runtime_config
-
-    cfg = get_runtime_config()
+    merged = dict(get_runtime_config())
+    for key, value in req.model_dump(exclude_none=True).items():
+        if key not in ("llm_base_url", "llm_api_key", "llm_model"):
+            continue
+        if value is None or (isinstance(value, str) and not value.strip()):
+            continue
+        if key == "llm_api_key" and is_masked_key(str(value)):
+            continue  # 脱敏值不参与测试，使用已保存的真实 Key
+        merged[key] = value
     from ..config import get_settings
 
-    base_url = cfg.get("llm_base_url") or get_settings().llm_base_url
-    api_key = cfg.get("llm_api_key") or get_settings().llm_api_key
-    model = cfg.get("llm_model") or get_settings().llm_model
+    base_url = merged.get("llm_base_url") or get_settings().llm_base_url
+    api_key = merged.get("llm_api_key") or get_settings().llm_api_key
+    model = merged.get("llm_model") or get_settings().llm_model
     if not api_key:
         return {"ok": False, "error": "未配置 API Key：请在下方输入后点击「测试连接」", "code": "NO_KEY"}
     client = OpenAI(base_url=base_url, api_key=api_key, timeout=20)

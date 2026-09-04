@@ -94,4 +94,21 @@ describe('ApiConfigPage', () => {
     fireEvent.click(screen.getByTestId('cfg-test'))
     expect(await screen.findByTestId('test-result')).toHaveTextContent('连接失败')
   })
+
+  it('保存未编辑过的 key 时不提交 llm_api_key（防脱敏值回写覆盖真实 Key）', async () => {
+    render(<MemoryRouter><ApiConfigPage /></MemoryRouter>)
+    // 只改 model，不动 key 输入框（回显值为脱敏 sk-****1234）
+    fireEvent.change(await screen.findByTestId('cfg-model'), { target: { value: 'qwen-plus' } })
+    fireEvent.click(screen.getByTestId('cfg-save'))
+    await waitFor(() => {
+      const post = fetchMock.mock.calls.find(
+        (c) => String(c[0]).includes('/api/llm-config') && String(c[0]).includes('/test') === false && String(c[1]?.method) === 'POST',
+      )
+      expect(post).toBeTruthy()
+      const body = JSON.parse(String(post![1].body))
+      expect(body.llm_api_key).toBeUndefined()
+      expect(body.llm_model).toBe('qwen-plus')
+    })
+    expect(await screen.findByTestId('save-ok')).toBeInTheDocument()
+  })
 })

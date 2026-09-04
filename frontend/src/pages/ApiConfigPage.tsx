@@ -41,6 +41,8 @@ export default function ApiConfigPage() {
   const [mode, setMode] = useState('real')
   const [baseUrl, setBaseUrl] = useState('')
   const [apiKey, setApiKey] = useState('')
+  /** 用户是否编辑过 Key（回显的是脱敏值，未编辑时提交会把 **** 覆盖真实 Key，故仅编辑过才提交） */
+  const [keyEdited, setKeyEdited] = useState(false)
   const [showKey, setShowKey] = useState(false)
   const [model, setModel] = useState('')
   const [backupModel, setBackupModel] = useState('')
@@ -79,7 +81,7 @@ export default function ApiConfigPage() {
   const payload = () => ({
     llm_mode: mode,
     llm_base_url: baseUrl.trim(),
-    llm_api_key: apiKey.trim(),
+    ...(keyEdited ? { llm_api_key: apiKey.trim() } : {}),
     llm_model: model.trim(),
     llm_backup_model: backupModel.trim(),
     llm_timeout_seconds: Number(timeoutSec) || 60,
@@ -92,6 +94,7 @@ export default function ApiConfigPage() {
       const resp = await api<LLMConfig>('/api/llm-config', { method: 'POST', body: JSON.stringify(payload()) })
       setCfg(resp)
       setApiKey(resp.llm_api_key) // 回显脱敏值
+      setKeyEdited(false) // 已固化，后续保存不再携带 key 字段
       setSaved(true)
       setTestResult(null)
     } catch (err) {
@@ -177,7 +180,10 @@ export default function ApiConfigPage() {
                   type={showKey ? 'text' : 'password'}
                   value={apiKey}
                   placeholder="sk-..."
-                  onChange={(e) => setApiKey(e.target.value)}
+                  onChange={(e) => {
+                    setApiKey(e.target.value)
+                    setKeyEdited(true)
+                  }}
                 />
                 <button
                   type="button"

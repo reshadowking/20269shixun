@@ -59,6 +59,8 @@ def save_runtime_config(values: dict) -> dict:
             continue
         if value is None or (isinstance(value, str) and not value.strip()):
             continue
+        if key == "llm_api_key" and is_masked_key(str(value)):
+            continue  # 脱敏值回写会覆盖真实 Key（P0-2 防呆），保留旧值
         if key == "llm_timeout_seconds":
             value = float(value)
         elif key == "llm_max_tokens":
@@ -78,6 +80,14 @@ def mask_api_key(key: str) -> str:
     if len(key) <= 8:
         return "*" * len(key)
     return f"{key[:3]}****{key[-4:]}"
+
+
+def is_masked_key(key: str) -> bool:
+    """判断是否为脱敏后的 key（mask_api_key 产物含固定 ****）。
+
+    脱敏值只用于回显，绝不能回写磁盘——否则会覆盖真实 Key（保存/测试接口共用防呆）。
+    """
+    return "****" in key
 
 
 def public_config() -> dict:
