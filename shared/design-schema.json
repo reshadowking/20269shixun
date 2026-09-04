@@ -45,8 +45,8 @@
         "label": { "type": "string", "maxLength": 200 },
         "placeholder": { "type": "string", "maxLength": 200 },
         "disabled": { "type": "boolean" },
-        "variant": { "type": "string", "maxLength": 64 },
-        "size": { "type": "string", "maxLength": 64 },
+        "variant": { "type": "string", "enum": ["default", "primary", "secondary", "outline", "ghost", "destructive"], "description": "按钮样式变体（P14 决策卡：与组件库/面板/渲染层四方收敛，无 link）" },
+        "size": { "type": "string", "enum": ["sm", "default", "lg"], "description": "组件尺寸" },
         "options": { "type": "array", "maxItems": 50, "items": { "type": "string", "maxLength": 200 } },
         "columns": { "type": "array", "maxItems": 50, "items": { "type": "object", "additionalProperties": true } },
         "rows": { "type": "array", "maxItems": 200, "items": { "type": "object", "additionalProperties": true } },
@@ -63,7 +63,7 @@
         "color": { "type": "string", "maxLength": 64, "description": "tag 颜色" },
         "content": { "type": "string", "maxLength": 5000 },
         "action": { "type": "object", "additionalProperties": true },
-        "type_": { "type": "string", "maxLength": 32, "description": "input 类型 text/password/email/number" }
+        "type_": { "type": "string", "enum": ["text", "password", "email", "number"], "description": "input 类型" }
       },
       "additionalProperties": true
     },

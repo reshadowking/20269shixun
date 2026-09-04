@@ -102,6 +102,11 @@ STYLE_ENUMS = {
 PROPS_ENUMS = {
     "chartType": {"line", "bar", "pie"},
     "fit": {"cover", "contain", "fill"},
+    # P14 决策卡收敛后与 schema/组件库/面板四方一致：非法值删除（组件默认值渲染），
+    # 避免 LLM 偶发输出 'orange' 这类值导致整树 Schema 校验失败回退模板
+    "variant": {"default", "primary", "secondary", "outline", "ghost", "destructive"},
+    "size": {"sm", "default", "lg"},
+    "type_": {"text", "password", "email", "number"},
 }
 
 
@@ -133,7 +138,14 @@ def _repair_props(node: dict) -> None:
     if not isinstance(props, dict):
         return
     for key, value in list(props.items()):
-        if key in PROPS_STRING_FIELDS and not isinstance(value, str):
+        if key in PROPS_ENUMS:
+            # 枚举字段（P14 收敛后含 variant/size/type_）：仅接受合法枚举字符串，其余删除（组件默认渲染）。
+            # 必须最先判断——避免数字 28 先被转成字符串 "28" 逃过枚举校验。
+            if isinstance(value, str) and value in PROPS_ENUMS[key]:
+                continue
+            del props[key]
+            gen_logger.debug("修复 props.%s 非法枚举 %r 已删除", key, value)
+        elif key in PROPS_STRING_FIELDS and not isinstance(value, str):
             props[key] = str(value)
             gen_logger.debug("修复 props.%s %r→%r", key, value, props[key])
         elif key in PROPS_NUMBER_FIELDS:
@@ -184,9 +196,6 @@ def _repair_props(node: dict) -> None:
             elif not isinstance(value, dict):
                 del props[key]
                 gen_logger.debug("修复 props.%s 非对象 %r 已删除", key, value)
-        elif key in PROPS_ENUMS and isinstance(value, str) and value not in PROPS_ENUMS[key]:
-            del props[key]
-            gen_logger.debug("修复 props.%s 非法枚举 %r 已删除", key, value)
 
 
 def repair_design(node: dict) -> dict:

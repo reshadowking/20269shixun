@@ -118,10 +118,8 @@ describe('B0 组件事实源契约', () => {
     expect(panelSize).toEqual(libSize)
   })
 
-  it('渲染层 VARIANT_CLASS 与组件库的差集仅 link（P14 决策卡登记：link 去留待定，B1-3 收敛）', () => {
+  it('渲染层 VARIANT_CLASS 与组件库 enum 一致（P14 决策卡：已删 link，四方收敛到 6）', () => {
     const libVariant = LIB_BUTTON.props.variant.enum as string[]
-    const diff = Object.keys(VARIANT_CLASS).filter((v) => !libVariant.includes(v))
-    // 现状 7 vs 6（渲染层多 link）；决策卡定案后本断言更新为收敛结果（差集 [] 或 link 正式入集合）
-    expect(diff).toEqual(['link'])
+    expect(Object.keys(VARIANT_CLASS).sort()).toEqual([...libVariant].sort())
   })
 })

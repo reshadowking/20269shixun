@@ -9,7 +9,6 @@ export const VARIANT_CLASS: Record<string, string> = {
   outline: 'inline-flex items-center justify-center rounded-md border border-input bg-background text-sm font-medium shadow-sm',
   ghost: 'inline-flex items-center justify-center rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground',
   destructive: 'inline-flex items-center justify-center rounded-md bg-destructive text-sm font-medium text-destructive-foreground shadow-sm',
-  link: 'inline-flex items-center justify-center text-sm font-medium text-primary underline-offset-4 hover:underline',
 }
 
 export function CanvasButton({ props, style }: { props: Record<string, unknown>; style?: React.CSSProperties }) {

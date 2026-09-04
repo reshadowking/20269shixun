@@ -77,12 +77,17 @@ class TestRepairDesign:
         fixed = repair_design(tree)
         assert fixed["style"] == {"gap": 16, "radius": 12, "fontSize": 14}
 
-    def test_props_size_number_to_string(self):
-        """props.size: 28（模型误写字号）→ 转字符串，Schema 要求 string。"""
+    def test_props_size_invalid_enum_deleted(self):
+        """props.size 非法（数字 28 / 字符串 'xl'）→ 删除字段（P14 收敛后 size 为 sm/default/lg 枚举，
+        不再做数字转字符串——那是 size 还是自由字符串时代的语义）。"""
         tree = {"id": "a", "type": "component", "componentType": "avatar", "props": {"name": "u", "size": 28}}
         fixed = repair_design(tree)
-        assert fixed["props"]["size"] == "28"
+        assert "size" not in fixed["props"]
         validate_design(fixed)
+        tree2 = {"id": "b", "type": "component", "componentType": "button", "props": {"text": "x", "variant": "orange", "size": "xl"}}
+        fixed2 = repair_design(tree2)
+        assert "variant" not in fixed2["props"] and "size" not in fixed2["props"]
+        validate_design(fixed2)
 
     def test_props_level_string_to_number_clamped(self):
         tree = {"id": "t", "type": "component", "componentType": "title-text", "props": {"text": "x", "level": "9"}}
