@@ -1,4 +1,7 @@
+import type { ExportElement } from '@/components/canvas/types'
 import { escapeHtml } from '@/design/escape'
+import { styleToCss } from '@/design/styleToCss'
+import type { DesignNode } from '@/design/types'
 
 /** ① 画布渲染：指标块（label/value/trend，样式参考 shadcn/ui Card + 数字） */
 export function CanvasStatBlock({ props, style }: { props: Record<string, unknown>; style?: React.CSSProperties }) {
@@ -42,3 +45,26 @@ export const statBlockSchema = [
   { key: 'value', label: '数值', control: 'text' as const },
   { key: 'trend', label: '趋势', control: 'text' as const },
 ]
+
+/** B1：导出语义描述（label/value/trend 三段，内部常量样式与引擎 case 一致） */
+export const buildStatBlockExport = (node: DesignNode): ExportElement => {
+  const props = node.props ?? {}
+  const children: ExportElement[] = [
+    {
+      tag: 'div',
+      attrs: {},
+      style: { fontSize: 13, color: '#86909C' },
+      text: typeof props.label === 'string' ? props.label : '',
+    },
+    {
+      tag: 'div',
+      attrs: {},
+      style: { fontSize: 24, fontWeight: 700 },
+      text: typeof props.value === 'string' ? props.value : '',
+    },
+  ]
+  if (typeof props.trend === 'string' && props.trend) {
+    children.push({ tag: 'div', attrs: {}, style: { fontSize: 12, color: '#00A870' }, text: props.trend })
+  }
+  return { tag: 'div', attrs: {}, style: styleToCss(node.style), children }
+}

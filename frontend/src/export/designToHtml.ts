@@ -52,12 +52,6 @@ function componentHtml(node: DesignNode): string {
   const style = cssText(node.style)
   const text = escapeHtml(typeof props.text === 'string' ? props.text : '')
   switch (node.componentType) {
-    case 'input':
-      return `<input style="${style}" placeholder="${escapeHtml(typeof props.placeholder === 'string' ? props.placeholder : '')}" />`
-    case 'select': {
-      const options = Array.isArray(props.options) ? props.options.map((o) => String(o)) : []
-      return `<select style="${style}">${options.map((o) => `<option>${escapeHtml(o)}</option>`).join('')}</select>`
-    }
     case 'navbar': {
       const links = Array.isArray(props.links) ? props.links : []
       return `<nav style="${style}"><strong>${escapeHtml(typeof props.title === 'string' ? props.title : '')}</strong> ${links
@@ -70,8 +64,6 @@ function componentHtml(node: DesignNode): string {
     }
     case 'hero':
       return `<section style="${style}"><h2>${escapeHtml(typeof props.title === 'string' ? props.title : '')}</h2><p>${escapeHtml(typeof props.subtitle === 'string' ? props.subtitle : '')}</p>${props.cta && typeof (props.cta as Record<string, unknown>).text === 'string' ? `<button>${escapeHtml(((props.cta as Record<string, unknown>).text as string))}</button>` : ''}</section>`
-    case 'stat-block':
-      return `<div style="${style}"><div style="font-size: 13px; color: #86909C;">${escapeHtml(typeof props.label === 'string' ? props.label : '')}</div><div style="font-size: 24px; font-weight: 700;">${escapeHtml(typeof props.value === 'string' ? props.value : '')}</div>${props.trend ? `<div style="font-size: 12px; color: #00A870;">${escapeHtml(String(props.trend))}</div>` : ''}</div>`
     case 'table': {
       const columns = Array.isArray(props.columns) ? (props.columns as Array<Record<string, unknown>>) : []
       const rows = Array.isArray(props.rows) ? (props.rows as Array<Record<string, unknown>>) : []

@@ -44,14 +44,6 @@ function componentTag(node: DesignNode): string {
   const style = styleLiteral(node.style)
   const text = escapeHtml(typeof props.text === 'string' ? props.text : '')
   switch (node.componentType) {
-    case 'input': {
-      const label = typeof props.label === 'string' && props.label ? `<label style={{display:'block',fontSize:13,color:'#4E5969',marginBottom:6}}>${escapeHtml(props.label)}</label>` : ''
-      return `<div data-component="input">${label}<input style={{${style}}} placeholder="${escapeHtml(typeof props.placeholder === 'string' ? props.placeholder : '')}" ${props.disabled ? 'disabled' : ''} /></div>`
-    }
-    case 'select': {
-      const options = Array.isArray(props.options) ? props.options.map((o) => String(o)) : []
-      return `<div data-component="select"><select style={{${style}}}>${options.map((o) => `\n        <option>${escapeHtml(o)}</option>`).join('')}\n      </select></div>`
-    }
     case 'navbar': {
       const links = Array.isArray(props.links) ? props.links : []
       return `<nav data-component="navbar" style={{${style}}}>\n        <strong>${escapeHtml(typeof props.title === 'string' ? props.title : '')}</strong>\n        ${links
@@ -66,8 +58,6 @@ function componentTag(node: DesignNode): string {
     }
     case 'hero':
       return `<section data-component="hero" style={{${style}}}>\n        <h2>${escapeHtml(typeof props.title === 'string' ? props.title : '')}</h2>\n        <p>${escapeHtml(typeof props.subtitle === 'string' ? props.subtitle : '')}</p>\n        ${props.cta && typeof (props.cta as Record<string, unknown>).text === 'string' ? `<button>${escapeHtml(((props.cta as Record<string, unknown>).text as string))}</button>` : ''}\n      </section>`
-    case 'stat-block':
-      return `<div data-component="stat-block" style={{${style}}}>\n        <div style={{fontSize:13,color:'#86909C'}}>${escapeHtml(typeof props.label === 'string' ? props.label : '')}</div>\n        <div style={{fontSize:24,fontWeight:700}}>${escapeHtml(typeof props.value === 'string' ? props.value : '')}</div>\n        ${props.trend ? `<div style={{fontSize:12,color:'#00A870'}}>${escapeHtml(String(props.trend))}</div>` : ''}\n      </div>`
     case 'table': {
       const columns = Array.isArray(props.columns) ? (props.columns as Array<Record<string, unknown>>) : []
       const rows = Array.isArray(props.rows) ? (props.rows as Array<Record<string, unknown>>) : []

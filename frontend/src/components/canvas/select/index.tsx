@@ -1,6 +1,9 @@
 import { useState } from 'react'
 
+import type { ExportElement } from '@/components/canvas/types'
 import { escapeHtml } from '@/design/escape'
+import { styleToCss } from '@/design/styleToCss'
+import type { DesignNode } from '@/design/types'
 
 /** ① 画布渲染：下拉选择（缺陷 14 已修复——可交互：点击展开选项、选中更新显示；阻断冒泡不影响画布拖拽） */
 export function CanvasSelect({ props, style }: { props: Record<string, unknown>; style?: React.CSSProperties }) {
@@ -86,3 +89,15 @@ export const selectSchema = [
   { key: 'placeholder', label: '占位符', control: 'text' as const },
   { key: 'options', label: '选项（逗号分隔）', control: 'text' as const },
 ]
+
+/** B1：导出语义描述——select 为根（标记直接上移），options 为 option children（双通道同构） */
+export const buildSelectExport = (node: DesignNode): ExportElement => {
+  const props = node.props ?? {}
+  const options = Array.isArray(props.options) ? props.options.map((o) => String(o)) : []
+  return {
+    tag: 'select',
+    attrs: {},
+    style: styleToCss(node.style),
+    children: options.map((o) => ({ tag: 'option', attrs: {}, style: {}, text: o })),
+  }
+}

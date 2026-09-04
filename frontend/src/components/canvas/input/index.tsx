@@ -1,4 +1,7 @@
+import type { ExportElement } from '@/components/canvas/types'
 import { escapeHtml } from '@/design/escape'
+import { styleToCss } from '@/design/styleToCss'
+import type { DesignNode } from '@/design/types'
 
 /** ① 画布渲染：输入框（样式参考 shadcn/ui Input） */
 export function CanvasInput({ props, style }: { props: Record<string, unknown>; style?: React.CSSProperties }) {
@@ -45,3 +48,24 @@ export const inputSchema = [
   { key: 'type_', label: '输入类型', control: 'select' as const, options: ['text', 'password', 'email', 'number'] },
   { key: 'disabled', label: '禁用', control: 'switch' as const },
 ]
+
+/** B1：导出语义描述——wrapper div 携带设计 style；label/type_/disabled 与画布一致（双通道同构） */
+export const buildInputExport = (node: DesignNode): ExportElement => {
+  const props = node.props ?? {}
+  const children: ExportElement[] = []
+  if (typeof props.label === 'string' && props.label) {
+    children.push({
+      tag: 'label',
+      attrs: {},
+      style: { display: 'block', fontSize: 13, color: '#4E5969', marginBottom: 6 },
+      text: props.label,
+    })
+  }
+  const attrs: Record<string, string> = {
+    type: typeof props.type_ === 'string' ? props.type_ : 'text',
+    placeholder: typeof props.placeholder === 'string' ? props.placeholder : '',
+  }
+  if (props.disabled) attrs.disabled = 'disabled'
+  children.push({ tag: 'input', attrs, style: {} })
+  return { tag: 'div', attrs: {}, style: styleToCss(node.style), children }
+}
