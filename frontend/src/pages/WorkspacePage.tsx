@@ -652,6 +652,13 @@ export default function WorkspacePage() {
                     onUndo={handleUndo}
                     canUndo={undoCount > 0}
                     historyScope={designParam ?? undefined}
+                    onComplianceRestore={(fix) => {
+                      // D1：还原单条合规修正——updateNode 走 Yjs 事务（LOCAL_ORIGIN，单撤销步）
+                      store.updateNode(fix.node_id, (n) => ({
+                        ...n,
+                        style: { ...(n.style ?? {}), [fix.field]: fix.original },
+                      }))
+                    }}
                   />
                 )}
                 {activePanel === 'layers' && (

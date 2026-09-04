@@ -242,3 +242,60 @@ describe('historyScope 聊天历史分 key（P0-4）', () => {
     expect(screen.queryByText(/你好！我是 AI 设计助手/)).not.toBeInTheDocument()
   })
 })
+
+describe('D1 合规逐项报告（B2-2 明细 → UI）', () => {
+  let fetchMock: ReturnType<typeof vi.fn>
+
+  beforeEach(() => {
+    localStorage.clear()
+    fetchMock = mockFetch({ questions: [] })
+  })
+
+  it('生成返回违规明细：报告逐项展示，点还原回调并移除该项，全部接受关闭', async () => {
+    const onRestore = vi.fn()
+    fetchMock = mockFetch(
+      { questions: [] },
+      {
+        design: DESIGN,
+        template: 'login',
+        compliance: 50,
+        violations: 2,
+        fallback: false,
+        violations_detail: [
+          { node_id: 'btn-1', field: 'background', original: '#123456', corrected: 'text-primary' },
+          { node_id: 't-1', field: 'color', original: '#ABCDEF', corrected: 'primary' },
+        ],
+      },
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    render(<AIChatPanel onGenerate={() => {}} onComplianceRestore={onRestore} />)
+    typeAndSend('设计一个页面')
+    await waitFor(() => expect(screen.getByTestId('compliance-report')).toBeInTheDocument())
+    expect(screen.getByText(/#123456/)).toBeInTheDocument()
+    expect(screen.getByText(/#ABCDEF/)).toBeInTheDocument()
+
+    // 还原第一项：回调携带完整明细，该项从报告消失、另一项保留
+    fireEvent.click(screen.getByTestId('compliance-restore-0'))
+    expect(onRestore).toHaveBeenCalledWith({
+      node_id: 'btn-1',
+      field: 'background',
+      original: '#123456',
+      corrected: 'text-primary',
+    })
+    await waitFor(() => expect(screen.queryByText(/#123456/)).not.toBeInTheDocument())
+    expect(screen.getByText(/#ABCDEF/)).toBeInTheDocument()
+
+    // 全部接受：报告整体关闭
+    fireEvent.click(screen.getByTestId('compliance-accept-all'))
+    await waitFor(() => expect(screen.queryByTestId('compliance-report')).not.toBeInTheDocument())
+  })
+
+  it('无违规明细时不渲染报告块', async () => {
+    fetchMock = mockFetch({ questions: [] }) // 默认 generate 响应无 violations_detail
+    vi.stubGlobal('fetch', fetchMock)
+    render(<AIChatPanel onGenerate={() => {}} />)
+    typeAndSend('设计一个页面')
+    await waitFor(() => expect(screen.getByText(/已生成设计稿/)).toBeInTheDocument())
+    expect(screen.queryByTestId('compliance-report')).not.toBeInTheDocument()
+  })
+})

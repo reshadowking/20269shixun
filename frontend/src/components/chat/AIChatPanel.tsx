@@ -27,6 +27,14 @@ interface ChatMessage {
   text: string
 }
 
+/** B2-2/D1：单条合规拉回明细（与后端 ComplianceFix 对齐） */
+export interface ComplianceFixItem {
+  node_id: string
+  field: string // color / background
+  original: string
+  corrected: string
+}
+
 interface GenerateResponse {
   design: DesignNode
   template: string
@@ -34,6 +42,7 @@ interface GenerateResponse {
   violations: number
   fallback: boolean
   error?: string
+  violations_detail?: ComplianceFixItem[]
 }
 
 interface PendingFollowup {
@@ -85,9 +94,11 @@ interface AIChatPanelProps {
   canUndo?: boolean
   /** P0-4 聊天历史隔离 scope：打开已存设计时传 design id，按设计分 key；缺省保持全局 key */
   historyScope?: string
+  /** D1：还原单条合规修正（把节点字段改回 original）——上层负责 Yjs 事务（单撤销步） */
+  onComplianceRestore?: (fix: ComplianceFixItem) => void
 }
 
-export default function AIChatPanel({ onGenerate, onGeneratingChange, design, onIncrementalEdit, onUndo, canUndo, historyScope }: AIChatPanelProps) {
+export default function AIChatPanel({ onGenerate, onGeneratingChange, design, onIncrementalEdit, onUndo, canUndo, historyScope, onComplianceRestore }: AIChatPanelProps) {
   const [input, setInput] = useState('')
   const storageKey = chatStorageKey(historyScope)
   const [messages, setMessages] = useState<ChatMessage[]>(() => {
@@ -106,6 +117,8 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
   const [pending, setPending] = useState<PendingFollowup | null>(null)
   /** 参数填充失败（模型超时/限流）：不静默降级，由用户选择重试或使用预置模板 */
   const [fallbackResult, setFallbackResult] = useState<GenerateResponse | null>(null)
+  /** D1：最近一次成功生成的合规逐项明细（违规色被拉回列表，可逐项还原/全部接受） */
+  const [complianceReport, setComplianceReport] = useState<ComplianceFixItem[] | null>(null)
 
   // 会话持久化（缺陷 10）：切走面板/刷新后恢复历史
   useEffect(() => {
@@ -158,6 +171,8 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
         ])
         return
       }
+      // D1：成功响应携带合规明细时展示逐项报告（生成与增量均适用）
+      setComplianceReport(resp.violations_detail && resp.violations_detail.length > 0 ? resp.violations_detail : null)
       if (isEdit && editDesign && onIncrementalEdit) {
         const changed = diffDesign(editDesign, resp.design)
         onIncrementalEdit(resp.design, changed)
@@ -209,6 +224,16 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
       },
     ])
     setFallbackResult(null)
+  }
+
+  /** D1：还原单条合规修正（节点字段改回 original，Yjs 单事务=可撤销）；该项从报告移除 */
+  const handleRestoreFix = (fix: ComplianceFixItem) => {
+    onComplianceRestore?.(fix)
+    setComplianceReport((list) => {
+      if (!list) return list
+      const rest = list.filter((f) => f !== fix)
+      return rest.length > 0 ? rest : null
+    })
   }
 
   const handleSend = async (promptOverride?: string) => {
@@ -388,6 +413,45 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
             }}
           >
             ↩ 撤销修改（回到上一版）
+          </Button>
+        </div>
+      )}
+      {complianceReport && complianceReport.length > 0 && (
+        <div className="space-y-2 border-t p-3" data-testid="compliance-report">
+          <div className="text-xs font-medium text-muted-foreground">
+            规范检查：{complianceReport.length} 处颜色已自动拉回设计令牌（可逐项还原）
+          </div>
+          {complianceReport.map((fix, i) => (
+            <div
+              key={`${fix.node_id}-${fix.field}-${i}`}
+              className="flex items-center justify-between gap-2 rounded-md border bg-muted/40 px-2 py-1.5 text-xs"
+              data-testid={`compliance-fix-${i}`}
+            >
+              <span className="min-w-0 flex-1 truncate" title={`${fix.node_id}.${fix.field}`}>
+                <span className="text-muted-foreground">[{fix.node_id}] {fix.field}</span>{' '}
+                <span className="text-destructive line-through">{fix.original}</span>
+                {' → '}
+                <span className="font-medium text-foreground">{fix.corrected}</span>
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-6 shrink-0 px-2 text-[11px]"
+                data-testid={`compliance-restore-${i}`}
+                onClick={() => handleRestoreFix(fix)}
+              >
+                还原此项
+              </Button>
+            </div>
+          ))}
+          <Button
+            variant="ghost"
+            size="sm"
+            className="w-full text-xs"
+            data-testid="compliance-accept-all"
+            onClick={() => setComplianceReport(null)}
+          >
+            全部接受（保持修正）
           </Button>
         </div>
       )}
