@@ -1,7 +1,8 @@
 import { escapeHtml } from '@/design/escape'
 
-/** ① 画布渲染：按钮（样式参考 shadcn/ui Button，自实现 Canvas 版，支持全部 variant） */
-const VARIANT_CLASS: Record<string, string> = {
+/** ① 画布渲染：按钮（样式参考 shadcn/ui Button，自实现 Canvas 版，支持全部 variant）。
+ * 导出仅供 B0 契约测试读取合法集合（与组件库/属性面板三方对齐校验）。 */
+export const VARIANT_CLASS: Record<string, string> = {
   default: 'inline-flex items-center justify-center rounded-md bg-primary text-sm font-medium text-primary-foreground shadow-sm',
   primary: 'inline-flex items-center justify-center rounded-md bg-primary text-sm font-medium text-primary-foreground shadow-sm',
   secondary: 'inline-flex items-center justify-center rounded-md bg-secondary text-sm font-medium text-secondary-foreground shadow-sm',

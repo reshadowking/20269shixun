@@ -1,8 +1,19 @@
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+
 import { render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 
 import { componentPalette, componentRegistry, renderExportTemplate } from '@/components/canvas/registry'
 import { COMPONENT_TYPES } from '@/design/types'
+import { VARIANT_CLASS, buttonSchema } from '@/components/canvas/button'
+
+/** B0 契约：前端组件事实源 vs shared/component-library.json（单一来源护栏）。
+ * vitest cwd 为 frontend/，shared 在其上一级。 */
+const LIB: { components: Array<{ type: string; props: Record<string, { enum?: string[] }> }> } = JSON.parse(
+  readFileSync(resolve(process.cwd(), '../shared/component-library.json'), 'utf-8'),
+)
+const LIB_BUTTON = LIB.components.find((c) => c.type === 'button')!
 
 /** 画布渲染：React 默认转义（渲染通道 XSS 防线，v2.2 §11.2） */
 describe('组件画布渲染', () => {
@@ -88,5 +99,29 @@ describe('组件导出模板转义', () => {
   it('hero CTA 文本转义', () => {
     const out = renderExportTemplate('hero', { title: 'T', cta: { text: '"><script>alert(1)</script>' } })
     expect(out).not.toContain('<script>')
+  })
+})
+
+/** B0 组件事实源契约（优化路线图 §3 B0-1）：registry / 组件库 / 面板 / 渲染层合法集合收敛护栏 */
+describe('B0 组件事实源契约', () => {
+  it('registry 组件集合 == component-library 组件集合', () => {
+    const libTypes = LIB.components.map((c) => c.type).sort()
+    expect(Object.keys(componentRegistry).sort()).toEqual(libTypes)
+  })
+
+  it('button 面板 options 与组件库 enum 一致（size 与 variant 均为 6）', () => {
+    const libVariant = LIB_BUTTON.props.variant.enum as string[]
+    const libSize = LIB_BUTTON.props.size.enum as string[]
+    const panelVariant = buttonSchema.find((f) => f.key === 'variant')!.options
+    const panelSize = buttonSchema.find((f) => f.key === 'size')!.options
+    expect(panelVariant).toEqual(libVariant)
+    expect(panelSize).toEqual(libSize)
+  })
+
+  it('渲染层 VARIANT_CLASS 与组件库的差集仅 link（P14 决策卡登记：link 去留待定，B1-3 收敛）', () => {
+    const libVariant = LIB_BUTTON.props.variant.enum as string[]
+    const diff = Object.keys(VARIANT_CLASS).filter((v) => !libVariant.includes(v))
+    // 现状 7 vs 6（渲染层多 link）；决策卡定案后本断言更新为收敛结果（差集 [] 或 link 正式入集合）
+    expect(diff).toEqual(['link'])
   })
 })
