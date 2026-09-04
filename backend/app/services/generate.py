@@ -73,6 +73,7 @@ COMPONENT_TYPE_NAMES = {
 STYLE_BOUNDS = {
     "fontSize": (8, 96),
     "spacing": (0, 200),
+    "padding": (0, 200),
     "gap": (0, 100),
     "radius": (0, 64),
     "fontWeight": (100, 900),

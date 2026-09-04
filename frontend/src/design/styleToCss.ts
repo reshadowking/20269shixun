@@ -37,7 +37,7 @@ const CSS_KEY_MAP: Record<string, string> = {
 export function styleToCss(style: NodeStyle | undefined): CSSProperties {
   const s: CSSProperties = {}
   if (!style) return s
-  const { layout, gap, color, background, radius, width, height, spacing, backgroundImage, ...rest } = style
+  const { layout, gap, color, background, radius, width, height, spacing, padding, backgroundImage, ...rest } = style
 
   if (layout === 'free') {
     // free 容器自身作为子节点绝对定位的上下文
@@ -55,7 +55,9 @@ export function styleToCss(style: NodeStyle | undefined): CSSProperties {
   if (radius !== undefined) s.borderRadius = radius
   if (width !== undefined) s.width = toCssSize(width)
   if (height !== undefined) s.height = toCssSize(height)
-  if (spacing !== undefined) s.padding = spacing
+  // 内边距双键兼容：padding 优先（模板/组件库/优化器实际使用键），spacing 回退（schema 旧键）
+  if (padding !== undefined) s.padding = padding
+  else if (spacing !== undefined) s.padding = spacing
   if (backgroundImage) {
     // 背景图 URL 协议白名单（http/https/data:image），防 CSS 注入
     const url = String(backgroundImage)

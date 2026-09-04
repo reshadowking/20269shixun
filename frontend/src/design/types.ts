@@ -69,6 +69,7 @@ export interface NodeStyle {
   fontSize?: number
   fontWeight?: number
   spacing?: number
+  padding?: number
   layout?: LayoutMode
   gap?: number
   width?: number | string
