@@ -1,13 +1,20 @@
 /**
  * DesignNode → 静态 HTML 预览（P0-2 导出对话框 iframe srcdoc 用）。
  * 与 designToReact 同构但输出纯 HTML+CSS（无 React 运行时）。
+ * B1 试点：注册了 buildExport 的组件（button/image）经 ExportElement 序列化。
  */
 import type { DesignNode } from '@/design/types'
-import { escapeHtml, safeHref, safeSrc } from '@/design/escape'
+import { componentRegistry } from '@/components/canvas/registry'
+import type { ExportElement } from '@/components/canvas/types'
+import { escapeHtml, safeHref } from '@/design/escape'
 import { styleToCss } from '@/design/styleToCss'
 
 function cssText(style: DesignNode['style']): string {
-  const css = styleToCss(style) as Record<string, unknown>
+  return cssTextOfCss(styleToCss(style) as Record<string, unknown>)
+}
+
+/** CSSProperties → "kebab: value; …"（字符串值实体化防属性注入；number → px） */
+function cssTextOfCss(css: Record<string, unknown>): string {
   const parts: string[] = []
   for (const [key, value] of Object.entries(css)) {
     if (value === undefined || value === null) continue
@@ -19,13 +26,28 @@ function cssText(style: DesignNode['style']): string {
   return parts.join('; ')
 }
 
+const VOID_TAGS = new Set(['img', 'input', 'hr', 'br'])
+
+/** B1：HTML 序列化 ExportElement——style 空时省略属性；attrs 统一转义 */
+function serializeHtmlElement(el: ExportElement): string {
+  const styleAttr = Object.keys(el.style).length > 0 ? ` style="${cssTextOfCss(el.style as Record<string, unknown>)}"` : ''
+  const attrsStr = Object.entries(el.attrs)
+    .map(([k, v]) => ` ${k}="${escapeHtml(v)}"`)
+    .join('')
+  const text = el.text !== undefined ? escapeHtml(el.text) : ''
+  const open = `<${el.tag}${styleAttr}${attrsStr}`
+  if (VOID_TAGS.has(el.tag)) return `${open} />`
+  return `${open}>${text}</${el.tag}>`
+}
+
 function componentHtml(node: DesignNode): string {
+  // B1 试点：注册了 buildExport 的组件经语义节点序列化（button/image）；其余仍在下方 switch
+  const def = componentRegistry[node.componentType ?? '']
+  if (def?.buildExport) return serializeHtmlElement(def.buildExport(node))
   const props = node.props ?? {}
   const style = cssText(node.style)
   const text = escapeHtml(typeof props.text === 'string' ? props.text : '')
   switch (node.componentType) {
-    case 'button':
-      return `<button style="${style}">${text}</button>`
     case 'title-text': {
       const level = typeof props.level === 'number' && props.level >= 1 && props.level <= 6 ? props.level : 2
       return `<h${level} style="${style}">${text}</h${level}>`
@@ -36,8 +58,6 @@ function componentHtml(node: DesignNode): string {
       const options = Array.isArray(props.options) ? props.options.map((o) => String(o)) : []
       return `<select style="${style}">${options.map((o) => `<option>${escapeHtml(o)}</option>`).join('')}</select>`
     }
-    case 'image':
-      return `<img style="${style}" src="${escapeHtml(safeSrc(typeof props.src === 'string' ? props.src : ''))}" alt="${escapeHtml(typeof props.alt === 'string' ? props.alt : '图片')}" />`
     case 'avatar':
       return `<div style="${style}; border-radius: 50%; display: flex; align-items: center; justify-content: center;">${escapeHtml(typeof props.name === 'string' ? props.name.slice(0, 1) : '')}</div>`
     case 'tag':

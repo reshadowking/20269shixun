@@ -4,8 +4,10 @@
  * - 组件按 componentType 映射到语义化原生标签（不依赖任何 UI 库，内联样式）
  * - 输出 App.tsx 可编译的 JSX 代码（无运行时数据依赖）
  */
+import { componentRegistry } from '@/components/canvas/registry'
+import type { ExportElement } from '@/components/canvas/types'
 import type { DesignNode } from '@/design/types'
-import { escapeHtml, safeHref, safeSrc } from '@/design/escape'
+import { escapeHtml, safeHref } from '@/design/escape'
 import { styleToCss } from '@/design/styleToCss'
 
 /** style 转 React 内联样式对象字面量。
@@ -15,13 +17,28 @@ function styleLiteral(style: DesignNode['style']): string {
   return JSON.stringify(styleToCss(style))
 }
 
+const VOID_TAGS = new Set(['img', 'input', 'hr', 'br'])
+
+/** B1：React 序列化 ExportElement——根元素统一带 data-component；style JSON 序列化；attrs 统一转义 */
+function serializeReactElement(el: ExportElement, componentType: string): string {
+  const styleStr = Object.keys(el.style).length > 0 ? ` style={{${JSON.stringify(el.style)}}}` : ''
+  const attrsStr = Object.entries(el.attrs)
+    .map(([k, v]) => ` ${k}="${escapeHtml(v)}"`)
+    .join('')
+  const text = el.text !== undefined ? escapeHtml(el.text) : ''
+  const open = `<${el.tag} data-component="${componentType}"${styleStr}${attrsStr}`
+  if (VOID_TAGS.has(el.tag)) return `${open} />`
+  return `${open}>${text}</${el.tag}>`
+}
+
 function componentTag(node: DesignNode): string {
+  // B1 试点：组件注册了 buildExport 时走语义节点序列化（button/image）；其余仍在下方 switch
+  const def = componentRegistry[node.componentType ?? '']
+  if (def?.buildExport) return serializeReactElement(def.buildExport(node), node.componentType!)
   const props = node.props ?? {}
   const style = styleLiteral(node.style)
   const text = escapeHtml(typeof props.text === 'string' ? props.text : '')
   switch (node.componentType) {
-    case 'button':
-      return `<button data-component="button" style={{${style}}}>${text}</button>`
     case 'title-text': {
       const level = typeof props.level === 'number' && props.level >= 1 && props.level <= 6 ? props.level : 2
       return `<h${level} data-component="title-text" style={{${style}}}>${text}</h${level}>`
@@ -34,8 +51,6 @@ function componentTag(node: DesignNode): string {
       const options = Array.isArray(props.options) ? props.options.map((o) => String(o)) : []
       return `<div data-component="select"><select style={{${style}}}>${options.map((o) => `\n        <option>${escapeHtml(o)}</option>`).join('')}\n      </select></div>`
     }
-    case 'image':
-      return `<img data-component="image" style={{${style}}} src="${escapeHtml(safeSrc(typeof props.src === 'string' ? props.src : ''))}" alt="${escapeHtml(typeof props.alt === 'string' ? props.alt : '图片')}" />`
     case 'avatar':
       return `<div data-component="avatar" style={{${style},borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center'}}>${escapeHtml(typeof props.name === 'string' ? props.name.slice(0, 1) : '')}</div>`
     case 'tag':

@@ -1,4 +1,7 @@
 import { escapeHtml } from '@/design/escape'
+import { styleToCss } from '@/design/styleToCss'
+import type { DesignNode } from '@/design/types'
+import type { ExportElement } from '@/components/canvas/types'
 
 /** ① 画布渲染：按钮（样式参考 shadcn/ui Button，自实现 Canvas 版，支持全部 variant）。
  * 导出仅供 B0 契约测试读取合法集合（与组件库/属性面板三方对齐校验）。 */
@@ -47,6 +50,17 @@ export const exportButtonTemplate = (props: Record<string, unknown>): string => 
   return `        <button className="${className}" style={{ height: ${heightMap[size] ?? 40}, paddingLeft: ${size === 'lg' ? 28 : 16}, paddingRight: ${size === 'lg' ? 28 : 16} }}>
           ${text}
         </button>`
+}
+
+/** B1 试点：导出语义描述（React/HTML 引擎共用；文本与属性转义由引擎统一负责） */
+export const buildButtonExport = (node: DesignNode): ExportElement => {
+  const props = node.props ?? {}
+  return {
+    tag: 'button',
+    attrs: {},
+    style: styleToCss(node.style),
+    text: typeof props.text === 'string' ? props.text : '',
+  }
 }
 
 /** ④ 属性面板配置 */

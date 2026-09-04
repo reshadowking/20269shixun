@@ -1,6 +1,9 @@
 import { useState } from 'react'
 
-import { escapeHtml } from '@/design/escape'
+import type { ExportElement } from '@/components/canvas/types'
+import { escapeHtml, safeSrc } from '@/design/escape'
+import { styleToCss } from '@/design/styleToCss'
+import type { DesignNode } from '@/design/types'
 
 const FIT_CYCLE = ['cover', 'contain', 'fill'] as const
 const FIT_LABEL: Record<string, string> = { cover: '裁剪填充', contain: '完整显示', fill: '拉伸填充' }
@@ -73,6 +76,19 @@ export const exportImageTemplate = (props: Record<string, unknown>): string => {
   const fit = typeof props.fit === 'string' ? props.fit : 'cover'
   if (!src) return '        {/* 图片组件：未设置图片 */}'
   return `        <img src="${src}" alt="${alt}" className="w-full rounded-md" style={{ objectFit: '${fit}' }} />`
+}
+
+/** B1 试点：导出语义描述——src 在此完成协议白名单（safeSrc），引擎负责属性转义 */
+export const buildImageExport = (node: DesignNode): ExportElement => {
+  const props = node.props ?? {}
+  return {
+    tag: 'img',
+    attrs: {
+      src: safeSrc(typeof props.src === 'string' ? props.src : ''),
+      alt: typeof props.alt === 'string' ? props.alt : '图片',
+    },
+    style: styleToCss(node.style),
+  }
 }
 
 /** ④ 属性面板配置（上传控件阶段 5 接入） */
