@@ -71,12 +71,13 @@ class TestSummarizePrompt:
 class TestTemplateCompliance:
     def test_ecommerce_template_now_100_percent(self):
         """P2 修复：商品卡片 background 改为白名单内 #FFFFFF 后，ecommerce 模板兼容率 100%。"""
-        _, violations, total = enforce_compliance(TEMPLATES["ecommerce"])
+        _, fixes, total = enforce_compliance(TEMPLATES["ecommerce"])
+        violations = len(fixes)
         assert violations == 0, f"仍有 {violations} 处违规"
         assert compliance_rate(violations, total) == 100.0
 
     def test_all_templates_full_compliance(self):
         for name, template in TEMPLATES.items():
-            _, violations, total = enforce_compliance(template)
-            rate = compliance_rate(violations, total)
+            _, fixes, total = enforce_compliance(template)
+            rate = compliance_rate(len(fixes), total)
             assert rate >= 85, f"模板 {name} 兼容率 {rate}% < 85%"

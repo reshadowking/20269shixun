@@ -6,7 +6,7 @@
 import logging
 import re
 import time
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from opentelemetry import trace
@@ -342,6 +342,8 @@ class GenerateResult:
     time_ms: dict[str, float] = field(default_factory=dict)
     fallback: bool = False  # 是否走了兜底（mock/失败）
     error: str = ""  # LLM 失败原因（限流/超时等），供前端展示与排查
+    # B2-2：逐项合规拉回明细（node_id/field/original/corrected），供逐项报告 UI
+    violations_detail: list = field(default_factory=list)
 
 
 def generate_design(prompt: str, client: LLMClient | None = None, current_design: dict[str, Any] | None = None) -> GenerateResult:
@@ -432,7 +434,7 @@ def generate_design(prompt: str, client: LLMClient | None = None, current_design
     t0 = time.perf_counter()
     with tracer.start_as_current_span("compliance_check"):
         user_colors = extract_user_colors(prompt)
-        design, violations, total = enforce_compliance(filled, allowed_extra=user_colors)
+        design, fixes, total = enforce_compliance(filled, allowed_extra=user_colors)
     times["compliance_check"] = time.perf_counter() - t0
 
     # Mock 模式（未配 Key 的演示/测试）：模板稿即"模型输出"，不标记降级；
@@ -441,6 +443,7 @@ def generate_design(prompt: str, client: LLMClient | None = None, current_design
         fallback = False
         error = ""
 
+    violations = len(fixes)
     rate = compliance_rate(violations, total)
     times["total"] = time.perf_counter() - start_all
     gen_logger.info(
@@ -458,4 +461,5 @@ def generate_design(prompt: str, client: LLMClient | None = None, current_design
         time_ms=times,
         fallback=fallback,
         error=error,
+        violations_detail=[asdict(f) for f in fixes],
     )

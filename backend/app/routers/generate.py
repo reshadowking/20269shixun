@@ -30,6 +30,8 @@ class GenerateResponse(BaseModel):
     style_attrs: int
     fallback: bool
     error: str = ""
+    # B2-2：逐项合规拉回明细 [{node_id, field, original, corrected}]（前端逐项报告/还原用）
+    violations_detail: list = []
 
 
 @router.post("/api/generate", response_model=GenerateResponse)
@@ -50,6 +52,7 @@ def generate(req: GenerateRequest, _user: str = Depends(get_current_user)):
         style_attrs=result.style_attrs,
         fallback=result.fallback,
         error=result.error,
+        violations_detail=result.violations_detail,
     )
 
 
@@ -117,11 +120,15 @@ class ComplianceRequest(BaseModel):
 
 @router.post("/api/check-compliance")
 def check_compliance(req: ComplianceRequest, _user: str = Depends(get_current_user)):
-    """独立合规检查接口（生成时自动执行，此接口供演示：展示拦截拉回）。"""
-    design, violations, total = enforce_compliance(req.design)
+    """独立合规检查接口（生成时自动执行，此接口供演示：展示拦截拉回与逐项明细）。"""
+    from dataclasses import asdict
+
+    design, fixes, total = enforce_compliance(req.design)
+    violations = len(fixes)
     return {
         "design": design,
         "violations": violations,
         "style_attrs": total,
         "compliance": compliance_rate(violations, total),
+        "violations_detail": [asdict(f) for f in fixes],
     }

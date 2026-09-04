@@ -2,11 +2,12 @@
 
 遍历 DesignNode 树的 style 颜色字段（color/background）：
 - 令牌色 / 白名单 hex（大小写不敏感）→ 通过
-- 违规值 → 自动拉回最近令牌色，记录 violations
-compliance = (1 - violations / 总样式属性数) × 100%
+- 违规值 → 自动拉回最近令牌色，记录 ComplianceFix 明细（B2-2：合规能回答"改了什么"）
+compliance = (1 - violations / 总样式属性数) × 100%，violations = len(fixes)
 """
 import copy
 import re
+from dataclasses import dataclass
 from typing import Any
 
 from ..design import tokens
@@ -18,6 +19,16 @@ _BRAND_HUE_DIFF = 40
 _BRAND_MIN_SATURATION = 0.05  # 仅排除纯灰（浅蓝/深蓝灰饱和度低但仍是品牌色系）
 # 中性色豁免：低饱和度灰阶（文本/边框通用色）不算品牌违规
 _NEUTRAL_MAX_SATURATION = 0.2
+
+
+@dataclass
+class ComplianceFix:
+    """单条合规拉回记录（原违规值 → 修正值），供逐项报告 UI 与"还原此项"使用。"""
+
+    node_id: str
+    field: str  # color / background
+    original: str
+    corrected: str
 
 
 def _hex_rgb(value: str) -> tuple[int, int, int] | None:
@@ -69,21 +80,22 @@ def _is_brand_family(value: str, brand_colors: list[str]) -> bool:
     return False
 
 
-def enforce_compliance(design: dict[str, Any], allowed_extra: list[str] | None = None) -> tuple[dict[str, Any], int, int]:
-    """返回 (修正后的树, 违规数, 总样式属性数)。
+def enforce_compliance(design: dict[str, Any], allowed_extra: list[str] | None = None) -> tuple[dict[str, Any], list[ComplianceFix], int]:
+    """返回 (修正后的树, 违规明细列表, 总样式属性数)。
 
     口径（v2.2 §4.6）：总样式属性数 = 全部颜色字段（令牌名/hex 都算）；
-    违规 = 非令牌值，自动拉回最近令牌色。
+    违规 = 非令牌值，自动拉回最近令牌色并记录 ComplianceFix（node_id/field/original/corrected）。
     allowed_extra：用户明确指定的品牌色（#hex）——精确或相近色不拉回（v2.2 §4.5）；
     其余违规色优先拉回用户品牌色（视觉保持用户主题）。
     """
     extra = [c.upper() for c in (allowed_extra or [])]
     design = copy.deepcopy(design)
-    violations = 0
+    fixes: list[ComplianceFix] = []
     total = 0
 
     def walk(node: dict[str, Any]) -> None:
-        nonlocal violations, total
+        nonlocal total
+        node_id = str(node.get("id") or "?")
         style = node.get("style")
         if isinstance(style, dict):
             for key, value in style.items():
@@ -99,15 +111,16 @@ def enforce_compliance(design: dict[str, Any], allowed_extra: list[str] | None =
                         continue  # 低饱和中性灰（文本/边框通用色）：不算品牌违规
                     # 违规：优先拉回用户品牌色（保持主题），否则最近令牌
                     if extra:
-                        style[key] = extra[0]
+                        corrected = extra[0]
                     else:
-                        style[key] = tokens.nearest_token("default", value) if _HEX_RE.match(value) else "primary"
-                    violations += 1
+                        corrected = tokens.nearest_token("default", value) if _HEX_RE.match(value) else "primary"
+                    style[key] = corrected
+                    fixes.append(ComplianceFix(node_id=node_id, field=key, original=value, corrected=corrected))
         for child in node.get("children") or []:
             walk(child)
 
     walk(design)
-    return design, violations, total
+    return design, fixes, total
 
 
 def compliance_rate(violations: int, total: int) -> float:

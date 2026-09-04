@@ -73,8 +73,8 @@ class TestFreeGeneration:
             validate_design(design)
             from app.services.compliance import compliance_rate, enforce_compliance
 
-            _, violations, total = enforce_compliance(design)
-            assert compliance_rate(violations, total) >= 85
+            _, fixes, total = enforce_compliance(design)
+            assert compliance_rate(len(fixes), total) >= 85
 
     def test_free_default_all_components_in_whitelist(self):
         def walk(node):

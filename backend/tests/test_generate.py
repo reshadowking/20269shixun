@@ -96,25 +96,28 @@ class TestCompliance:
                 {"id": "b", "type": "text", "style": {"color": "primary"}},
             ],
         }
-        fixed, violations, total = enforce_compliance(design)
-        assert violations == 1
+        fixed, fixes, total = enforce_compliance(design)
+        assert len(fixes) == 1
         assert total == 2
         assert fixed["children"][0]["style"]["color"] == "text-primary"  # #123456 拉回最近令牌
         assert fixed["children"][1]["style"]["color"] == "primary"  # 合法值不动
-        assert compliance_rate(violations, total) == 50.0
+        assert compliance_rate(len(fixes), total) == 50.0
+        # B2-2：明细记录 node_id/field/original/corrected（供逐项报告与还原）
+        assert fixes[0].node_id == "a" and fixes[0].field == "color"
+        assert fixes[0].original == "#123456" and fixes[0].corrected == "text-primary"
 
     def test_case_insensitive_hex_allowed(self):
         design = {"id": "r", "type": "text", "style": {"color": "#ff6b6b"}}
-        _, violations, total = enforce_compliance(design)
-        assert violations == 0 and total == 1
+        _, fixes, total = enforce_compliance(design)
+        assert len(fixes) == 0 and total == 1
         assert compliance_rate(0, 1) == 100.0
 
     def test_user_specified_brand_color_kept(self):
         """问题 8：用户明确指定的品牌色不被合规检查器拉回（v2.2 §4.5）。"""
         design = {"id": "r", "type": "frame", "style": {"layout": "column"},
                   "children": [{"id": "btn", "type": "component", "componentType": "button", "style": {"color": "#FF6B35"}}]}
-        fixed, violations, _ = enforce_compliance(design, allowed_extra=["#FF6B35"])
-        assert violations == 0
+        fixed, fixes, _ = enforce_compliance(design, allowed_extra=["#FF6B35"])
+        assert len(fixes) == 0
         assert fixed["children"][0]["style"]["color"] == "#FF6B35"
 
     def test_extract_user_colors(self):
@@ -128,30 +131,30 @@ class TestCompliance:
         """用户品牌色的同色相变体（Tailwind 蓝色系深浅）不拉回。"""
         for shade in ["#3B82F6", "#1D4ED8", "#1E3A8A", "#DBEAFE", "#EFF6FF"]:
             design = {"id": "r", "type": "text", "style": {"color": shade}}
-            _, violations, _ = enforce_compliance(design, allowed_extra=["#2563EB"])
-            assert violations == 0, f"{shade} 应视为品牌色系"
+            _, fixes, _ = enforce_compliance(design, allowed_extra=["#2563EB"])
+            assert len(fixes) == 0, f"{shade} 应视为品牌色系"
 
     def test_other_hue_pulled_to_brand(self):
         """红色系（不同色相）拉回用户品牌色而非默认令牌。"""
         design = {"id": "r", "type": "text", "style": {"color": "#FF0000"}}
-        fixed, violations, _ = enforce_compliance(design, allowed_extra=["#2563EB"])
-        assert violations == 1
+        fixed, fixes, _ = enforce_compliance(design, allowed_extra=["#2563EB"])
+        assert len(fixes) == 1
         assert fixed["style"]["color"] == "#2563EB"
 
     def test_neutral_gray_not_brand_family(self):
         """纯中性灰（无色相）不算品牌色系；深蓝灰（色相为蓝）算。"""
         design = {"id": "r", "type": "text", "style": {"color": "#808080"}}
-        _, violations, _ = enforce_compliance(design, allowed_extra=["#2563EB"])
-        assert violations == 1
+        _, fixes, _ = enforce_compliance(design, allowed_extra=["#2563EB"])
+        assert len(fixes) == 1
         design2 = {"id": "r2", "type": "text", "style": {"color": "#0F172A"}}
-        _, violations2, _ = enforce_compliance(design2, allowed_extra=["#2563EB"])
-        assert violations2 == 0  # slate-900 色相为蓝（222°），蓝色主题下合理
+        _, fixes2, _ = enforce_compliance(design2, allowed_extra=["#2563EB"])
+        assert len(fixes2) == 0  # slate-900 色相为蓝（222°），蓝色主题下合理
 
     def test_unsimilar_color_pulled_to_brand(self):
         """差异大的颜色（红）拉回用户品牌色而非默认令牌。"""
         design = {"id": "r", "type": "text", "style": {"color": "#FF0000"}}
-        fixed, violations, _ = enforce_compliance(design, allowed_extra=["#2563EB"])
-        assert violations == 1
+        fixed, fixes, _ = enforce_compliance(design, allowed_extra=["#2563EB"])
+        assert len(fixes) == 1
         assert fixed["style"]["color"] == "#2563EB"
 
     def test_no_style_attrs_is_full_compliance(self):
@@ -180,7 +183,30 @@ class TestGenerateAPI:
     def test_check_compliance_endpoint(self, client, auth_headers):
         resp = client.post("/api/check-compliance", json={"design": {"id": "x", "type": "text", "style": {"color": "#123456"}}}, headers=auth_headers)
         assert resp.status_code == 200
-        assert resp.json()["violations"] == 1
+        body = resp.json()
+        assert body["violations"] == 1
+        # B2-2：逐项明细随响应透传（前端逐项报告/还原的数据源）
+        assert body["violations_detail"] == [
+            {"node_id": "x", "field": "color", "original": "#123456", "corrected": "text-primary"}
+        ]
+        assert body["compliance"] == 0.0  # 唯一颜色字段被拉回：1/1 违规
+
+    def test_check_compliance_detail_empty_when_clean(self, client, auth_headers):
+        resp = client.post(
+            "/api/check-compliance",
+            json={"design": {"id": "y", "type": "text", "style": {"color": "primary"}}},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        assert resp.json()["violations_detail"] == []
+
+    def test_generate_response_carries_detail_field(self, client, auth_headers):
+        """生成响应携带 violations_detail 字段（mock 模板 100% 合规时为空列表）。"""
+        resp = client.post("/api/generate", json={"prompt": "设计一个登录页"}, headers=auth_headers)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "violations_detail" in body
+        assert isinstance(body["violations_detail"], list)
 
 
 class TestApiErrorDescription:
