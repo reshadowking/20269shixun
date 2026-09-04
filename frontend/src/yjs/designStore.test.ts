@@ -128,6 +128,58 @@ describe('DesignStore 操作', () => {
     store.destroy()
   })
 
+  it('plainToY 保留 hidden：constructor 初始化', () => {
+    const initial = sample()
+    initial.children![0] = { ...initial.children![0], hidden: true }
+    const store = new DesignStore(undefined, initial)
+    expect(store.getDesign().children?.[0].hidden).toBe(true)
+    store.destroy()
+  })
+
+  it('plainToY 保留 hidden：resetDesign（打开设计/AI 重置）', () => {
+    const store = new DesignStore(undefined, sample())
+    store.updateNode('a', (n) => ({ ...n, hidden: true }))
+    const snapshot = store.getDesign()
+    store.resetDesign(snapshot)
+    expect(store.getDesign().children?.[0].hidden).toBe(true)
+    store.destroy()
+  })
+
+  it('plainToY 保留 hidden：duplicateNode 副本', () => {
+    const store = new DesignStore(undefined, sample())
+    store.updateNode('a', (n) => ({ ...n, hidden: true }))
+    store.duplicateNode('a')
+    const copy = store.getDesign().children?.find((c) => c.id !== 'a' && c.id.startsWith('text-'))
+    expect(copy?.hidden).toBe(true)
+    store.destroy()
+  })
+
+  it('plainToY 保留 hidden：moveChild 重排隐藏节点', () => {
+    const store = new DesignStore(undefined, sample())
+    store.updateNode('b2', (n) => ({ ...n, hidden: true }))
+    store.moveChild('b2', 'b', 0)
+    const moved = store.getDesign().children?.[1].children?.find((c) => c.id === 'b2')
+    expect(moved?.hidden).toBe(true)
+    store.destroy()
+  })
+
+  it('plainToY 保留 hidden：moveNodeTo 跨父移动隐藏节点', () => {
+    const store = new DesignStore(undefined, sample())
+    store.updateNode('b2', (n) => ({ ...n, hidden: true }))
+    store.moveNodeTo('b2', 'root', 0)
+    const moved = store.getDesign().children?.find((c) => c.id === 'b2')
+    expect(moved?.hidden).toBe(true)
+    store.destroy()
+  })
+
+  it('plainToY 保留 hidden：insertChild 插入带 hidden 节点', () => {
+    const store = new DesignStore(undefined, sample())
+    store.insertChild('root', { id: 'hidden-new', type: 'text', hidden: true })
+    const inserted = store.getDesign().children?.find((c) => c.id === 'hidden-new')
+    expect(inserted?.hidden).toBe(true)
+    store.destroy()
+  })
+
   it('duplicateNode 复制子树（新 id，原节点保留）', () => {
     const store = new DesignStore(undefined, sample())
     store.duplicateNode('b')

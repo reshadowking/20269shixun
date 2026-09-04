@@ -29,6 +29,7 @@ function plainToY(node: DesignNode): YNode {
   if (node.componentType) yMap.set('componentType', node.componentType)
   if (node.x !== undefined) yMap.set('x', node.x)
   if (node.y !== undefined) yMap.set('y', node.y)
+  if (node.hidden === true) yMap.set('hidden', true)
   if (node.props && Object.keys(node.props).length) {
     const p = new Y.Map<unknown>()
     for (const [k, v] of Object.entries(node.props)) p.set(k, v)
