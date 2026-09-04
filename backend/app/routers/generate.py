@@ -132,3 +132,47 @@ def check_compliance(req: ComplianceRequest, _user: str = Depends(get_current_us
         "compliance": compliance_rate(violations, total),
         "violations_detail": [asdict(f) for f in fixes],
     }
+
+
+class ExploreRequest(BaseModel):
+    # 与 GenerateRequest 同约束：超长需求由长提示词摘要兜底
+    prompt: str = Field(min_length=1, max_length=8000)
+    design_system: str = Field(default="brand-design-token-23v1", max_length=100)
+
+
+@router.post("/api/generate/explore")
+async def explore_options(req: ExploreRequest, _user: str = Depends(get_current_user)):
+    """D3 最小版：并行生成 2 份不同风格方案（复用 /api/generate 单段生成链路，不构成两段式）。
+
+    方案二在提示词上附加差异化风格约束；两次调用线程池并行，总耗时接近单次。
+    任一方案降级（mock/失败走模板稿）时标记 degraded；两份都保证合法可保存。
+    若单次生成本身超 30s 预算，降级策略：保留至少一份可用方案并回填 degraded=true。
+    """
+    import asyncio
+
+    if not is_design_request(req.prompt):
+        raise HTTPException(status_code=422, detail=GUARD_REPLY)
+    variants = [
+        ("方案一 · 默认风格", req.prompt),
+        (
+            "方案二 · 差异化风格",
+            f"{req.prompt}。请使用与默认方案明显不同的配色与布局风格"
+            "（例如深色/高对比主题、不同主色、不同结构组织），内容要点保持一致。",
+        ),
+    ]
+    results = await asyncio.gather(*(asyncio.to_thread(generate_design, prompt) for _, prompt in variants))
+    options = []
+    degraded = False
+    for (label, _), result in zip(variants, results):
+        if result.fallback:
+            degraded = True
+        options.append(
+            {
+                "label": label,
+                "design": result.design,
+                "template": result.template,
+                "compliance": result.compliance,
+                "violations": result.violations,
+            }
+        )
+    return {"options": options, "degraded": degraded}

@@ -659,6 +659,13 @@ export default function WorkspacePage() {
                         style: { ...(n.style ?? {}), [fix.field]: fix.original },
                       }))
                     }}
+                    onUseExploreDesign={(explored) => {
+                      // D3：采用探索方案——先快照（可撤销回加载前），再整树替换（不入操作级撤销栈）
+                      store.pushSnapshot()
+                      setUndoCount((c) => c + 1)
+                      store.resetDesign(explored)
+                      setSelectedIds(new Set())
+                    }}
                   />
                 )}
                 {activePanel === 'layers' && (

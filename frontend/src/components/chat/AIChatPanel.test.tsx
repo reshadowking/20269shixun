@@ -5,7 +5,8 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import AIChatPanel, { chatStorageKey } from './AIChatPanel'
+import AIChatPanel, { chatStorageKey, extractPreviewTexts } from './AIChatPanel'
+import type { DesignNode } from '@/design/types'
 
 const DESIGN = { id: 'root', type: 'frame', style: { layout: 'column' } }
 
@@ -297,5 +298,72 @@ describe('D1 合规逐项报告（B2-2 明细 → UI）', () => {
     typeAndSend('设计一个页面')
     await waitFor(() => expect(screen.getByText(/已生成设计稿/)).toBeInTheDocument())
     expect(screen.queryByTestId('compliance-report')).not.toBeInTheDocument()
+  })
+})
+
+describe('D3 方案探索', () => {
+  let fetchMock: ReturnType<typeof vi.fn>
+
+  beforeEach(() => {
+    localStorage.clear()
+    fetchMock = vi.fn(async (url: string, options?: RequestInit) => {
+      const path = String(url)
+      const body = options?.body ? JSON.parse(String(options.body)) : {}
+      if (path.includes('/api/generate/explore')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            options: [
+              { label: '方案一 · 默认风格', design: DESIGN, template: 'login', compliance: 100, violations: 0 },
+              { label: '方案二 · 差异化风格', design: DESIGN, template: 'login', compliance: 95, violations: 1 },
+            ],
+            degraded: false,
+            body,
+          }),
+        }
+      }
+      if (path.includes('/api/generate/questions')) {
+        return { ok: true, status: 200, json: async () => ({ questions: [] }) }
+      }
+      if (path.includes('/api/generate')) {
+        return { ok: true, status: 200, json: async () => ({ design: DESIGN, template: 'login', compliance: 100, violations: 0, fallback: false }) }
+      }
+      throw new Error(`unexpected fetch: ${path}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    localStorage.clear()
+  })
+
+  it('探索返回 2 份方案：点使用回调并关闭面板', async () => {
+    const onUse = vi.fn()
+    render(<AIChatPanel onGenerate={() => {}} onUseExploreDesign={onUse} />)
+    typeAndSend('设计一个登录页') // lastPrompt 就位
+    await waitFor(() => expect(screen.getByText(/已生成设计稿/)).toBeInTheDocument())
+
+    fireEvent.click(screen.getByTestId('explore-options'))
+    await waitFor(() => expect(screen.getByTestId('explore-result')).toBeInTheDocument())
+    expect(screen.getByText('方案一 · 默认风格')).toBeInTheDocument()
+    expect(screen.getByText('方案二 · 差异化风格')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId('explore-use-0'))
+    expect(onUse).toHaveBeenCalledWith(DESIGN)
+    await waitFor(() => expect(screen.queryByTestId('explore-result')).not.toBeInTheDocument())
+    expect(screen.getByText(/已加载「方案一/)).toBeInTheDocument()
+  })
+
+  it('extractPreviewTexts 抽取树中可见文本', () => {
+    const tree: DesignNode = {
+      id: 'r',
+      type: 'frame',
+      children: [
+        { id: 't1', type: 'text', props: { text: '你好世界' } },
+        { id: 'b1', type: 'component', componentType: 'button', props: { text: '立即购买' } },
+      ],
+    }
+    expect(extractPreviewTexts(tree)).toBe('你好世界 · 立即购买')
   })
 })

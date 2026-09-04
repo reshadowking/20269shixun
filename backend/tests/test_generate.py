@@ -208,6 +208,26 @@ class TestGenerateAPI:
         assert "violations_detail" in body
         assert isinstance(body["violations_detail"], list)
 
+    def test_explore_options_returns_two_valid_designs(self, client, auth_headers):
+        """D3：/api/generate/explore 返回 2 份合法方案（mock 环境可跑，零网络）。"""
+        from app.design.validator import validate_design_safe
+
+        resp = client.post("/api/generate/explore", json={"prompt": "设计一个电商优惠券页"}, headers=auth_headers)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert len(body["options"]) == 2
+        assert isinstance(body["degraded"], bool)
+        for opt in body["options"]:
+            assert opt["label"].startswith("方案")
+            for key in ("design", "template", "compliance", "violations"):
+                assert key in opt, f"缺字段 {key}"
+            ok, errors = validate_design_safe(opt["design"])
+            assert ok, f"方案不合法: {errors[:3]}"
+
+    def test_explore_rejects_non_design_prompt(self, client, auth_headers):
+        resp = client.post("/api/generate/explore", json={"prompt": "帮我写一首诗"}, headers=auth_headers)
+        assert resp.status_code == 422
+
 
 class TestApiErrorDescription:
     def test_status_error_has_http_code(self):

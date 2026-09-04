@@ -35,6 +35,19 @@ export interface ComplianceFixItem {
   corrected: string
 }
 
+/** D3：方案探索结果（与 /api/generate/explore 响应对齐） */
+export interface ExploreOption {
+  label: string
+  design: DesignNode
+  template: string
+  compliance: number
+  violations: number
+}
+interface ExploreResult {
+  options: ExploreOption[]
+  degraded: boolean
+}
+
 interface GenerateResponse {
   design: DesignNode
   template: string
@@ -43,6 +56,28 @@ interface GenerateResponse {
   fallback: boolean
   error?: string
   violations_detail?: ComplianceFixItem[]
+}
+
+/** D3：从设计树抽取少量可见文本作方案摘要（最多 4 段，截断 40 字） */
+export function extractPreviewTexts(design: DesignNode): string {
+  const out: string[] = []
+  const walk = (n: DesignNode): void => {
+    if (out.length >= 4) return
+    if (n.type === 'text') {
+      const t = n.props?.text
+      if (typeof t === 'string' && t.trim()) out.push(t.trim())
+    } else if (n.type === 'component') {
+      const p = n.props ?? {}
+      for (const key of ['text', 'title', 'label'] as const) {
+        const v = p[key]
+        if (typeof v === 'string' && v.trim() && out.length < 4) out.push(v.trim())
+      }
+    }
+    for (const c of n.children ?? []) walk(c)
+  }
+  walk(design)
+  const joined = out.join(' · ')
+  return joined.length > 40 ? `${joined.slice(0, 40)}…` : joined
 }
 
 interface PendingFollowup {
@@ -96,9 +131,11 @@ interface AIChatPanelProps {
   historyScope?: string
   /** D1：还原单条合规修正（把节点字段改回 original）——上层负责 Yjs 事务（单撤销步） */
   onComplianceRestore?: (fix: ComplianceFixItem) => void
+  /** D3：使用某个探索方案（上层 pushSnapshot + resetDesign，可撤销回原稿） */
+  onUseExploreDesign?: (design: DesignNode) => void
 }
 
-export default function AIChatPanel({ onGenerate, onGeneratingChange, design, onIncrementalEdit, onUndo, canUndo, historyScope, onComplianceRestore }: AIChatPanelProps) {
+export default function AIChatPanel({ onGenerate, onGeneratingChange, design, onIncrementalEdit, onUndo, canUndo, historyScope, onComplianceRestore, onUseExploreDesign }: AIChatPanelProps) {
   const [input, setInput] = useState('')
   const storageKey = chatStorageKey(historyScope)
   const [messages, setMessages] = useState<ChatMessage[]>(() => {
@@ -119,6 +156,9 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
   const [fallbackResult, setFallbackResult] = useState<GenerateResponse | null>(null)
   /** D1：最近一次成功生成的合规逐项明细（违规色被拉回列表，可逐项还原/全部接受） */
   const [complianceReport, setComplianceReport] = useState<ComplianceFixItem[] | null>(null)
+  /** D3：方案探索结果（2 份方案 + 降级标记）与请求中状态 */
+  const [exploreResult, setExploreResult] = useState<ExploreResult | null>(null)
+  const [exploring, setExploring] = useState(false)
 
   // 会话持久化（缺陷 10）：切走面板/刷新后恢复历史
   useEffect(() => {
@@ -234,6 +274,35 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
       const rest = list.filter((f) => f !== fix)
       return rest.length > 0 ? rest : null
     })
+  }
+
+  /** D3：探索 2 份方案（基于最近一次需求；无需求时提示先描述） */
+  const handleExplore = async () => {
+    const prompt = (lastPrompt || input).trim()
+    if (!prompt) {
+      setMessages((m) => [...m, { role: 'assistant', text: '请先在上方描述你的设计需求（或先生成一次），再使用「探索 2 个方案」。' }])
+      return
+    }
+    setExploring(true)
+    setExploreResult(null)
+    try {
+      const resp = await api<ExploreResult>('/api/generate/explore', {
+        method: 'POST',
+        body: JSON.stringify({ prompt }),
+      })
+      setExploreResult(resp)
+    } catch (err) {
+      setMessages((m) => [...m, { role: 'assistant', text: `方案探索失败：${err instanceof Error ? err.message : String(err)}` }])
+    } finally {
+      setExploring(false)
+    }
+  }
+
+  /** D3：采用某份方案（上层快照后可撤销回原稿） */
+  const handleUseExplore = (opt: ExploreOption) => {
+    onUseExploreDesign?.(opt.design)
+    setExploreResult(null)
+    setMessages((m) => [...m, { role: 'assistant', text: `已加载「${opt.label}」（模板：${opt.template}，兼容率 ${opt.compliance}%）。可点击「↩ 撤销」回到加载前。` }])
   }
 
   const handleSend = async (promptOverride?: string) => {
@@ -414,6 +483,51 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
           >
             ↩ 撤销修改（回到上一版）
           </Button>
+        </div>
+      )}
+      <div className="border-t p-3">
+        <Button
+          variant="ghost"
+          size="sm"
+          className="w-full text-xs"
+          data-testid="explore-options"
+          disabled={generating || exploring}
+          onClick={handleExplore}
+        >
+          {exploring ? '探索中…（并行生成 2 份方案）' : '✨ 探索 2 个方案'}
+        </Button>
+      </div>
+      {exploreResult && (
+        <div className="space-y-2 border-t p-3" data-testid="explore-result">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-medium text-muted-foreground">方案探索（{exploreResult.options.length} 份）</span>
+            <button
+              type="button"
+              className="text-xs text-muted-foreground hover:text-foreground"
+              data-testid="explore-close"
+              onClick={() => setExploreResult(null)}
+            >
+              ✕
+            </button>
+          </div>
+          {exploreResult.degraded && <div className="text-[11px] text-amber-600">部分方案已降级为预置模板（模型暂不可用）</div>}
+          {exploreResult.options.map((opt, i) => (
+            <div key={i} className="rounded-md border bg-muted/40 p-2 text-xs" data-testid={`explore-option-${i}`}>
+              <div className="font-medium text-foreground">{opt.label}</div>
+              <div className="mt-0.5 text-muted-foreground">
+                模板：{opt.template} ｜ 兼容率 {opt.compliance}%
+              </div>
+              <div className="mt-0.5 line-clamp-2 text-muted-foreground">{extractPreviewTexts(opt.design)}</div>
+              <Button
+                size="sm"
+                className="mt-1.5 h-6 w-full text-[11px]"
+                data-testid={`explore-use-${i}`}
+                onClick={() => handleUseExplore(opt)}
+              >
+                使用此方案
+              </Button>
+            </div>
+          ))}
         </div>
       )}
       {complianceReport && complianceReport.length > 0 && (
