@@ -1,5 +1,5 @@
 import * as Y from 'yjs'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import type { DesignNode } from '@/design/types'
 import { DesignStore, duplicatePlain } from './designStore'
@@ -309,5 +309,26 @@ describe('操作级撤销/重做（P0-1 缺陷 13）', () => {
     store.updateNode('a', (n) => ({ ...n, props: { text: 'x' } }))
     store.popSnapshot() // resetDesign(RESET_ORIGIN)
     expect(store.canUndo).toBe(false) // 快照恢复不是用户操作
+  })
+})
+
+describe('D5 presence（本地模式/无 provider）', () => {
+  it('在线数恒 1（自己），订阅立即回调一次，setPresence 不抛', () => {
+    const store = new DesignStore(undefined, sample())
+    expect(store.onlineCount).toBe(1)
+    const cb = vi.fn()
+    const unsub = store.subscribePresence(cb)
+    expect(cb).toHaveBeenCalledTimes(1)
+    expect(() => store.setPresence('alice')).not.toThrow()
+    expect(store.onlineUsers).toEqual([]) // 本地模式无远端状态
+    unsub()
+    store.destroy()
+  })
+
+  it('subscribeStatus 无 provider 返回空清理函数（不抛）', () => {
+    const store = new DesignStore(undefined, sample())
+    const unsub = store.subscribeStatus(() => {})
+    expect(() => unsub()).not.toThrow()
+    store.destroy()
   })
 })

@@ -48,6 +48,8 @@ export default function WorkspacePage() {
   }
   const room = roomRef.current
   const designParam = searchParams.get('design')
+  // D5：presence 昵称（?user= 可区分多标签演示；默认与登录账号一致）
+  const userName = searchParams.get('user') ?? 'demo'
   const { design, store } = useDesignStore(wsUrl, DEMO_DESIGNS[0], room)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
 
@@ -60,6 +62,22 @@ export default function WorkspacePage() {
   /** B3-3：已保存设计的"本地有未同步修改"提示——保存基线 JSON 与当前 design 防抖比对 */
   const [unsaved, setUnsaved] = useState(false)
   const lastSavedJsonRef = useRef<string | null>(null)
+  /** D5：协作在场感——在线人数/昵称列表与连接状态 */
+  const [online, setOnline] = useState<{ count: number; users: string[] }>({ count: 1, users: [] })
+  const [connStatus, setConnStatus] = useState('connecting')
+
+  // D5：presence 广播与订阅（store 内部管理订阅，room 重建后自动重挂）
+  useEffect(() => {
+    store.setPresence(userName)
+    const update = () => setOnline({ count: store.onlineCount, users: store.onlineUsers })
+    update()
+    const unsubP = store.subscribePresence(update)
+    const unsubS = store.subscribeStatus(setConnStatus)
+    return () => {
+      unsubP()
+      unsubS()
+    }
+  }, [store, userName])
 
   useEffect(() => {
     if (loaded) return
@@ -455,6 +473,21 @@ export default function WorkspacePage() {
           >
             💾 保存
           </Button>
+          <span
+            className="flex cursor-default items-center gap-1 text-[11px] text-muted-foreground"
+            data-testid="presence-count"
+            title={online.users.length > 0 ? `在线：${online.users.join('、')}` : '仅自己'}
+          >
+            <span
+              className={`inline-block h-1.5 w-1.5 rounded-full ${connStatus === 'connected' || connStatus === 'local' ? 'bg-emerald-500' : 'bg-amber-400'}`}
+            />
+            {online.count} 人在线
+          </span>
+          {connStatus === 'disconnected' && (
+            <span className="text-[11px] text-amber-600" data-testid="presence-reconnecting">
+              连接断开，自动重连中…
+            </span>
+          )}
           <Link to="/" className="hover:text-foreground" data-testid="go-home">← 主页</Link>
           <Link to="/api-config" className="hover:text-foreground">API 配置</Link>
           <span data-testid="selection-count">{selectedIds.size > 0 ? `已选 ${selectedIds.size} 个节点` : ''}</span>

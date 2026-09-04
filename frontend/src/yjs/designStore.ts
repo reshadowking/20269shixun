@@ -101,8 +101,27 @@ export class DesignStore {
   /** AI 版本快照栈（E3-2/P0-1）：优化与增量编辑前保存，恢复时整体重置文档 */
   private snapshots: DesignNode[] = []
   private static MAX_SNAPSHOTS = 10
+  /** D5：presence/连接状态订阅集合（provider 重建后自动重挂，调用方无需重新订阅） */
+  private presenceCbs = new Set<() => void>()
+  private statusCbs = new Set<(status: string) => void>()
   /** 操作级撤销/重做（缺陷 13）：只跟踪本地用户操作（LOCAL_ORIGIN） */
   undoManager: Y.UndoManager
+
+  private handleAwareness = (): void => {
+    this.presenceCbs.forEach((cb) => cb())
+  }
+
+  private handleStatus = (s: { status: string }): void => {
+    this.statusCbs.forEach((cb) => cb(s.status))
+  }
+
+  /** 把 awareness/status 事件挂到当前 provider（constructor 与 reconnectRoom 后调用） */
+  private bindProviderEvents(): void {
+    const provider = this.provider
+    if (!provider) return
+    provider.awareness.on('change', this.handleAwareness)
+    provider.on('status', this.handleStatus)
+  }
 
   constructor(wsUrl?: string, initialDesign?: DesignNode, room = 'design-room') {
     this.ydoc = new Y.Doc()
@@ -115,6 +134,7 @@ export class DesignStore {
     if (wsUrl) {
       this.provider = new WebsocketProvider(wsUrl, room, this.ydoc)
     }
+    this.bindProviderEvents()
     // 操作级撤销：绑定整棵设计树（designMap 及其子树），只记录本地用户操作
     this.undoManager = new Y.UndoManager([this.designMap], {
       trackedOrigins: new Set([LOCAL_ORIGIN]),
@@ -141,7 +161,46 @@ export class DesignStore {
     }
     if (wsUrl) {
       this.provider = new WebsocketProvider(wsUrl, newRoom, this.ydoc)
+      this.bindProviderEvents()
     }
+  }
+
+  // ---- D5：协作在场感（presence：在线用户/连接状态）----
+
+  /** 广播本地在场状态（用户昵称；URL ?user= 可区分多标签演示） */
+  setPresence(userName: string): void {
+    this.provider?.awareness.setLocalStateField('user', { name: userName })
+  }
+
+  /** 订阅 awareness 变化（他人进出/状态更新）；无 provider（本地模式）时立即回调一次 */
+  subscribePresence(cb: () => void): () => void {
+    this.presenceCbs.add(cb)
+    cb()
+    if (!this.provider) return () => this.presenceCbs.delete(cb)
+    return () => this.presenceCbs.delete(cb)
+  }
+
+  /** 当前房间在线人数（含自己）；无 provider 时视为单人本地会话 */
+  get onlineCount(): number {
+    return this.provider?.awareness.getStates().size ?? 1
+  }
+
+  /** 在线用户昵称列表（无名字的远端状态排除） */
+  get onlineUsers(): string[] {
+    const awareness = this.provider?.awareness
+    if (!awareness) return []
+    const users: string[] = []
+    for (const state of awareness.getStates().values()) {
+      const name = (state as { user?: { name?: unknown } } | undefined)?.user?.name
+      if (typeof name === 'string' && name) users.push(name)
+    }
+    return users
+  }
+
+  /** 订阅 y-websocket 连接状态（connecting/connected/disconnected），断线提示用 */
+  subscribeStatus(cb: (status: string) => void): () => void {
+    this.statusCbs.add(cb)
+    return () => this.statusCbs.delete(cb)
   }
 
   getDesign(): DesignNode {
