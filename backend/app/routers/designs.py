@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from ..db import get_db
+from ..design.validator import validate_design_safe
 from ..models import Design, User, Version
 from ..security import get_current_user
 
@@ -19,6 +20,20 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["designs"])
 
 MAX_VERSIONS = 30
+# 入库前体积上限（P0-3 存储边界防线；schema 单字段已限 5000 字符/500 子节点，此为总量兜底）
+MAX_DESIGN_JSON_BYTES = 2_000_000
+
+
+def _validate_design_payload(design: dict) -> None:
+    """入库前校验（Schema 唯一源铁律的存储边界执行）：结构非法或超大体 → 422。
+
+    生成链路已过校验，但画布手编/未来外部写入可能绕过，必须在落库前拦截。
+    """
+    if len(json.dumps(design, ensure_ascii=False)) > MAX_DESIGN_JSON_BYTES:
+        raise HTTPException(status_code=422, detail="设计稿过大（超过 2MB），无法保存")
+    ok, errors = validate_design_safe(design)
+    if not ok:
+        raise HTTPException(status_code=422, detail=f"设计稿不符合 DesignNode Schema：{'；'.join(errors[:5])}")
 
 
 def _owner_id(db, username: str) -> int:
@@ -108,7 +123,8 @@ def list_designs(_user: str = Depends(get_current_user), db=Depends(get_db)):
 
 @router.post("/api/designs")
 def create_design(req: DesignCreate, _user: str = Depends(get_current_user), db=Depends(get_db)):
-    """新建设计（保存当前树并自动存 v1 版本）。"""
+    """新建设计（保存当前树并自动存 v1 版本）；入库前过 DesignNode Schema 校验。"""
+    _validate_design_payload(req.design)
     design = Design(
         name=req.name,
         owner_id=_owner_id(db, _user),
@@ -140,6 +156,7 @@ def update_design(design_id: int, req: DesignUpdate, _user: str = Depends(get_cu
     if req.name is not None:
         design.name = req.name
     if req.design is not None:
+        _validate_design_payload(req.design)
         design.design_json = json.dumps(req.design, ensure_ascii=False)
         _save_version(db, design)
     db.commit()

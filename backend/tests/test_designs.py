@@ -59,6 +59,37 @@ class TestDesignsCrud:
         # 这里验证：不同 owner 通过直接伪造不可行（token 绑定 username），用第二个 demo token 访问 OK
         assert client.get(f"/api/designs/{did}", headers={"Authorization": "Bearer " + _token(client, "demo")}).status_code == 200
 
+    def test_invalid_design_rejected(self, client, auth_headers):
+        """结构非法设计稿在入库前被 Schema 校验拦截（P0-3 存储边界执行 Schema 唯一源）。"""
+        bad = {"id": "root", "type": "canvas"}  # 非法 type
+        # DB 文件跨用例共享，用前后计数判断未入库
+        before = len(client.get("/api/designs", headers=auth_headers).json()["designs"])
+        resp = client.post("/api/designs", json={"name": "bad", "design": bad}, headers=auth_headers)
+        assert resp.status_code == 422
+        after = len(client.get("/api/designs", headers=auth_headers).json()["designs"])
+        assert after == before  # 未入库
+        # 已存在设计 PUT 非法结构同样被拒（版本不落）
+        did = client.post("/api/designs", json={"name": "ok", "design": SAMPLE}, headers=auth_headers).json()["id"]
+        resp2 = client.put(f"/api/designs/{did}", json={"design": {"type": "component"}}, headers=auth_headers)
+        assert resp2.status_code == 422
+        versions = client.get(f"/api/designs/{did}/versions", headers=auth_headers).json()["versions"]
+        assert len(versions) == 1  # 只有创建时 v1
+
+    def test_oversize_design_rejected(self, client, auth_headers):
+        """超过 2MB 的设计稿在入库前被总量防线拦截。"""
+        text = "x" * 5000  # 单字段 5000 字符，在 schema maxLength 上限内
+        big = {
+            "id": "root",
+            "type": "frame",
+            "children": [
+                {"id": f"f{i}", "type": "frame", "children": [{"id": f"t{i}", "type": "text", "props": {"text": text}}]}
+                for i in range(500)  # children maxItems=500，schema 合法
+            ],
+        }
+        resp = client.post("/api/designs", json={"name": "big", "design": big}, headers=auth_headers)
+        assert resp.status_code == 422
+        assert "过大" in resp.json()["detail"]
+
 
 def _token(client, username: str) -> str:
     resp = client.post("/api/auth/login", json={"username": username, "password": "demo123"})
