@@ -5,7 +5,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import AIChatPanel from './AIChatPanel'
+import AIChatPanel, { chatStorageKey } from './AIChatPanel'
 
 const DESIGN = { id: 'root', type: 'frame', style: { layout: 'column' } }
 
@@ -224,5 +224,21 @@ describe('AIChatPanel followup flow', () => {
     expect(onGenerate).toHaveBeenCalledWith(DESIGN)
     expect(await screen.findByText(/已使用预置模板/)).toBeInTheDocument()
     expect(screen.queryByTestId('fallback-actions')).not.toBeInTheDocument()
+  })
+})
+
+describe('historyScope 聊天历史分 key（P0-4）', () => {
+  it('chatStorageKey：有 scope 按设计隔离，无 scope 保持全局 key（兼容存量数据）', () => {
+    expect(chatStorageKey('42')).toBe('design-chat-history-42')
+    expect(chatStorageKey(undefined)).toBe('design-chat-history')
+  })
+
+  it('挂载时按 scope 读取对应 localStorage key 的历史', () => {
+    localStorage.clear()
+    localStorage.setItem('design-chat-history-42', JSON.stringify([{ role: 'assistant', text: '来自设计 42 的历史' }]))
+    render(<AIChatPanel onGenerate={() => {}} historyScope="42" />)
+    expect(screen.getByText('来自设计 42 的历史')).toBeInTheDocument()
+    // 全局 key 的数据不会被 scope 会话读到
+    expect(screen.queryByText(/你好！我是 AI 设计助手/)).not.toBeInTheDocument()
   })
 })

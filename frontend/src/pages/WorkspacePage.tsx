@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { X } from 'lucide-react'
 
@@ -22,6 +22,7 @@ import { loadDraft, saveDraft } from '@/lib/designSession'
 import { findNode, findParent as findParentOf, genId } from '@/design/tree'
 import type { ComponentType, DesignNode } from '@/design/types'
 import { api } from '@/lib/api'
+import { deriveCollabRoom, randomRoom } from '@/lib/collabRoom'
 import { useDesignStore } from '@/yjs/useDesignStore'
 
 interface OptimizeReport {
@@ -35,8 +36,18 @@ interface OptimizeReport {
 export default function WorkspacePage() {
   const wsUrl = import.meta.env.VITE_WS_URL ?? 'ws://localhost:1234'
   const [searchParams] = useSearchParams()
-  // 协作 room：默认 design-room；E2E 用 ?room= 隔离（缺陷测试稳定性）
-  const room = searchParams.get('room') ?? 'design-room'
+  // 协作 room（P0-4）：显式 ?room=（E2E/多人同稿）> 已存设计按 design-{id} 隔离 > 其余每标签随机。
+  // useRef 懒初始化保证 StrictMode 双渲染下 room 稳定（随机值只生成一次）。
+  const roomRef = useRef<string | null>(null)
+  if (roomRef.current === null) {
+    roomRef.current = deriveCollabRoom(
+      searchParams.get('room'),
+      searchParams.get('design'),
+      randomRoom(),
+    )
+  }
+  const room = roomRef.current
+  const designParam = searchParams.get('design')
   const { design, store } = useDesignStore(wsUrl, DEMO_DESIGNS[0], room)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
 
@@ -596,6 +607,7 @@ export default function WorkspacePage() {
                     onIncrementalEdit={handleIncrementalEdit}
                     onUndo={handleUndo}
                     canUndo={undoCount > 0}
+                    historyScope={designParam ?? undefined}
                   />
                 )}
                 {activePanel === 'layers' && (

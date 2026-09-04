@@ -43,13 +43,20 @@ interface PendingFollowup {
   answers: Record<string, string>
 }
 
-/** 会话持久化 key（缺陷 10：切面板/刷新不丢历史） */
+/** 会话持久化 key（缺陷 10：切面板/刷新不丢历史）。 */
 const CHAT_STORAGE_KEY = 'design-chat-history'
 const MAX_HISTORY = 50
 
-function loadHistory(): ChatMessage[] {
+/** 按设计隔离的聊天存储 key（P0-4）：有 scope（打开已存设计）按 design-{id} 分 key；
+ * 无 scope（空白/模板/草稿/新建未保存路径）退回全局 key，向后兼容既有 localStorage 数据。
+ * 边界：未保存路径多标签并发互踩不在本期消除范围（记录于 docs/缺陷与差距清单.md P0-4）。 */
+export function chatStorageKey(scope: string | undefined): string {
+  return scope ? `${CHAT_STORAGE_KEY}-${scope}` : CHAT_STORAGE_KEY
+}
+
+function loadHistory(key: string): ChatMessage[] {
   try {
-    const raw = localStorage.getItem(CHAT_STORAGE_KEY)
+    const raw = localStorage.getItem(key)
     if (raw) {
       const parsed = JSON.parse(raw) as unknown
       if (
@@ -76,12 +83,15 @@ interface AIChatPanelProps {
   /** P0-1 撤销：回到上一版（快照） */
   onUndo?: () => void
   canUndo?: boolean
+  /** P0-4 聊天历史隔离 scope：打开已存设计时传 design id，按设计分 key；缺省保持全局 key */
+  historyScope?: string
 }
 
-export default function AIChatPanel({ onGenerate, onGeneratingChange, design, onIncrementalEdit, onUndo, canUndo }: AIChatPanelProps) {
+export default function AIChatPanel({ onGenerate, onGeneratingChange, design, onIncrementalEdit, onUndo, canUndo, historyScope }: AIChatPanelProps) {
   const [input, setInput] = useState('')
+  const storageKey = chatStorageKey(historyScope)
   const [messages, setMessages] = useState<ChatMessage[]>(() => {
-    const history = loadHistory()
+    const history = loadHistory(storageKey)
     if (history.length > 0) return history
     return [
       {
@@ -99,8 +109,8 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
 
   // 会话持久化（缺陷 10）：切走面板/刷新后恢复历史
   useEffect(() => {
-    localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(messages.slice(-MAX_HISTORY)))
-  }, [messages])
+    localStorage.setItem(storageKey, JSON.stringify(messages.slice(-MAX_HISTORY)))
+  }, [messages, storageKey])
 
   const QUICK_PROMPTS = [
     '设计一个电商优惠券领取页，红色调，圆角风格',
