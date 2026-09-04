@@ -38,3 +38,26 @@ def get_design_tokens() -> dict:
 def get_component_library() -> dict:
     """MCP 工具：输出 15 个组件定义数组（type/name/props 定义/default_style）。"""
     return load_component_library()
+
+
+def apply_design_edit(design: dict, instruction: str) -> dict:
+    """MCP 写工具（B2-3 轻量过渡版）：自然语言指令 + 当前设计树 → 增量编辑结果。
+
+    复用生成链路增量分支（generate_design current_design=design），宽容修复 → Schema 校验 →
+    令牌合规全套后处理自动生效，返回可保存的合法 DesignNode。
+    登记口径（优化路线图 §1.3）：本工具是轻量过渡版，不代表 P1-6 已交付——正式 patch 版
+    （结构化 patch / max_modify_nodes=5 / 禁 LLM 整树替换 / post_processor 统一入口）二期实现。
+    Mock/无 Key 模式下 LLM 不可用，返回原树（fallback=True），与 /api/generate 语义一致。
+    """
+    from .services.generate import generate_design
+
+    result = generate_design(instruction, current_design=design)
+    return {
+        "design": result.design,
+        "template": result.template,
+        "compliance": result.compliance,
+        "violations": result.violations,
+        "violations_detail": result.violations_detail,
+        "fallback": result.fallback,
+        "error": result.error,
+    }
