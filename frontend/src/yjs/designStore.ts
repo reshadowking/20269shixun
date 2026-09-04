@@ -131,6 +131,19 @@ export class DesignStore {
     this.ydoc.destroy()
   }
 
+  /** B3-1：room 重建（新建保存为正式设计后迁移到 design-{id} 协作房间）。
+   * destroy 旧 provider 并用同一 ydoc 建新 provider——保留本地编辑、撤销栈与会话状态，
+   * 避免整页导航刷新丢失未保存内容。 */
+  reconnectRoom(wsUrl: string | undefined, newRoom: string): void {
+    if (this.provider) {
+      this.provider.destroy()
+      this.provider = null
+    }
+    if (wsUrl) {
+      this.provider = new WebsocketProvider(wsUrl, newRoom, this.ydoc)
+    }
+  }
+
   getDesign(): DesignNode {
     if (this.cached) return this.cached
     const root = this.designMap.get(ROOT_KEY) as YNode | undefined

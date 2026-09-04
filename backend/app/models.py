@@ -28,7 +28,8 @@ class Design(Base):
     owner_id: Mapped[int] = mapped_column(Integer, index=True)
     # 设计 JSON（toJSON 后的 DesignNode 树）
     design_json: Mapped[str] = mapped_column(Text, default="{}")
-    # Yjs 文档状态（encodeStateAsUpdate，防抖 3 秒落库，v2.2 §8.2）
+    # Yjs 实时文档状态由 y-websocket + leveldb 承担（B3-2 决策：实时状态与 PG 整树快照职责分离）；
+    # PG 保存的是整树快照（design_json）。本列保留供未来"服务端 Yjs 持久化"方案 B 使用，当前无写入方。
     yjs_state: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)

@@ -57,6 +57,9 @@ export default function WorkspacePage() {
   const [saveDialogOpen, setSaveDialogOpen] = useState(false)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState('')
+  /** B3-3：已保存设计的"本地有未同步修改"提示——保存基线 JSON 与当前 design 防抖比对 */
+  const [unsaved, setUnsaved] = useState(false)
+  const lastSavedJsonRef = useRef<string | null>(null)
 
   useEffect(() => {
     if (loaded) return
@@ -113,7 +116,11 @@ export default function WorkspacePage() {
         method: 'PUT',
         body: JSON.stringify({ design }),
       })
-        .then(() => setSaving(false))
+        .then(() => {
+          setSaving(false)
+          lastSavedJsonRef.current = JSON.stringify(design)
+          setUnsaved(false)
+        })
         .catch(() => {
           setSaving(false)
           setSaveError('保存失败：网络或服务器错误。草稿已自动保存在本地，可稍后重试。')
@@ -133,6 +140,10 @@ export default function WorkspacePage() {
         body: JSON.stringify({ name: name.trim(), design }),
       })
       setSavedMeta({ id: r.id, name: r.name })
+      // B3-1：新建保存为正式设计后迁移到 design-{id} 协作房间（保留 ydoc/撤销栈，不整页刷新）
+      store.reconnectRoom(wsUrl, `design-${r.id}`)
+      lastSavedJsonRef.current = JSON.stringify(design)
+      setUnsaved(false)
       setSaveDialogOpen(false)
     } catch (err) {
       // P0-5：保存失败必须可见（此前静默/未处理，用户误以为已保存到后端）
@@ -142,6 +153,21 @@ export default function WorkspacePage() {
       setSaving(false)
     }
   }
+
+  // B3-3：已保存设计的"本地有未同步修改"提示（对保存基线做 400ms 防抖 JSON 比对；
+  // 首次加载完成只记基线不提示——语义是"保存之后又有改动"）
+  useEffect(() => {
+    if (!loaded) return
+    const timer = window.setTimeout(() => {
+      const cur = JSON.stringify(design)
+      if (lastSavedJsonRef.current === null) {
+        lastSavedJsonRef.current = cur
+        return
+      }
+      if (cur !== lastSavedJsonRef.current) setUnsaved(true)
+    }, 400)
+    return () => window.clearTimeout(timer)
+  }, [design, loaded])
 
   // 深色模式：只切换工作台 UI（shadcn dark class），不改变设计稿画布（v2.2 §5.1/§12）
   const [dark, setDark] = useState(() => localStorage.getItem('design-dark') === '1')
@@ -415,6 +441,9 @@ export default function WorkspacePage() {
           <span className="flex items-center gap-1 font-medium text-foreground" data-testid="design-name" title={savedMeta.name ?? '未命名'}>
             {savedMeta.name ?? '未命名'}
             {saving && <span className="text-[10px] text-muted-foreground">保存中…</span>}
+            {savedMeta.id !== undefined && unsaved && !saving && (
+              <span className="text-[10px] text-destructive" data-testid="unsaved-indicator">● 未保存</span>
+            )}
           </span>
           <Button
             size="sm"
