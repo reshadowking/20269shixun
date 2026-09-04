@@ -90,6 +90,54 @@ class TestDesignsCrud:
         assert resp.status_code == 422
         assert "过大" in resp.json()["detail"]
 
+    def test_version_unique_constraint(self, client, auth_headers):
+        """(design_id, version_no) 唯一约束真实存在（P0-5 并发防重兜底）。"""
+        import pytest
+        from sqlalchemy.exc import IntegrityError
+
+        from app.db import SessionLocal
+        from app.models import Version
+
+        did = client.post("/api/designs", json={"name": "uniq", "design": SAMPLE}, headers=auth_headers).json()["id"]
+        db = SessionLocal()
+        try:
+            db.add(Version(design_id=did, version_no=99, design_json="{}"))
+            db.commit()
+            db.add(Version(design_id=did, version_no=99, design_json="{}"))
+            with pytest.raises(IntegrityError):
+                db.commit()
+            db.rollback()
+        finally:
+            db.close()
+
+    def test_version_conflict_retries_whole_update(self, client, auth_headers, monkeypatch):
+        """写版本撞号（唯一约束）时整体重试：PUT 最终成功且版本号无重复、design_json 为最新值。"""
+        from sqlalchemy.exc import IntegrityError
+        from sqlalchemy.orm import Session
+
+        calls = {"n": 0}
+        orig_commit = Session.commit
+
+        def flaky_commit(self):
+            calls["n"] += 1
+            if calls["n"] == 2:  # 序列：1=创建 commit，2=PUT 第一次 commit → 模拟并发撞号
+                raise IntegrityError("INSERT INTO versions", {}, Exception("duplicate key"))
+            return orig_commit(self)
+
+        monkeypatch.setattr(Session, "commit", flaky_commit)  # 须在创建请求前 patch，计数才对齐
+        did = client.post("/api/designs", json={"name": "r", "design": SAMPLE}, headers=auth_headers).json()["id"]
+        SAMPLE2 = {"id": "root", "type": "frame", "style": {"layout": "row"},
+                   "children": [{"id": "b", "type": "component", "componentType": "button", "props": {"text": "最新值"}}]}
+        resp = client.put(f"/api/designs/{did}", json={"design": SAMPLE2}, headers=auth_headers)
+        assert resp.status_code == 200
+        assert calls["n"] == 3  # 创建 1 + PUT 撞号失败 1 + 整体重试成功 1
+        versions = client.get(f"/api/designs/{did}/versions", headers=auth_headers).json()["versions"]
+        nos = [v["version_no"] for v in versions]
+        assert nos == [2, 1]  # 无重复版本号
+        # 重试后落库的是最新 design_json（整体重试而非在旧数据上补写版本）
+        full = client.get(f"/api/designs/{did}", headers=auth_headers).json()
+        assert full["design"]["children"][0]["props"]["text"] == "最新值"
+
 
 def _token(client, username: str) -> str:
     resp = client.post("/api/auth/login", json={"username": username, "password": "demo123"})

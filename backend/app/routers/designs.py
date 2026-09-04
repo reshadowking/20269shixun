@@ -10,6 +10,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from ..db import get_db
 from ..design.validator import validate_design_safe
@@ -123,18 +124,30 @@ def list_designs(_user: str = Depends(get_current_user), db=Depends(get_db)):
 
 @router.post("/api/designs")
 def create_design(req: DesignCreate, _user: str = Depends(get_current_user), db=Depends(get_db)):
-    """新建设计（保存当前树并自动存 v1 版本）；入库前过 DesignNode Schema 校验。"""
+    """新建设计（保存当前树并自动存 v1 版本）；入库前过 DesignNode Schema 校验。
+
+    P0-5：并发写版本撞号（唯一约束）时整体重试一次——rollback 会连同 design 写入一起回滚，
+    必须重跑整个创建流程而非只重写版本号。
+    """
     _validate_design_payload(req.design)
-    design = Design(
-        name=req.name,
-        owner_id=_owner_id(db, _user),
-        design_json=json.dumps(req.design, ensure_ascii=False),
-    )
-    db.add(design)
-    db.flush()
-    _save_version(db, design)
-    db.commit()
-    return _design_meta(design)
+    owner_id = _owner_id(db, _user)
+    for attempt in (1, 2):
+        design = Design(
+            name=req.name,
+            owner_id=owner_id,
+            design_json=json.dumps(req.design, ensure_ascii=False),
+        )
+        db.add(design)
+        db.flush()
+        _save_version(db, design)
+        try:
+            db.commit()
+            return _design_meta(design)
+        except IntegrityError:
+            db.rollback()
+            if attempt == 2:
+                raise HTTPException(status_code=500, detail="保存失败：版本号并发冲突，请重试") from None
+            logger.warning("创建设计版本号冲突，整体重试（attempt=%s）", attempt)
 
 
 @router.get("/api/designs/{design_id}")
@@ -151,16 +164,27 @@ def get_design(design_id: int, _user: str = Depends(get_current_user), db=Depend
 
 @router.put("/api/designs/{design_id}")
 def update_design(design_id: int, req: DesignUpdate, _user: str = Depends(get_current_user), db=Depends(get_db)):
-    """保存设计（更新 JSON，自动留版本）。"""
-    design = _own_design(db, design_id, _user)
-    if req.name is not None:
-        design.name = req.name
-    if req.design is not None:
-        _validate_design_payload(req.design)
-        design.design_json = json.dumps(req.design, ensure_ascii=False)
-        _save_version(db, design)
-    db.commit()
-    return _design_meta(design)
+    """保存设计（更新 JSON，自动留版本）。
+
+    P0-5：并发写版本撞号（唯一约束）时整体重试一次——rollback 会回滚 design_json 更新，
+    必须重跑"重查设计 → 应用变更 → 写版本"整个流程，避免在旧数据上重复写版本。
+    """
+    for attempt in (1, 2):
+        design = _own_design(db, design_id, _user)
+        if req.name is not None:
+            design.name = req.name
+        if req.design is not None:
+            _validate_design_payload(req.design)
+            design.design_json = json.dumps(req.design, ensure_ascii=False)
+            _save_version(db, design)
+        try:
+            db.commit()
+            return _design_meta(design)
+        except IntegrityError:
+            db.rollback()
+            if attempt == 2:
+                raise HTTPException(status_code=500, detail="保存失败：版本号并发冲突，请重试") from None
+            logger.warning("更新设计版本号冲突，整体重试（design_id=%s attempt=%s）", design_id, attempt)
 
 
 @router.delete("/api/designs/{design_id}")
@@ -198,8 +222,15 @@ def list_versions(design_id: int, _user: str = Depends(get_current_user), db=Dep
 
 @router.post("/api/designs/{design_id}/versions")
 def save_version(design_id: int, req: VersionNote, _user: str = Depends(get_current_user), db=Depends(get_db)):
-    """手动保存当前设计为历史版本（带备注）。"""
-    design = _own_design(db, design_id, _user)
-    _save_version(db, design, note=req.note)
-    db.commit()
-    return {"ok": True}
+    """手动保存当前设计为历史版本（带备注）。P0-5：并发撞号整体重试一次。"""
+    for attempt in (1, 2):
+        design = _own_design(db, design_id, _user)
+        _save_version(db, design, note=req.note)
+        try:
+            db.commit()
+            return {"ok": True}
+        except IntegrityError:
+            db.rollback()
+            if attempt == 2:
+                raise HTTPException(status_code=500, detail="保存失败：版本号并发冲突，请重试") from None
+            logger.warning("手动版本冲突，整体重试（design_id=%s attempt=%s）", design_id, attempt)

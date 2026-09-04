@@ -1,7 +1,7 @@
 """ORM 模型（v2.2 §9.2：users / designs / versions / images）。"""
 from datetime import UTC, datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, LargeBinary, String, Text
+from sqlalchemy import DateTime, ForeignKey, Integer, LargeBinary, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .db import Base
@@ -36,6 +36,8 @@ class Design(Base):
 
 class Version(Base):
     __tablename__ = "versions"
+    # P0-5：并发保存防重——同设计同版本号唯一（_save_version 的读 latest+1 无锁，靠此约束兜底）
+    __table_args__ = (UniqueConstraint("design_id", "version_no", name="uq_versions_design_no"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     design_id: Mapped[int] = mapped_column(Integer, ForeignKey("designs.id"), index=True)

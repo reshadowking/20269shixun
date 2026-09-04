@@ -56,6 +56,7 @@ export default function WorkspacePage() {
   const [savedMeta, setSavedMeta] = useState<{ id?: number; name?: string }>({})
   const [saveDialogOpen, setSaveDialogOpen] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState('')
 
   useEffect(() => {
     if (loaded) return
@@ -107,12 +108,16 @@ export default function WorkspacePage() {
     if (saving) return
     if (savedMeta.id !== undefined) {
       setSaving(true)
+      setSaveError('')
       api(`/api/designs/${savedMeta.id}`, {
         method: 'PUT',
         body: JSON.stringify({ design }),
       })
         .then(() => setSaving(false))
-        .catch(() => setSaving(false))
+        .catch(() => {
+          setSaving(false)
+          setSaveError('保存失败：网络或服务器错误。草稿已自动保存在本地，可稍后重试。')
+        })
       return
     }
     setSaveDialogOpen(true)
@@ -121,6 +126,7 @@ export default function WorkspacePage() {
   const confirmSave = async (name: string) => {
     if (!name.trim()) return
     setSaving(true)
+    setSaveError('')
     try {
       const r = await api<{ id: number; name: string }>('/api/designs', {
         method: 'POST',
@@ -128,6 +134,10 @@ export default function WorkspacePage() {
       })
       setSavedMeta({ id: r.id, name: r.name })
       setSaveDialogOpen(false)
+    } catch (err) {
+      // P0-5：保存失败必须可见（此前静默/未处理，用户误以为已保存到后端）
+      const msg = err instanceof Error ? err.message : String(err)
+      setSaveError(`保存失败：${msg}`)
     } finally {
       setSaving(false)
     }
@@ -548,6 +558,11 @@ export default function WorkspacePage() {
           {errorMsg && (
             <div className="absolute bottom-3 left-1/2 z-40 -translate-x-1/2 rounded-lg border bg-background px-4 py-2 text-xs text-destructive shadow" data-testid="canvas-error">
               {errorMsg}
+            </div>
+          )}
+          {saveError && (
+            <div className="absolute bottom-12 left-1/2 z-40 -translate-x-1/2 rounded-lg border bg-background px-4 py-2 text-xs text-destructive shadow" data-testid="save-error">
+              {saveError}
             </div>
           )}
         </div>
