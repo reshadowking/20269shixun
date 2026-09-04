@@ -34,16 +34,14 @@ export interface ExportElement {
   children?: ExportElement[]
 }
 
-/** 组件定义：四件套（渲染/类型/导出模板/属性配置）在注册表汇聚一行 */
+/** 组件定义（B1-2 全量收敛后：渲染 + 导出语义 + 属性配置）在注册表汇聚一行 */
 export interface ComponentDefinition {
   type: string
   label: string
   /** 画布渲染（样式参考 shadcn/ui className 自实现，不 import 进画布） */
   Canvas: ComponentType<CanvasComponentProps>
-  /** 导出模板：props → React+TS+Tailwind 代码字符串（纯模板拼装，不允许 LLM 生成） */
-  exportTemplate: (props: Record<string, unknown>) => string
-  /** B1 试点：导出语义描述（buildExport 存在时 React/HTML 引擎经它序列化，替代手写 switch case） */
-  buildExport?: (node: DesignNode) => ExportElement
+  /** 导出语义描述：React/HTML 引擎经它序列化（B1-2 后为唯一导出源；旧字符串模板已废弃） */
+  buildExport: (node: DesignNode) => ExportElement
   /** 属性面板配置 */
   schema: PropField[]
 }

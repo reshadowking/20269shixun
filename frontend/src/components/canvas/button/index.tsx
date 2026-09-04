@@ -41,6 +41,7 @@ export interface ButtonProps {
 }
 
 /** ③ 导出模板：字符串拼装，props 必须 HTML 转义 */
+// 已废弃（B5，B1-2 全量迁移后）：导出统一走下方 buildExport（React/HTML 引擎消费）；本字符串模板函数不再被注册表引用，待二期删除。
 export const exportButtonTemplate = (props: Record<string, unknown>): string => {
   const text = escapeHtml(typeof props.text === 'string' ? props.text : '按钮')
   const variant = typeof props.variant === 'string' ? props.variant : 'default'

@@ -22,6 +22,7 @@ export interface TitleTextProps {
 }
 
 /** ③ 导出模板 */
+// 已废弃（B5，B1-2 全量迁移后）：导出统一走下方 buildExport（React/HTML 引擎消费）；本字符串模板函数不再被注册表引用，待二期删除。
 export const exportTitleTextTemplate = (props: Record<string, unknown>): string => {
   const text = escapeHtml(typeof props.text === 'string' ? props.text : '标题')
   const level = Math.min(6, Math.max(1, typeof props.level === 'number' ? props.level : 2))

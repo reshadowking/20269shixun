@@ -37,6 +37,7 @@ export interface HeroProps {
 }
 
 /** ③ 导出模板 */
+// 已废弃（B5，B1-2 全量迁移后）：导出统一走下方 buildExport（React/HTML 引擎消费）；本字符串模板函数不再被注册表引用，待二期删除。
 export const exportHeroTemplate = (props: Record<string, unknown>): string => {
   const title = escapeHtml(typeof props.title === 'string' ? props.title : '主标题')
   const subtitle = escapeHtml(typeof props.subtitle === 'string' ? props.subtitle : '')
