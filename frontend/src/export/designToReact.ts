@@ -5,15 +5,14 @@
  * - 输出 App.tsx 可编译的 JSX 代码（无运行时数据依赖）
  */
 import type { DesignNode } from '@/design/types'
-import { escapeHtml } from '@/design/escape'
+import { escapeHtml, safeHref, safeSrc } from '@/design/escape'
 import { styleToCss } from '@/design/styleToCss'
 
-/** style 转 React 内联样式对象字面量，如 {"display":"flex","gap":16} */
+/** style 转 React 内联样式对象字面量。
+ * 直接输出 JSON.stringify 结果：双引号 JSON 本身是合法 JS 对象字面量，
+ * 键/值引号由 JSON 规则转义，避免手工引号替换把值里的 ' 变成裸字符串边界（注入面）。 */
 function styleLiteral(style: DesignNode['style']): string {
-  const css = styleToCss(style)
-  return JSON.stringify(css)
-    .replace(/"([a-zA-Z]+)":/g, '$1:') // 键去引号（合法标识符）
-    .replace(/"/g, "'")
+  return JSON.stringify(styleToCss(style))
 }
 
 function componentTag(node: DesignNode): string {
@@ -36,7 +35,7 @@ function componentTag(node: DesignNode): string {
       return `<div data-component="select"><select style={{${style}}}>${options.map((o) => `\n        <option>${escapeHtml(o)}</option>`).join('')}\n      </select></div>`
     }
     case 'image':
-      return `<img data-component="image" style={{${style}}} src="${escapeHtml(typeof props.src === 'string' ? props.src : '')}" alt="${escapeHtml(typeof props.alt === 'string' ? props.alt : '图片')}" />`
+      return `<img data-component="image" style={{${style}}} src="${escapeHtml(safeSrc(typeof props.src === 'string' ? props.src : ''))}" alt="${escapeHtml(typeof props.alt === 'string' ? props.alt : '图片')}" />`
     case 'avatar':
       return `<div data-component="avatar" style={{${style},borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center'}}>${escapeHtml(typeof props.name === 'string' ? props.name.slice(0, 1) : '')}</div>`
     case 'tag':
@@ -46,7 +45,7 @@ function componentTag(node: DesignNode): string {
     case 'navbar': {
       const links = Array.isArray(props.links) ? props.links : []
       return `<nav data-component="navbar" style={{${style}}}>\n        <strong>${escapeHtml(typeof props.title === 'string' ? props.title : '')}</strong>\n        ${links
-        .map((l) => `<a href="${escapeHtml(typeof (l as Record<string, unknown>).href === 'string' ? ((l as Record<string, unknown>).href as string) : '#')}">${escapeHtml(typeof (l as Record<string, unknown>).label === 'string' ? ((l as Record<string, unknown>).label as string) : '')}</a>`)
+        .map((l) => `<a href="${escapeHtml(safeHref(typeof (l as Record<string, unknown>).href === 'string' ? ((l as Record<string, unknown>).href as string) : undefined))}">${escapeHtml(typeof (l as Record<string, unknown>).label === 'string' ? ((l as Record<string, unknown>).label as string) : '')}</a>`)
         .join('\n        ')}\n      </nav>`
     }
     case 'sidebar': {

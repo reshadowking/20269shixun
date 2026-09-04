@@ -25,7 +25,8 @@ describe('designToReactApp', () => {
     expect(code).toContain('<button')
     expect(code).toContain('立即购买')
     expect(code).toContain('商品标题')
-    expect(code).toContain("background:'#F5F5F5'") // background 令牌解析
+    expect(code).toContain('"background":"#F5F5F5"') // background 令牌解析（JSON 双引号对象字面量）
+    expect(code).toContain('"padding":24') // R1：padding 键必须出现在产物（不再被 styleToCss 丢弃）
   })
 
   it('文本做 XSS 转义', () => {
@@ -77,6 +78,7 @@ describe('designToHtml', () => {
     expect(html).toContain('<!doctype html>')
     expect(html).toContain('<button')
     expect(html).toContain('商品标题')
+    expect(html).toContain('padding: 24px') // R1：HTML 通道同样输出 padding
   })
 
   it('HTML 文本转义', () => {
@@ -99,5 +101,77 @@ describe('buildEngineFiles', () => {
     const pkg = JSON.parse(files['package.json'])
     expect(pkg.scripts.dev).toBe('vite')
     expect(pkg.dependencies.react).toBeTruthy()
+  })
+})
+
+describe('导出安全（P0-1）', () => {
+  it('React 通道：style 值含引号不逃逸对象字面量（styleLiteral 输出合法 JSON）', () => {
+    const evil: DesignNode = {
+      id: 'r',
+      type: 'frame',
+      style: { color: `red'});globalThis.__pwned=1;//` },
+      children: [],
+    }
+    const code = designToReactApp(evil, false)
+    const styleLiterals = [...code.matchAll(/style=\{\{(\{.*?\})\}\}/gs)].map((m) => m[1])
+    expect(styleLiterals.length).toBeGreaterThan(0)
+    // 恶意 style 字面量必须能被 JSON.parse 完整解析（引号由 JSON 规则包裹，无法提前闭合执行）
+    const evilObj = styleLiterals.find((s) => s.includes('__pwned'))
+    expect(evilObj).toBeTruthy()
+    expect(() => JSON.parse(evilObj!)).not.toThrow()
+  })
+
+  it('HTML 通道：style 字符串值实体化，防属性逃逸注入', () => {
+    const evil: DesignNode = {
+      id: 'r',
+      type: 'frame',
+      style: { color: 'red"; onmouseover="alert(1)' },
+      children: [],
+    }
+    const html = designToHtml(evil)
+    expect(html).not.toContain('onmouseover="')
+    expect(html).toContain('&quot;')
+  })
+
+  it('javascript: href 在 React 与 HTML 双通道均降级为 #，合法 URL 保留', () => {
+    const nav: DesignNode = {
+      id: 'r',
+      type: 'frame',
+      children: [
+        {
+          id: 'n',
+          type: 'component',
+          componentType: 'navbar',
+          props: { title: 'T', links: [{ label: 'bad', href: 'javascript:alert(1)' }, { label: 'ok', href: 'https://ok.com/a' }] },
+        },
+      ],
+    }
+    const code = designToReactApp(nav, false)
+    expect(code).toContain('href="#"')
+    expect(code).toContain('href="https://ok.com/a"')
+    const html = designToHtml(nav)
+    expect(html).toContain('href="#"')
+    expect(html).toContain('href="https://ok.com/a"')
+  })
+
+  it('img src 协议白名单：javascript:/控制字符伪装被拦截为空，http/data:image 保留', () => {
+    const imgs: DesignNode = {
+      id: 'r',
+      type: 'frame',
+      children: [
+        { id: 'a', type: 'component', componentType: 'image', props: { src: 'javascript:alert(1)', alt: 'bad' } },
+        { id: 'b', type: 'component', componentType: 'image', props: { src: 'java\nscript:alert(1)', alt: 'spoof' } },
+        { id: 'c', type: 'component', componentType: 'image', props: { src: 'https://cdn.x/img.png', alt: 'ok' } },
+        { id: 'd', type: 'component', componentType: 'image', props: { src: 'data:image/png;base64,AAA', alt: 'data' } },
+      ],
+    }
+    const code = designToReactApp(imgs, false)
+    expect(code).toContain('src=""')
+    expect(code).toContain('src="https://cdn.x/img.png"')
+    expect(code).toContain('src="data:image/png;base64,AAA"')
+    const html = designToHtml(imgs)
+    expect(html).toContain('src=""')
+    expect(html).toContain('src="https://cdn.x/img.png"')
+    expect(html).toContain('src="data:image/png;base64,AAA"')
   })
 })

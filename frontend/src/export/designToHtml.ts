@@ -3,7 +3,7 @@
  * 与 designToReact 同构但输出纯 HTML+CSS（无 React 运行时）。
  */
 import type { DesignNode } from '@/design/types'
-import { escapeHtml } from '@/design/escape'
+import { escapeHtml, safeHref, safeSrc } from '@/design/escape'
 import { styleToCss } from '@/design/styleToCss'
 
 function cssText(style: DesignNode['style']): string {
@@ -12,7 +12,8 @@ function cssText(style: DesignNode['style']): string {
   for (const [key, value] of Object.entries(css)) {
     if (value === undefined || value === null) continue
     const kebab = key.replace(/[A-Z]/g, (m) => `-${m.toLowerCase()}`)
-    const v = typeof value === 'number' ? `${value}px` : String(value)
+    // 字符串值过 escapeHtml：防 style="..." 属性逃逸（值含引号可闭合属性注入新属性）
+    const v = typeof value === 'number' ? `${value}px` : escapeHtml(String(value))
     parts.push(`${kebab}: ${v}`)
   }
   return parts.join('; ')
@@ -36,7 +37,7 @@ function componentHtml(node: DesignNode): string {
       return `<select style="${style}">${options.map((o) => `<option>${escapeHtml(o)}</option>`).join('')}</select>`
     }
     case 'image':
-      return `<img style="${style}" src="${escapeHtml(typeof props.src === 'string' ? props.src : '')}" alt="${escapeHtml(typeof props.alt === 'string' ? props.alt : '图片')}" />`
+      return `<img style="${style}" src="${escapeHtml(safeSrc(typeof props.src === 'string' ? props.src : ''))}" alt="${escapeHtml(typeof props.alt === 'string' ? props.alt : '图片')}" />`
     case 'avatar':
       return `<div style="${style}; border-radius: 50%; display: flex; align-items: center; justify-content: center;">${escapeHtml(typeof props.name === 'string' ? props.name.slice(0, 1) : '')}</div>`
     case 'tag':
@@ -46,7 +47,7 @@ function componentHtml(node: DesignNode): string {
     case 'navbar': {
       const links = Array.isArray(props.links) ? props.links : []
       return `<nav style="${style}"><strong>${escapeHtml(typeof props.title === 'string' ? props.title : '')}</strong> ${links
-        .map((l) => `<a href="${escapeHtml(typeof (l as Record<string, unknown>).href === 'string' ? ((l as Record<string, unknown>).href as string) : '#')}" style="margin-left: 12px;">${escapeHtml(typeof (l as Record<string, unknown>).label === 'string' ? ((l as Record<string, unknown>).label as string) : '')}</a>`)
+        .map((l) => `<a href="${escapeHtml(safeHref(typeof (l as Record<string, unknown>).href === 'string' ? ((l as Record<string, unknown>).href as string) : undefined))}" style="margin-left: 12px;">${escapeHtml(typeof (l as Record<string, unknown>).label === 'string' ? ((l as Record<string, unknown>).label as string) : '')}</a>`)
         .join('')}</nav>`
     }
     case 'sidebar': {
