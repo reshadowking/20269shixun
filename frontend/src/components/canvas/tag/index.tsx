@@ -1,4 +1,7 @@
+import type { ExportElement } from '@/components/canvas/types'
 import { escapeHtml } from '@/design/escape'
+import { styleToCss } from '@/design/styleToCss'
+import type { DesignNode } from '@/design/types'
 
 /** ① 画布渲染：标签（样式参考 shadcn/ui Badge） */
 export function CanvasTag({ props, style: _style }: { props: Record<string, unknown>; style?: React.CSSProperties }) {
@@ -43,3 +46,14 @@ export const tagSchema = [
   { key: 'text', label: '标签文本', control: 'text' as const },
   { key: 'color', label: '颜色', control: 'color' as const },
 ]
+
+/** B1：导出语义描述（引擎 case 语义：仅文本与样式，无 Tailwind 依赖） */
+export const buildTagExport = (node: DesignNode): ExportElement => {
+  const props = node.props ?? {}
+  return {
+    tag: 'span',
+    attrs: {},
+    style: styleToCss(node.style),
+    text: typeof props.text === 'string' ? props.text : '',
+  }
+}

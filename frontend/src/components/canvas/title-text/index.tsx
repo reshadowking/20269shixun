@@ -1,4 +1,7 @@
+import type { ExportElement } from '@/components/canvas/types'
 import { escapeHtml } from '@/design/escape'
+import { styleToCss } from '@/design/styleToCss'
+import type { DesignNode } from '@/design/types'
 
 /** ① 画布渲染：标题文本（h1-h6） */
 export function CanvasTitleText({ props, style }: { props: Record<string, unknown>; style?: React.CSSProperties }) {
@@ -33,3 +36,15 @@ export const titleTextSchema = [
   { key: 'text', label: '文本', control: 'textarea' as const },
   { key: 'level', label: '级别', control: 'select' as const, options: ['1', '2', '3', '4', '5', '6'] },
 ]
+
+/** B1：导出语义描述（level → h1-h6，与引擎 case 一致） */
+export const buildTitleTextExport = (node: DesignNode): ExportElement => {
+  const props = node.props ?? {}
+  const level = typeof props.level === 'number' && props.level >= 1 && props.level <= 6 ? props.level : 2
+  return {
+    tag: `h${level}`,
+    attrs: {},
+    style: styleToCss(node.style),
+    text: typeof props.text === 'string' ? props.text : '',
+  }
+}

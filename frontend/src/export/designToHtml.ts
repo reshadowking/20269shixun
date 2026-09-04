@@ -28,16 +28,20 @@ function cssTextOfCss(css: Record<string, unknown>): string {
 
 const VOID_TAGS = new Set(['img', 'input', 'hr', 'br'])
 
-/** B1：HTML 序列化 ExportElement——style 空时省略属性；attrs 统一转义 */
+/** B1：HTML 序列化 ExportElement——style 空时省略属性；attrs 统一转义；children 递归 */
 function serializeHtmlElement(el: ExportElement): string {
   const styleAttr = Object.keys(el.style).length > 0 ? ` style="${cssTextOfCss(el.style as Record<string, unknown>)}"` : ''
   const attrsStr = Object.entries(el.attrs)
     .map(([k, v]) => ` ${k}="${escapeHtml(v)}"`)
     .join('')
-  const text = el.text !== undefined ? escapeHtml(el.text) : ''
+  const inner = el.children
+    ? el.children.map((c) => serializeHtmlElement(c)).join('')
+    : el.text !== undefined
+      ? escapeHtml(el.text)
+      : ''
   const open = `<${el.tag}${styleAttr}${attrsStr}`
   if (VOID_TAGS.has(el.tag)) return `${open} />`
-  return `${open}>${text}</${el.tag}>`
+  return `${open}>${inner}</${el.tag}>`
 }
 
 function componentHtml(node: DesignNode): string {
@@ -48,22 +52,12 @@ function componentHtml(node: DesignNode): string {
   const style = cssText(node.style)
   const text = escapeHtml(typeof props.text === 'string' ? props.text : '')
   switch (node.componentType) {
-    case 'title-text': {
-      const level = typeof props.level === 'number' && props.level >= 1 && props.level <= 6 ? props.level : 2
-      return `<h${level} style="${style}">${text}</h${level}>`
-    }
     case 'input':
       return `<input style="${style}" placeholder="${escapeHtml(typeof props.placeholder === 'string' ? props.placeholder : '')}" />`
     case 'select': {
       const options = Array.isArray(props.options) ? props.options.map((o) => String(o)) : []
       return `<select style="${style}">${options.map((o) => `<option>${escapeHtml(o)}</option>`).join('')}</select>`
     }
-    case 'avatar':
-      return `<div style="${style}; border-radius: 50%; display: flex; align-items: center; justify-content: center;">${escapeHtml(typeof props.name === 'string' ? props.name.slice(0, 1) : '')}</div>`
-    case 'tag':
-      return `<span style="${style}">${text}</span>`
-    case 'divider':
-      return `<hr style="${style}" />`
     case 'navbar': {
       const links = Array.isArray(props.links) ? props.links : []
       return `<nav style="${style}"><strong>${escapeHtml(typeof props.title === 'string' ? props.title : '')}</strong> ${links

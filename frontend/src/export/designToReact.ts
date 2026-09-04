@@ -19,16 +19,21 @@ function styleLiteral(style: DesignNode['style']): string {
 
 const VOID_TAGS = new Set(['img', 'input', 'hr', 'br'])
 
-/** B1：React 序列化 ExportElement——根元素统一带 data-component；style JSON 序列化；attrs 统一转义 */
-function serializeReactElement(el: ExportElement, componentType: string): string {
+/** B1：React 序列化 ExportElement——根元素（componentType 有值）带 data-component；子元素递归不带 */
+function serializeReactElement(el: ExportElement, componentType?: string): string {
+  const dc = componentType ? ` data-component="${componentType}"` : ''
   const styleStr = Object.keys(el.style).length > 0 ? ` style={{${JSON.stringify(el.style)}}}` : ''
   const attrsStr = Object.entries(el.attrs)
     .map(([k, v]) => ` ${k}="${escapeHtml(v)}"`)
     .join('')
-  const text = el.text !== undefined ? escapeHtml(el.text) : ''
-  const open = `<${el.tag} data-component="${componentType}"${styleStr}${attrsStr}`
+  const inner = el.children
+    ? el.children.map((c) => serializeReactElement(c)).join('')
+    : el.text !== undefined
+      ? escapeHtml(el.text)
+      : ''
+  const open = `<${el.tag}${dc}${styleStr}${attrsStr}`
   if (VOID_TAGS.has(el.tag)) return `${open} />`
-  return `${open}>${text}</${el.tag}>`
+  return `${open}>${inner}</${el.tag}>`
 }
 
 function componentTag(node: DesignNode): string {
@@ -39,10 +44,6 @@ function componentTag(node: DesignNode): string {
   const style = styleLiteral(node.style)
   const text = escapeHtml(typeof props.text === 'string' ? props.text : '')
   switch (node.componentType) {
-    case 'title-text': {
-      const level = typeof props.level === 'number' && props.level >= 1 && props.level <= 6 ? props.level : 2
-      return `<h${level} data-component="title-text" style={{${style}}}>${text}</h${level}>`
-    }
     case 'input': {
       const label = typeof props.label === 'string' && props.label ? `<label style={{display:'block',fontSize:13,color:'#4E5969',marginBottom:6}}>${escapeHtml(props.label)}</label>` : ''
       return `<div data-component="input">${label}<input style={{${style}}} placeholder="${escapeHtml(typeof props.placeholder === 'string' ? props.placeholder : '')}" ${props.disabled ? 'disabled' : ''} /></div>`
@@ -51,12 +52,6 @@ function componentTag(node: DesignNode): string {
       const options = Array.isArray(props.options) ? props.options.map((o) => String(o)) : []
       return `<div data-component="select"><select style={{${style}}}>${options.map((o) => `\n        <option>${escapeHtml(o)}</option>`).join('')}\n      </select></div>`
     }
-    case 'avatar':
-      return `<div data-component="avatar" style={{${style},borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center'}}>${escapeHtml(typeof props.name === 'string' ? props.name.slice(0, 1) : '')}</div>`
-    case 'tag':
-      return `<span data-component="tag" style={{${style}}}>${text}</span>`
-    case 'divider':
-      return `<hr data-component="divider" style={{${style}}} />`
     case 'navbar': {
       const links = Array.isArray(props.links) ? props.links : []
       return `<nav data-component="navbar" style={{${style}}}>\n        <strong>${escapeHtml(typeof props.title === 'string' ? props.title : '')}</strong>\n        ${links
