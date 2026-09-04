@@ -1,4 +1,7 @@
+import type { ExportElement } from '@/components/canvas/types'
 import { escapeHtml } from '@/design/escape'
+import { styleToCss } from '@/design/styleToCss'
+import type { DesignNode } from '@/design/types'
 
 interface SideItem { label?: string }
 
@@ -48,3 +51,20 @@ export const sidebarSchema = [
   { key: 'items', label: '菜单项（JSON 数组）', control: 'textarea' as const },
   { key: 'active', label: '选中项', control: 'text' as const },
 ]
+
+/** B1：导出语义描述（菜单项渲染 label；active 高亮为画布交互态，导出不区分） */
+export const buildSidebarExport = (node: DesignNode): ExportElement => {
+  const props = node.props ?? {}
+  const items = Array.isArray(props.items) ? (props.items as SideItem[]) : []
+  return {
+    tag: 'aside',
+    attrs: {},
+    style: styleToCss(node.style),
+    children: items.map((it) => ({
+      tag: 'div',
+      attrs: {},
+      style: { padding: '8px 12px' },
+      text: typeof it.label === 'string' ? it.label : '',
+    })),
+  }
+}

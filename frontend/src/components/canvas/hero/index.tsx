@@ -1,4 +1,7 @@
+import type { ExportElement } from '@/components/canvas/types'
 import { escapeHtml } from '@/design/escape'
+import { styleToCss } from '@/design/styleToCss'
+import type { DesignNode } from '@/design/types'
 
 /** ① 画布渲染：Hero 大图区（样式参考 shadcn/ui 大图样式） */
 export function CanvasHero({ props, style: _style }: { props: Record<string, unknown>; style?: React.CSSProperties }) {
@@ -56,3 +59,19 @@ export const heroSchema = [
   { key: 'cta', label: '按钮文本', control: 'text' as const },
   { key: 'backgroundImage', label: '背景图 URL', control: 'text' as const },
 ]
+
+/** B1：导出语义描述（h2/p/button 层次；与引擎 case 一致） */
+export const buildHeroExport = (node: DesignNode): ExportElement => {
+  const props = node.props ?? {}
+  const children: ExportElement[] = [
+    { tag: 'h2', attrs: {}, style: {}, text: typeof props.title === 'string' ? props.title : '' },
+  ]
+  if (typeof props.subtitle === 'string' && props.subtitle) {
+    children.push({ tag: 'p', attrs: {}, style: {}, text: props.subtitle })
+  }
+  const cta = props.cta as { text?: unknown } | undefined
+  if (cta && typeof cta.text === 'string' && cta.text) {
+    children.push({ tag: 'button', attrs: {}, style: {}, text: cta.text })
+  }
+  return { tag: 'section', attrs: {}, style: styleToCss(node.style), children }
+}

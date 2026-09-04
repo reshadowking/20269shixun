@@ -1,4 +1,9 @@
+import type { CSSProperties } from 'react'
+
+import type { ExportElement } from '@/components/canvas/types'
 import { escapeHtml } from '@/design/escape'
+import { styleToCss } from '@/design/styleToCss'
+import type { DesignNode } from '@/design/types'
 
 interface TableColumn { key?: string; title?: string }
 interface TableRow { [key: string]: unknown }
@@ -68,3 +73,41 @@ export const tableSchema = [
   { key: 'columns', label: '列（JSON 数组）', control: 'textarea' as const },
   { key: 'rows', label: '行数据（JSON 数组）', control: 'textarea' as const },
 ]
+
+/** B1：导出语义描述——thead/tbody 结构与引擎 case 一致（单元格边框常量统一） */
+export const buildTableExport = (node: DesignNode): ExportElement => {
+  const props = node.props ?? {}
+  const columns = Array.isArray(props.columns) ? (props.columns as TableColumn[]) : []
+  const rows = Array.isArray(props.rows) ? (props.rows as TableRow[]) : []
+  const cellStyle: CSSProperties = { border: '1px solid #E5E8EF', padding: 8 }
+  const headRow: ExportElement = {
+    tag: 'tr',
+    attrs: {},
+    style: {},
+    children: columns.map((c) => ({
+      tag: 'th',
+      attrs: {},
+      style: cellStyle,
+      text: typeof c.title === 'string' ? c.title : '',
+    })),
+  }
+  const bodyRows: ExportElement[] = rows.map((r) => ({
+    tag: 'tr',
+    attrs: {},
+    style: {},
+    children: columns.map((c) => {
+      const key = typeof c.key === 'string' ? c.key : ''
+      const v = key ? r[key] : undefined
+      return { tag: 'td', attrs: {}, style: cellStyle, text: v == null ? '' : String(v) }
+    }),
+  }))
+  return {
+    tag: 'table',
+    attrs: {},
+    style: { ...styleToCss(node.style), borderCollapse: 'collapse', width: '100%' },
+    children: [
+      { tag: 'thead', attrs: {}, style: {}, children: [headRow] },
+      { tag: 'tbody', attrs: {}, style: {}, children: bodyRows },
+    ],
+  }
+}

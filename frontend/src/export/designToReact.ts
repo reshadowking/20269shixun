@@ -7,7 +7,7 @@
 import { componentRegistry } from '@/components/canvas/registry'
 import type { ExportElement } from '@/components/canvas/types'
 import type { DesignNode } from '@/design/types'
-import { escapeHtml, safeHref } from '@/design/escape'
+import { escapeHtml } from '@/design/escape'
 import { styleToCss } from '@/design/styleToCss'
 
 /** style 转 React 内联样式对象字面量。
@@ -43,37 +43,12 @@ function componentTag(node: DesignNode): string {
   const props = node.props ?? {}
   const style = styleLiteral(node.style)
   const text = escapeHtml(typeof props.text === 'string' ? props.text : '')
-  switch (node.componentType) {
-    case 'navbar': {
-      const links = Array.isArray(props.links) ? props.links : []
-      return `<nav data-component="navbar" style={{${style}}}>\n        <strong>${escapeHtml(typeof props.title === 'string' ? props.title : '')}</strong>\n        ${links
-        .map((l) => `<a href="${escapeHtml(safeHref(typeof (l as Record<string, unknown>).href === 'string' ? ((l as Record<string, unknown>).href as string) : undefined))}">${escapeHtml(typeof (l as Record<string, unknown>).label === 'string' ? ((l as Record<string, unknown>).label as string) : '')}</a>`)
-        .join('\n        ')}\n      </nav>`
-    }
-    case 'sidebar': {
-      const items = Array.isArray(props.items) ? props.items : []
-      return `<aside data-component="sidebar" style={{${style}}}>\n        ${items
-        .map((it) => `<div style={{padding:'8px 12px'}}>${escapeHtml(typeof (it as Record<string, unknown>).label === 'string' ? ((it as Record<string, unknown>).label as string) : '')}</div>`)
-        .join('\n        ')}\n      </aside>`
-    }
-    case 'hero':
-      return `<section data-component="hero" style={{${style}}}>\n        <h2>${escapeHtml(typeof props.title === 'string' ? props.title : '')}</h2>\n        <p>${escapeHtml(typeof props.subtitle === 'string' ? props.subtitle : '')}</p>\n        ${props.cta && typeof (props.cta as Record<string, unknown>).text === 'string' ? `<button>${escapeHtml(((props.cta as Record<string, unknown>).text as string))}</button>` : ''}\n      </section>`
-    case 'table': {
-      const columns = Array.isArray(props.columns) ? (props.columns as Array<Record<string, unknown>>) : []
-      const rows = Array.isArray(props.rows) ? (props.rows as Array<Record<string, unknown>>) : []
-      return `<table data-component="table" style={{${style},borderCollapse:'collapse',width:'100%'}}>\n        <thead><tr>${columns.map((c) => `<th style={{border:'1px solid #E5E8EF',padding:8}}>${escapeHtml(typeof c.title === 'string' ? c.title : '')}</th>`).join('')}</tr></thead>\n        <tbody>${rows.map((r) => `<tr>${columns.map((c) => `<td style={{border:'1px solid #E5E8EF',padding:8}}>${escapeHtml(typeof r[String(c.key)] === 'string' ? String(r[String(c.key)]) : '')}</td>`).join('')}</tr>`).join('')}</tbody>\n      </table>`
-    }
-    case 'chart': {
-      const data = Array.isArray(props.data) ? (props.data as Array<Record<string, unknown>>) : []
-      const xKey = typeof props.xKey === 'string' ? props.xKey : 'name'
-      const yKey = typeof props.yKey === 'string' ? props.yKey : 'value'
-      const max = Math.max(1, ...data.map((d) => Number(d[yKey]) || 0))
-      return `<div data-component="chart" style={{${style}}}>\n        <div style={{fontSize:14,fontWeight:600,marginBottom:12}}>${escapeHtml(typeof props.title === 'string' ? props.title : '')}</div>\n        <div style={{display:'flex',alignItems:'flex-end',gap:12,height:160}}>\n          ${data.map((d) => `<div style={{flex:1,background:'#3D7FFF',borderRadius:'4px 4px 0 0',height:${Math.round(((Number(d[yKey]) || 0) / max) * 140)}px}} title="${escapeHtml(String(d[xKey]))}: ${escapeHtml(String(d[yKey]))}" />`).join('')}\n        </div>\n        <div style={{display:'flex',gap:12,marginTop:8}}>${data.map((d) => `<span style={{flex:1,textAlign:'center',fontSize:11,color:'#86909C'}}>${escapeHtml(String(d[xKey]))}</span>`).join('')}</div>\n      </div>`
-    }
-    default:
-      // card / 未识别组件 → 通用容器
-      return `<div data-component="${node.componentType ?? 'card'}" style={{${style}}}>\n        ${text ? `<p>${text}</p>` : ''}${props.title ? `<h3>${escapeHtml(String(props.title))}</h3>` : ''}${props.content ? `<p>${escapeHtml(String(props.content))}</p>` : ''}\n      </div>`
-  }
+  // B1-2 全量迁移：所有组件经 registry.buildExport 序列化，此处仅为未注册组件兜底（契约测试保证不会发生）
+  const ctitle = typeof props.title === 'string' ? props.title : ''
+  const ccontent = typeof props.content === 'string' ? props.content : ''
+  const ctext = text ? `<p>${text}</p>` : ''
+  const inner = `${ctext}${ctitle ? `<h3>${escapeHtml(ctitle)}</h3>` : ''}${ccontent ? `<p>${escapeHtml(ccontent)}</p>` : ''}`
+  return `<div data-component="${node.componentType ?? 'card'}" style={{${style}}}>${inner}</div>`
 }
 
 /** 递归生成节点 JSX（frame/text/component） */

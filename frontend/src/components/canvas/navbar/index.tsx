@@ -1,4 +1,7 @@
+import type { ExportElement } from '@/components/canvas/types'
 import { escapeHtml, safeHref } from '@/design/escape'
+import { styleToCss } from '@/design/styleToCss'
+import type { DesignNode } from '@/design/types'
 
 interface NavLink { label?: string; href?: string }
 
@@ -43,3 +46,23 @@ export const navbarSchema = [
   { key: 'title', label: '品牌名', control: 'text' as const },
   { key: 'links', label: '链接（JSON 数组）', control: 'textarea' as const },
 ]
+
+/** B1：导出语义描述——href 在此过 safeHref 白名单；链接间距双通道统一 marginLeft 12 */
+export const buildNavbarExport = (node: DesignNode): ExportElement => {
+  const props = node.props ?? {}
+  const links = Array.isArray(props.links) ? (props.links as NavLink[]) : []
+  return {
+    tag: 'nav',
+    attrs: {},
+    style: styleToCss(node.style),
+    children: [
+      { tag: 'strong', attrs: {}, style: {}, text: typeof props.title === 'string' ? props.title : '' },
+      ...links.map((l) => ({
+        tag: 'a' as const,
+        attrs: { href: safeHref(l.href) },
+        style: { marginLeft: 12 },
+        text: typeof l.label === 'string' ? l.label : '',
+      })),
+    ],
+  }
+}

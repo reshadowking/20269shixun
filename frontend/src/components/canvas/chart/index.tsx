@@ -1,6 +1,9 @@
 import { Bar, BarChart, CartesianGrid, Cell, Line, LineChart, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 
+import type { ExportElement } from '@/components/canvas/types'
 import { escapeHtml } from '@/design/escape'
+import { styleToCss } from '@/design/styleToCss'
+import type { DesignNode } from '@/design/types'
 
 const CHART_COLORS = ['#0052D9', '#7C4DFF', '#00A870', '#E5352B', '#FF6B6B']
 
@@ -92,3 +95,48 @@ export const chartSchema = [
   { key: 'yKey', label: 'Y 轴字段', control: 'text' as const },
   { key: 'data', label: '数据（JSON 数组）', control: 'textarea' as const },
 ]
+
+/** B1：导出语义描述——纯 CSS 柱状示意（与引擎 case 一致；画布为 Recharts 真实渲染） */
+export const buildChartExport = (node: DesignNode): ExportElement => {
+  const props = node.props ?? {}
+  const data = (Array.isArray(props.data) ? props.data : []) as ChartDatum[]
+  const xKey = typeof props.xKey === 'string' ? props.xKey : 'name'
+  const yKey = typeof props.yKey === 'string' ? props.yKey : 'value'
+  const max = Math.max(1, ...data.map((d) => Number(d[yKey]) || 0))
+  const children: ExportElement[] = [
+    {
+      tag: 'div',
+      attrs: {},
+      style: { fontSize: 14, fontWeight: 600, marginBottom: 12 },
+      text: typeof props.title === 'string' ? props.title : '',
+    },
+  ]
+  const bars: ExportElement[] = data.map((d) => ({
+    tag: 'div',
+    attrs: { title: `${String(d[xKey] ?? '')}: ${String(d[yKey] ?? '')}` },
+    style: {
+      flex: 1,
+      background: '#3D7FFF',
+      borderRadius: '4px 4px 0 0',
+      height: Math.round(((Number(d[yKey]) || 0) / max) * 140),
+    },
+  }))
+  children.push({
+    tag: 'div',
+    attrs: {},
+    style: { display: 'flex', alignItems: 'flex-end', gap: 12, height: 160 },
+    children: bars,
+  })
+  children.push({
+    tag: 'div',
+    attrs: {},
+    style: { display: 'flex', gap: 12, marginTop: 8 },
+    children: data.map((d) => ({
+      tag: 'span',
+      attrs: {},
+      style: { flex: 1, textAlign: 'center', fontSize: 11, color: '#86909C' },
+      text: String(d[xKey] ?? ''),
+    })),
+  })
+  return { tag: 'div', attrs: {}, style: styleToCss(node.style), children }
+}
