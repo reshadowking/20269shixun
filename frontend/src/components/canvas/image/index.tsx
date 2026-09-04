@@ -91,9 +91,9 @@ export const buildImageExport = (node: DesignNode): ExportElement => {
   }
 }
 
-/** ④ 属性面板配置（上传控件阶段 5 接入） */
+/** ④ 属性面板配置（src 用 upload 控件：D2 本地上传 → URL 写入 props.src） */
 export const imageSchema = [
-  { key: 'src', label: '图片 URL', control: 'text' as const },
+  { key: 'src', label: '图片', control: 'upload' as const },
   { key: 'alt', label: '替代文本', control: 'text' as const },
   { key: 'fit', label: '填充方式', control: 'select' as const, options: ['cover', 'contain', 'fill'] },
 ]

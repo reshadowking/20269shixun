@@ -2,11 +2,11 @@ import type { ComponentType, CSSProperties } from 'react'
 
 import type { DesignNode } from '@/design/types'
 
-/** 属性面板控件类型（v2.2 §5.2 schema.ts 第四件） */
+/** 属性面板控件类型（v2.2 §5.2 schema.ts 第四件；upload=D2 本地图片上传） */
 export interface PropField {
   key: string
   label: string
-  control: 'text' | 'textarea' | 'number' | 'select' | 'switch' | 'color'
+  control: 'text' | 'textarea' | 'number' | 'select' | 'switch' | 'color' | 'upload'
   options?: string[]
   min?: number
   max?: number

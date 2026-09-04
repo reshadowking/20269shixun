@@ -1,3 +1,5 @@
+import { useRef, useState } from 'react'
+
 import { componentRegistry } from '@/components/canvas/registry'
 import type { PropField } from '@/components/canvas/types'
 import { Button } from '@/components/ui/button'
@@ -9,6 +11,68 @@ import { displayLabel } from '@/design/labels'
 import { isAllowedColor, nearestToken } from '@/design/tokens.generated'
 import type { DesignNode } from '@/design/types'
 import ComponentRecommend, { type RecommendItem } from '@/components/props/ComponentRecommend'
+
+/** D2：本地图片上传控件（上传成功把 /api/images URL 写入字段） */
+function ImageUploadControl({ value, onChange }: { value: string; onChange: (v: unknown) => void }) {
+  const fileRef = useRef<HTMLInputElement>(null)
+  const [uploading, setUploading] = useState(false)
+  const [err, setErr] = useState('')
+  const upload = async (file: File | undefined) => {
+    if (!file) return
+    setUploading(true)
+    setErr('')
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      const token = localStorage.getItem('design-tool-token') ?? ''
+      const resp = await fetch('/api/images', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: fd,
+      })
+      if (!resp.ok) throw new Error(`上传失败（${resp.status}）`)
+      const data = (await resp.json()) as { url: string }
+      onChange(data.url)
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : '上传失败')
+    } finally {
+      setUploading(false)
+    }
+  }
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="flex items-center gap-2">
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-7 text-xs"
+          data-testid="upload-image-btn"
+          disabled={uploading}
+          onClick={() => fileRef.current?.click()}
+        >
+          {uploading ? '上传中…' : '上传本地图片'}
+        </Button>
+        {value && (
+          <span className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground" data-testid="prop-src-value">
+            {value}
+          </span>
+        )}
+      </div>
+      <input
+        ref={fileRef}
+        type="file"
+        accept="image/png,image/jpeg,image/webp,image/gif"
+        className="hidden"
+        data-testid="image-file-input"
+        onChange={(e) => {
+          void upload(e.target.files?.[0])
+          e.target.value = ''
+        }}
+      />
+      {err && <p className="text-[11px] text-destructive">{err}</p>}
+    </div>
+  )
+}
 
 /**
  * 属性面板（v2.2 §3.5：文本/颜色/字号/间距/布局 + 组件 schema 控件）。
@@ -117,6 +181,8 @@ export default function PropertyPanel({ node, onUpdate, onDelete, onMoveLayer, o
             onCheckedChange={onChange}
           />
         )
+      case 'upload':
+        return <ImageUploadControl value={stringVal} onChange={onChange} />
       case 'color':
         return (
           <div className="flex flex-col gap-1">
