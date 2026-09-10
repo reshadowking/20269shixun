@@ -9,8 +9,9 @@ import { ChevronDown, ChevronUp, Clock, FilePlus2, FolderOpen, LayoutTemplate, L
 
 import { Button } from '@/components/ui/button'
 import { api, clearAuth, getUsername } from '@/lib/api'
-import { loadDraft } from '@/lib/designSession'
-import { BLANK_DESIGN, DEMO_DESIGNS } from '@/design/demoData'
+import { loadLatestDraft } from '@/lib/designSession'
+import { randomSessionKey } from '@/lib/sessionKey'
+import { DEMO_DESIGNS } from '@/design/demoData'
 
 /** 最近设计默认展示条数（缺陷 2 验收口径） */
 export const RECENT_DESIGN_LIMIT = 8
@@ -42,6 +43,8 @@ export default function HomePage() {
   const [moreError, setMoreError] = useState('')
   const [templates, setTemplates] = useState<TemplateMeta[]>([])
   const [hasDraft, setHasDraft] = useState(false)
+  /** 最近草稿归属的会话（缺陷 4：草稿按会话分片，"继续上次编辑"回到对应会话） */
+  const [draftSession, setDraftSession] = useState<string | null>(null)
   const [username] = useState(() => getUsername() ?? 'demo')
 
   /** 首屏只取前 8 条（缺陷 2：后端分页，缺省 limit/offset 的全量行为仍兼容旧调用方） */
@@ -63,7 +66,9 @@ export default function HomePage() {
   }, [])
 
   useEffect(() => {
-    setHasDraft(loadDraft() !== null)
+    const latest = loadLatestDraft()
+    setHasDraft(latest !== null)
+    setDraftSession(latest?.sessionKey ?? null)
     void loadFirstPage()
     api<{ templates: TemplateMeta[] }>('/api/generate/templates')
       .then((r) => setTemplates(r.templates))
@@ -162,7 +167,9 @@ export default function HomePage() {
             <button
               className="flex w-full items-center gap-3 rounded-xl border bg-background p-5 text-left shadow-sm transition hover:border-primary"
               data-testid="home-resume"
-              onClick={() => openWorkspace('?from=draft')}
+              onClick={() =>
+                openWorkspace(draftSession ? `?session=${draftSession}&from=draft` : '?from=draft')
+              }
             >
               <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
                 <Clock className="h-5 w-5" />
@@ -185,12 +192,8 @@ export default function HomePage() {
               className="flex flex-col items-center gap-2 rounded-xl border border-dashed bg-background p-6 transition hover:border-primary"
               data-testid="home-new-blank"
               onClick={() => {
-                // 空白画布：直接进工作台并写入草稿起点
-                localStorage.setItem(
-                  'design-draft',
-                  JSON.stringify({ design: BLANK_DESIGN, meta: { updatedAt: Date.now() } }),
-                )
-                openWorkspace('?from=blank')
+                // 空白画布（缺陷 4）：新建唯一 sessionId + 全新空会话（不继承任何历史）
+                openWorkspace(`?session=${randomSessionKey()}&from=blank`)
               }}
             >
               <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-primary/10 text-primary">

@@ -43,6 +43,20 @@ function mockFetch(payload: unknown) {
     if (String(url).includes('/api/generate/explore')) {
       return { ok: true, status: 200, json: async () => payload }
     }
+    if (String(url).includes('/api/sessions')) {
+      // 缺陷 4：会话 API stub（消息为空 + 会话元信息），把面板置于正常会话状态
+      if (String(url).includes('/messages')) {
+        return { ok: true, status: 200, json: async () => ({ messages: [], pruned: 0 }) }
+      }
+      if (String(url).includes('/tool-calls')) {
+        return { ok: true, status: 200, json: async () => ({ ok: true, id: 1 }) }
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ session_id: 's-test', title: 't', design_id: null, created_at: null, updated_at: null, agent_state: {} }),
+      }
+    }
     throw new Error(`unexpected fetch: ${url}`)
   })
   return { fetchMock, calls }
@@ -52,7 +66,7 @@ function mockFetch(payload: unknown) {
 async function explore(payload = explorePayload()) {
   const mocked = mockFetch(payload)
   vi.stubGlobal('fetch', mocked.fetchMock)
-  render(<AIChatPanel onGenerate={() => {}} onUseExploreDesign={useSpy} />)
+  render(<AIChatPanel sessionKey="s-test" onGenerate={() => {}} onUseExploreDesign={useSpy} />)
   fireEvent.change(screen.getByTestId('chat-input'), { target: { value: '设计一个电商优惠券页' } })
   await userEvent.click(screen.getByTestId('explore-options'))
   await screen.findByTestId('explore-result')
@@ -92,8 +106,8 @@ describe('AIChatPanel 方案预览与留档（缺陷 1）', () => {
     expect(useSpy).toHaveBeenCalledTimes(1)
     expect(screen.queryByTestId('explore-result')).not.toBeInTheDocument()
     expect(screen.getByTestId('explore-archive-chosen')).toHaveTextContent('方案一')
-    expect(loadExploreArchive()?.chosenIndex).toBe(0)
-    expect(loadExploreArchive()?.options).toHaveLength(2) // 另一方案详情仍在留档里
+    expect(loadExploreArchive('s-test')?.chosenIndex).toBe(0)
+    expect(loadExploreArchive('s-test')?.options).toHaveLength(2) // 另一方案详情仍在留档里
   })
 
   it('已选档下查看另一方案：1 次点击可见完整详情，且不产生任何新请求', async () => {
@@ -112,16 +126,16 @@ describe('AIChatPanel 方案预览与留档（缺陷 1）', () => {
   it('刷新后仍可还原选过的方案（留档从 localStorage 恢复）', async () => {
     const mocked = mockFetch(explorePayload())
     vi.stubGlobal('fetch', mocked.fetchMock)
-    const panel = render(<AIChatPanel onGenerate={() => {}} onUseExploreDesign={useSpy} />)
+    const panel = render(<AIChatPanel sessionKey="s-test" onGenerate={() => {}} onUseExploreDesign={useSpy} />)
     fireEvent.change(screen.getByTestId('chat-input'), { target: { value: '设计一个电商优惠券页' } })
     await userEvent.click(screen.getByTestId('explore-options'))
     await screen.findByTestId('explore-result')
     await userEvent.click(screen.getByTestId('explore-use-0'))
-    expect(loadExploreArchive()?.chosenIndex).toBe(0)
+    expect(loadExploreArchive('s-test')?.chosenIndex).toBe(0)
 
     // 模拟刷新：卸载后以同一 scope 重新挂载，留档应从 localStorage 还原
     panel.unmount()
-    render(<AIChatPanel onGenerate={() => {}} onUseExploreDesign={useSpy} />)
+    render(<AIChatPanel sessionKey="s-test" onGenerate={() => {}} onUseExploreDesign={useSpy} />)
     await waitFor(() => expect(screen.getByTestId('explore-archive-chosen')).toHaveTextContent('方案一'))
     expect(screen.getByTestId('explore-archive')).toBeInTheDocument()
   })
@@ -139,14 +153,14 @@ describe('AIChatPanel 方案预览与留档（缺陷 1）', () => {
     await userEvent.click(screen.getByTestId('explore-rechoose-use-1'))
     expect(confirmMock).toHaveBeenCalledTimes(1)
     expect(useSpy).toHaveBeenCalledTimes(1) // 取消 → 不覆盖当前画布
-    expect(loadExploreArchive()?.chosenIndex).toBe(0)
+    expect(loadExploreArchive('s-test')?.chosenIndex).toBe(0)
 
     vi.stubGlobal('confirm', vi.fn(() => true))
     await userEvent.click(screen.getByTestId('explore-rechoose-use-1'))
     expect(useSpy).toHaveBeenCalledTimes(2)
     expect(useSpy.mock.calls[1][0]).toMatchObject({ id: 'opt-dark-root' })
     expect(screen.getByTestId('explore-archive-chosen')).toHaveTextContent('方案二')
-    expect(loadExploreArchive()?.chosenIndex).toBe(1)
+    expect(loadExploreArchive('s-test')?.chosenIndex).toBe(1)
   })
 
   it('降级方案与真实生成结果明确区分（不得混同）', async () => {
@@ -213,10 +227,10 @@ describe('AIChatPanel 方案预览与留档（缺陷 1）', () => {
     expect(screen.getByTestId('explore-archive')).toBeInTheDocument()
   })
 
-  it('留档按 scope 分片：换设计会话看不到别的会话的选择记录', async () => {
+  it('留档按会话分片：换会话看不到别的会话的选择记录', async () => {
     await explore()
     await userEvent.click(screen.getByTestId('explore-use-0'))
-    expect(localStorage.getItem(exploreArchiveKey())).toBeTruthy()
-    expect(localStorage.getItem(exploreArchiveKey('99'))).toBeNull()
+    expect(localStorage.getItem(exploreArchiveKey('s-test'))).toBeTruthy()
+    expect(localStorage.getItem(exploreArchiveKey('s-other'))).toBeNull()
   })
 })

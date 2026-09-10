@@ -1,7 +1,7 @@
-"""ORM 模型（v2.2 §9.2：users / designs / versions / images）。"""
+"""ORM 模型（v2.2 §9.2：users / designs / versions / images；缺陷 4 追加会话三表）。"""
 from datetime import UTC, datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, LargeBinary, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, LargeBinary, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .db import Base
@@ -57,4 +57,50 @@ class Image(Base):
     path: Mapped[str] = mapped_column(String(512))  # 相对 volume 路径
     design_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     size: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class ChatSession(Base):
+    """画布会话（缺陷 4）：sessionId → 会话数据 的映射。
+
+    session_key 是客户端与 URL 使用的字符串 id（s-xxxx / s-design-12），DB 自增 id 不对外；
+    同一 key 在不同 owner 下是两条独立会话（唯一约束含 owner_id）。
+    """
+
+    __tablename__ = "chat_sessions"
+    __table_args__ = (UniqueConstraint("owner_id", "session_key", name="uq_chat_sessions_owner_key"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    session_key: Mapped[str] = mapped_column(String(64), index=True)
+    owner_id: Mapped[int] = mapped_column(Integer, index=True)
+    title: Mapped[str] = mapped_column(String(200), default="新会话")
+    design_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    # Agent 运行状态（上次需求/追问进度/合规报告等），JSON 字符串；不含消息正文
+    agent_state: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+
+class ChatMessage(Base):
+    """会话消息（缺陷 4）：每条都归属一个会话，读取按 session_id 过滤。"""
+
+    __tablename__ = "chat_messages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    session_id: Mapped[int] = mapped_column(Integer, ForeignKey("chat_sessions.id"), index=True)
+    role: Mapped[str] = mapped_column(String(16))  # user / assistant
+    content: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class SessionToolCall(Base):
+    """会话工具调用记录（缺陷 4）：只记 kind/来源/成败，不含用户文本（宪法第 3 条）。"""
+
+    __tablename__ = "session_tool_calls"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    session_id: Mapped[int] = mapped_column(Integer, ForeignKey("chat_sessions.id"), index=True)
+    kind: Mapped[str] = mapped_column(String(64))
+    source: Mapped[str] = mapped_column(String(16), default="app")  # app / mcp
+    ok: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)

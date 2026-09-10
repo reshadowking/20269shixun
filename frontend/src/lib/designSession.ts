@@ -1,7 +1,10 @@
 /**
- * 设计会话工具（缺陷 5/8/11）：localStorage 自动草稿 + 打开设计元信息。
- * 草稿保存最近一次编辑（含已保存设计的 id/名称），刷新/误关不丢。
+ * 设计会话工具（缺陷 5/8/11 + 缺陷 4 会话化）：草稿自动保存 + 打开设计元信息。
+ *
+ * 缺陷 4：草稿按 sessionKey 分片（design-draft-{sessionKey}），修掉"多画布互相覆盖"；
+ * 旧全局键 design-draft 作为迁移来源保留读取，"继续上次编辑"取最近一份草稿（含旧键）。
  */
+import { loadJson, removeJson, saveJson, scopedKey } from '@/lib/localStore'
 import type { DesignNode } from '@/design/types'
 
 export interface DesignSessionMeta {
@@ -18,37 +21,60 @@ export interface Draft {
   meta: DesignSessionMeta
 }
 
-export function loadDraft(): Draft | null {
+export function draftKey(sessionKey?: string): string {
+  return scopedKey(DRAFT_KEY, sessionKey)
+}
+
+function isDraft(v: unknown): v is Draft {
+  if (!v || typeof v !== 'object') return false
+  const parsed = v as Draft
+  return typeof parsed.design?.id === 'string'
+}
+
+export function loadDraft(sessionKey?: string): Draft | null {
+  return loadJson(draftKey(sessionKey), isDraft)
+}
+
+export function saveDraft(sessionKey: string | undefined, design: DesignNode, meta: Partial<DesignSessionMeta> = {}): void {
+  const prev = loadDraft(sessionKey)
+  saveJson(draftKey(sessionKey), {
+    design,
+    meta: {
+      savedId: meta.savedId ?? prev?.meta.savedId,
+      savedName: meta.savedName ?? prev?.meta.savedName,
+      updatedAt: Date.now(),
+    },
+  })
+}
+
+export function clearDraft(sessionKey?: string): void {
+  removeJson(draftKey(sessionKey))
+}
+
+/**
+ * 最近一份草稿（含旧全局键 design-draft）：供首页「继续上次编辑」。
+ * 返回 sessionKey=null 表示命中的是迁移前的旧全局草稿（走 ?from=draft 兼容路径）。
+ */
+export function loadLatestDraft(): { sessionKey: string | null; draft: Draft } | null {
+  const candidates: Array<{ sessionKey: string | null; draft: Draft }> = []
   try {
-    const raw = localStorage.getItem(DRAFT_KEY)
-    if (!raw) return null
-    const parsed = JSON.parse(raw) as { design?: DesignNode; meta?: DesignSessionMeta }
-    if (!parsed.design?.id) return null
-    return { design: parsed.design, meta: parsed.meta ?? { updatedAt: Date.now() } }
+    for (let i = 0; i < localStorage.length; i += 1) {
+      const key = localStorage.key(i)
+      if (!key) continue
+      if (key === DRAFT_KEY) {
+        const draft = loadDraft(undefined)
+        if (draft) candidates.push({ sessionKey: null, draft })
+        continue
+      }
+      if (key.startsWith(`${DRAFT_KEY}-`)) {
+        const scope = key.slice(DRAFT_KEY.length + 1)
+        const draft = loadDraft(scope)
+        if (draft) candidates.push({ sessionKey: scope, draft })
+      }
+    }
   } catch {
     return null
   }
-}
-
-export function saveDraft(design: DesignNode, meta: Partial<DesignSessionMeta> = {}): void {
-  try {
-    const prev = loadDraft()
-    localStorage.setItem(
-      DRAFT_KEY,
-      JSON.stringify({
-        design,
-        meta: {
-          savedId: meta.savedId ?? prev?.meta.savedId,
-          savedName: meta.savedName ?? prev?.meta.savedName,
-          updatedAt: Date.now(),
-        },
-      }),
-    )
-  } catch {
-    /* localStorage 满/禁用时静默 */
-  }
-}
-
-export function clearDraft(): void {
-  localStorage.removeItem(DRAFT_KEY)
+  if (candidates.length === 0) return null
+  return candidates.reduce((best, cur) => (cur.draft.meta.updatedAt > best.draft.meta.updatedAt ? cur : best))
 }

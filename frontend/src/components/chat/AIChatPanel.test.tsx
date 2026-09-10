@@ -5,7 +5,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import AIChatPanel, { chatStorageKey, extractPreviewTexts } from './AIChatPanel'
+import AIChatPanel, { extractPreviewTexts } from './AIChatPanel'
 import type { DesignNode } from '@/design/types'
 
 const DESIGN = { id: 'root', type: 'frame', style: { layout: 'column' } }
@@ -14,6 +14,21 @@ function mockFetch(questions: { questions: unknown[] } | null, generate?: unknow
   return vi.fn(async (url: string, options?: RequestInit) => {
     const path = String(url)
     const body = options?.body ? JSON.parse(String(options.body)) : {}
+    if (path.includes('/api/sessions')) {
+      // 缺陷 4：会话 API stub（空消息 + 会话元信息），把面板置于正常会话状态
+      if (path.includes('/messages')) {
+        return { ok: true, status: 200, json: async () => ({ messages: [], pruned: 0 }), body }
+      }
+      if (path.includes('/tool-calls')) {
+        return { ok: true, status: 200, json: async () => ({ ok: true, id: 1 }), body }
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ session_id: 's-test', title: 't', design_id: null, created_at: null, updated_at: null, agent_state: {} }),
+        body,
+      }
+    }
     if (path.includes('/api/generate/questions')) {
       return {
         ok: true,
@@ -39,7 +54,7 @@ function typeAndSend(text: string) {
 }
 
 function renderPanel() {
-  return render(<AIChatPanel onGenerate={() => {}} />)
+  return render(<AIChatPanel sessionKey="s-test" onGenerate={() => {}} />)
 }
 
 describe('AIChatPanel followup flow', () => {
@@ -182,7 +197,7 @@ describe('AIChatPanel followup flow', () => {
       { design: DESIGN, template: 'ecommerce', compliance: 81.8, violations: 4, fallback: true, error: '参数填充未返回有效 JSON（模型限流或超时）' },
     )
     vi.stubGlobal('fetch', fetchMock)
-    render(<AIChatPanel onGenerate={onGenerate} />)
+    render(<AIChatPanel sessionKey="s-test" onGenerate={onGenerate} />)
     typeAndSend('做一个电商产品详情页')
     expect(await screen.findByText(/AI 生成失败/)).toBeInTheDocument()
     expect(screen.getByText(/模型限流或超时/)).toBeInTheDocument()
@@ -219,7 +234,7 @@ describe('AIChatPanel followup flow', () => {
       { design: DESIGN, template: 'ecommerce', compliance: 100, violations: 0, fallback: true, error: '超时' },
     )
     vi.stubGlobal('fetch', fetchMock)
-    render(<AIChatPanel onGenerate={onGenerate} />)
+    render(<AIChatPanel sessionKey="s-test" onGenerate={onGenerate} />)
     typeAndSend('做一个电商产品详情页')
     fireEvent.click(await screen.findByTestId('fallback-use-template'))
     expect(onGenerate).toHaveBeenCalledWith(DESIGN)
@@ -228,19 +243,56 @@ describe('AIChatPanel followup flow', () => {
   })
 })
 
-describe('historyScope 聊天历史分 key（P0-4）', () => {
-  it('chatStorageKey：有 scope 按设计隔离，无 scope 保持全局 key（兼容存量数据）', () => {
-    expect(chatStorageKey('42')).toBe('design-chat-history-42')
-    expect(chatStorageKey(undefined)).toBe('design-chat-history')
+describe('会话隔离：消息只来自当前会话（缺陷 4）', () => {
+  it('挂载时只加载本会话消息；其他会话的历史不会出现', async () => {
+    localStorage.clear()
+    const fetchMock = vi.fn(async (url: string) => {
+      const path = String(url)
+      if (path.includes('/api/sessions/s-a/messages')) {
+        return { ok: true, status: 200, json: async () => ({ messages: [{ id: 1, role: 'assistant', text: '会话 A 的历史' }] }) }
+      }
+      if (path.includes('/api/sessions/s-b/messages')) {
+        return { ok: true, status: 200, json: async () => ({ messages: [{ id: 2, role: 'assistant', text: '会话 B 的历史' }] }) }
+      }
+      if (path.includes('/api/sessions')) {
+        return { ok: true, status: 200, json: async () => ({ session_id: 's-a', title: 't', design_id: null, created_at: null, updated_at: null, agent_state: {} }) }
+      }
+      throw new Error('unexpected fetch: ' + path)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const { unmount } = render(<AIChatPanel sessionKey="s-a" onGenerate={() => {}} />)
+    expect(await screen.findByText('会话 A 的历史')).toBeInTheDocument()
+    expect(screen.queryByText('会话 B 的历史')).not.toBeInTheDocument()
+
+    unmount()
+    render(<AIChatPanel sessionKey="s-b" onGenerate={() => {}} />)
+    expect(await screen.findByText('会话 B 的历史')).toBeInTheDocument()
+    expect(screen.queryByText('会话 A 的历史')).not.toBeInTheDocument()
   })
 
-  it('挂载时按 scope 读取对应 localStorage key 的历史', () => {
+  it('新建的空会话：消息列表为空，只显示欢迎语（不继承前一画布历史）', async () => {
     localStorage.clear()
-    localStorage.setItem('design-chat-history-42', JSON.stringify([{ role: 'assistant', text: '来自设计 42 的历史' }]))
-    render(<AIChatPanel onGenerate={() => {}} historyScope="42" />)
-    expect(screen.getByText('来自设计 42 的历史')).toBeInTheDocument()
-    // 全局 key 的数据不会被 scope 会话读到
-    expect(screen.queryByText(/你好！我是 AI 设计助手/)).not.toBeInTheDocument()
+    const fetchMock = vi.fn(async (url: string) => {
+      const path = String(url)
+      if (path.includes('/api/sessions')) {
+        return { ok: true, status: 200, json: async () => ({ messages: [], session_id: 's-new', agent_state: {} }) }
+      }
+      throw new Error('unexpected fetch: ' + path)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<AIChatPanel sessionKey="s-new" onGenerate={() => {}} />)
+    expect(await screen.findByTestId('chat-msg-assistant-0')).toHaveTextContent('你好！我是 AI 设计助手')
+    await waitFor(() => expect(screen.getAllByTestId(/^chat-msg-/)).toHaveLength(1))
+  })
+
+  it('会话接口不可用：降级为仅本地可见并提示（不阻塞对话）', async () => {
+    localStorage.clear()
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      throw new Error('offline')
+    }))
+    render(<AIChatPanel sessionKey="s-offline" onGenerate={() => {}} />)
+    expect(await screen.findByTestId('session-sync-error')).toHaveTextContent('会话同步失败')
+    expect(screen.getByTestId('chat-msg-assistant-0')).toBeInTheDocument()
   })
 })
 
@@ -269,7 +321,7 @@ describe('D1 合规逐项报告（B2-2 明细 → UI）', () => {
       },
     )
     vi.stubGlobal('fetch', fetchMock)
-    render(<AIChatPanel onGenerate={() => {}} onComplianceRestore={onRestore} />)
+    render(<AIChatPanel sessionKey="s-test" onGenerate={() => {}} onComplianceRestore={onRestore} />)
     typeAndSend('设计一个页面')
     await waitFor(() => expect(screen.getByTestId('compliance-report')).toBeInTheDocument())
     expect(screen.getByText(/#123456/)).toBeInTheDocument()
@@ -294,7 +346,7 @@ describe('D1 合规逐项报告（B2-2 明细 → UI）', () => {
   it('无违规明细时不渲染报告块', async () => {
     fetchMock = mockFetch({ questions: [] }) // 默认 generate 响应无 violations_detail
     vi.stubGlobal('fetch', fetchMock)
-    render(<AIChatPanel onGenerate={() => {}} />)
+    render(<AIChatPanel sessionKey="s-test" onGenerate={() => {}} />)
     typeAndSend('设计一个页面')
     await waitFor(() => expect(screen.getByText(/已生成设计稿/)).toBeInTheDocument())
     expect(screen.queryByTestId('compliance-report')).not.toBeInTheDocument()
@@ -311,7 +363,7 @@ describe('演示模式显式标注（未配置模型 Key = 预置模板稿）', 
     localStorage.clear()
     const fetchMock = mockFetch({ questions: [] }, { design: DESIGN, template: 'login', compliance: 100, violations: 0, fallback: false, mock: true })
     vi.stubGlobal('fetch', fetchMock)
-    render(<AIChatPanel onGenerate={() => {}} />)
+    render(<AIChatPanel sessionKey="s-test" onGenerate={() => {}} />)
     typeAndSend('设计一个页面')
     await waitFor(() => expect(screen.getByText(/已生成设计稿/)).toBeInTheDocument())
     const msg = screen.getByText(/已生成设计稿/)
@@ -323,7 +375,7 @@ describe('演示模式显式标注（未配置模型 Key = 预置模板稿）', 
     localStorage.clear()
     const fetchMock = mockFetch({ questions: [] })
     vi.stubGlobal('fetch', fetchMock)
-    render(<AIChatPanel onGenerate={() => {}} />)
+    render(<AIChatPanel sessionKey="s-test" onGenerate={() => {}} />)
     typeAndSend('设计一个页面')
     await waitFor(() => expect(screen.getByText(/已生成设计稿/)).toBeInTheDocument())
     expect(screen.getByText(/已生成设计稿/)).not.toHaveTextContent('演示模式')
@@ -369,7 +421,7 @@ describe('D3 方案探索', () => {
 
   it('探索返回 2 份方案：点使用回调并关闭面板', async () => {
     const onUse = vi.fn()
-    render(<AIChatPanel onGenerate={() => {}} onUseExploreDesign={onUse} />)
+    render(<AIChatPanel sessionKey="s-test" onGenerate={() => {}} onUseExploreDesign={onUse} />)
     typeAndSend('设计一个登录页') // lastPrompt 就位
     await waitFor(() => expect(screen.getByText(/已生成设计稿/)).toBeInTheDocument())
 

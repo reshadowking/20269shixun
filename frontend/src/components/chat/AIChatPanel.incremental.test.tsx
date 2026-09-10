@@ -34,6 +34,20 @@ const EDITED: DesignNode = {
 function mockFetch() {
   return vi.fn(async (url: string) => {
     const path = String(url)
+    if (path.includes('/api/sessions')) {
+      // 缺陷 4：会话 API stub（消息为空 + 元信息）
+      if (path.includes('/messages')) {
+        return { ok: true, status: 200, json: async () => ({ messages: [], pruned: 0 }) }
+      }
+      if (path.includes('/tool-calls')) {
+        return { ok: true, status: 200, json: async () => ({ ok: true, id: 1 }) }
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ session_id: 's-test', title: 't', design_id: null, created_at: null, updated_at: null, agent_state: {} }),
+      }
+    }
     if (path.includes('/api/generate')) {
       return { ok: true, status: 200, json: async () => ({ design: EDITED, template: 'edit', compliance: 100, violations: 0, fallback: false }) }
     }
@@ -61,6 +75,7 @@ describe('AIChatPanel incremental edit (P0-1)', () => {
     const onIncrementalEdit = vi.fn()
     render(
       <AIChatPanel
+      sessionKey="s-test"
         onGenerate={() => {}}
         design={CURRENT}
         onIncrementalEdit={onIncrementalEdit}
@@ -87,6 +102,7 @@ describe('AIChatPanel incremental edit (P0-1)', () => {
     const onIncrementalEdit = vi.fn()
     render(
       <AIChatPanel
+      sessionKey="s-test"
         onGenerate={() => {}}
         design={CURRENT}
         onIncrementalEdit={onIncrementalEdit}
@@ -107,6 +123,7 @@ describe('AIChatPanel incremental edit (P0-1)', () => {
     const onUndo = vi.fn()
     render(
       <AIChatPanel
+      sessionKey="s-test"
         onGenerate={() => {}}
         design={CURRENT}
         onIncrementalEdit={() => {}}
@@ -122,6 +139,7 @@ describe('AIChatPanel incremental edit (P0-1)', () => {
   it('canUndo 时显示撤销按钮', () => {
     render(
       <AIChatPanel
+      sessionKey="s-test"
         onGenerate={() => {}}
         design={CURRENT}
         onIncrementalEdit={() => {}}
@@ -141,6 +159,7 @@ describe('AIChatPanel incremental edit (P0-1)', () => {
     vi.stubGlobal('fetch', fetchMock)
     render(
       <AIChatPanel
+      sessionKey="s-test"
         onGenerate={() => {}}
         design={CURRENT}
         onIncrementalEdit={() => {}}
@@ -166,33 +185,62 @@ describe('AIChatPanel 会话持久（P0-2 缺陷 10）', () => {
     localStorage.clear()
   })
 
-  it('发送消息后写入 localStorage，重新挂载后恢复', async () => {
-    const { unmount } = render(
-      <AIChatPanel onGenerate={() => {}} onIncrementalEdit={() => {}} onUndo={() => {}} />,
-    )
-    typeAndSend('设计一个登录页')
-    await waitFor(() => {
-      expect(localStorage.getItem('design-chat-history')).toContain('设计一个登录页')
+  it('发送消息后增量落库到当前会话，重新挂载可从会话恢复（缺陷 4）', async () => {
+    const appended: string[] = []
+    const fetchMock = mockFetch()
+    const withAppend = vi.fn(async (url: string, options?: RequestInit) => {
+      const path = String(url)
+      if (path.includes('/api/sessions') && path.includes('/messages') && options?.method === 'POST') {
+        const body = JSON.parse(String(options.body ?? '{}')) as { messages?: Array<{ text: string }> }
+        for (const m of body.messages ?? []) appended.push(m.text)
+      }
+      return (fetchMock as unknown as (u: string, o?: RequestInit) => Promise<unknown>)(url, options)
     })
+    vi.stubGlobal('fetch', withAppend)
+    const { unmount } = render(
+      <AIChatPanel sessionKey="s-test" onGenerate={() => {}} onIncrementalEdit={() => {}} onUndo={() => {}} />,
+    )
+    typeAndSend('把按钮改成红色')
+    await waitFor(() => expect(appended).toContain('把按钮改成红色'))
     unmount()
-    // 重新挂载：历史恢复（用户消息仍在，无需欢迎语）
-    render(<AIChatPanel onGenerate={() => {}} onIncrementalEdit={() => {}} onUndo={() => {}} />)
-    expect(screen.getAllByText('设计一个登录页').length).toBeGreaterThan(0)
+
+    // 重新挂载：会话接口返回这条历史 → 面板恢复（不再是 localStorage 语义）
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      const path = String(url)
+      if (path.includes('/api/sessions') && path.includes('/messages')) {
+        return { ok: true, status: 200, json: async () => ({ messages: [{ id: 1, role: 'user', text: '把按钮改成红色' }] }) }
+      }
+      if (path.includes('/api/sessions')) {
+        return { ok: true, status: 200, json: async () => ({ session_id: 's-test', agent_state: {} }) }
+      }
+      throw new Error('unexpected fetch: ' + path)
+    }))
+    render(<AIChatPanel sessionKey="s-test" onGenerate={() => {}} onIncrementalEdit={() => {}} onUndo={() => {}} />)
+    expect(await screen.findByText('把按钮改成红色')).toBeInTheDocument()
   })
 
   it('损坏的 localStorage 数据回退默认欢迎语', () => {
     localStorage.setItem('design-chat-history', '{bad json')
-    render(<AIChatPanel onGenerate={() => {}} />)
+    render(<AIChatPanel sessionKey="s-test" onGenerate={() => {}} />)
     expect(screen.getByText(/AI 设计助手/)).toBeInTheDocument()
   })
 
-  it('清空会话按钮重置为欢迎语', async () => {
-    render(<AIChatPanel onGenerate={() => {}} />)
+  it('清空会话：二次确认后重置为欢迎语，且只清当前会话（缺陷 4b）', async () => {
+    const cleared: string[] = []
+    vi.stubGlobal('confirm', vi.fn(() => true))
+    const base = mockFetch()
+    vi.stubGlobal('fetch', vi.fn(async (url: string, options?: RequestInit) => {
+      if (String(url).includes('/clear')) cleared.push(String(url))
+      return (base as unknown as (u: string, o?: RequestInit) => Promise<unknown>)(url, options)
+    }))
+    render(<AIChatPanel sessionKey="s-test" onGenerate={() => {}} />)
     typeAndSend('设计一个登录页')
     await waitFor(() => {
       expect(screen.queryByTestId('chat-clear-history')).toBeInTheDocument()
     })
     fireEvent.click(screen.getByTestId('chat-clear-history'))
+    await waitFor(() => expect(cleared).toHaveLength(1))
+    expect(cleared[0]).toContain('/api/sessions/s-test/clear')
     expect(screen.queryByText('设计一个登录页')).not.toBeInTheDocument()
     expect(screen.queryByTestId('chat-clear-history')).not.toBeInTheDocument()
   })
@@ -212,14 +260,14 @@ describe('AIChatPanel 角色边界（P0-3 缺陷 9）', () => {
   })
 
   it('无关问题礼貌拒答，不发生成请求', async () => {
-    render(<AIChatPanel onGenerate={() => {}} />)
+    render(<AIChatPanel sessionKey="s-test" onGenerate={() => {}} />)
     typeAndSend('帮我写首诗')
     expect(await screen.findByText(/只负责 UI/)).toBeInTheDocument()
     expect(fetchMock.mock.calls.some((c) => String(c[0]).includes('/api/generate'))).toBe(false)
   })
 
   it('设计请求正常放行', async () => {
-    render(<AIChatPanel onGenerate={() => {}} />)
+    render(<AIChatPanel sessionKey="s-test" onGenerate={() => {}} />)
     typeAndSend('把按钮改成红色')
     await waitFor(() => {
       expect(fetchMock.mock.calls.some((c) => String(c[0]).includes('/api/generate'))).toBe(true)

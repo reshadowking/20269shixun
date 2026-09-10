@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { Link, useSearchParams } from 'react-router-dom'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { X } from 'lucide-react'
 
 import ActivityBar, { ACTIVITY_TITLES } from '@/components/activity/ActivityBar'
@@ -26,7 +26,12 @@ import { loadDraft, saveDraft } from '@/lib/designSession'
 import { findNode, findParent as findParentOf, genId } from '@/design/tree'
 import type { ComponentType, DesignNode } from '@/design/types'
 import { api } from '@/lib/api'
-import { deriveCollabRoom, randomRoom } from '@/lib/collabRoom'
+import SessionBar from '@/components/chat/SessionBar'
+import { deriveCollabRoom } from '@/lib/collabRoom'
+import { clearSnapshots, deleteSnapshot, loadSnapshots, saveSnapshot, type SessionSnapshot } from '@/lib/sessionSnapshots'
+import { sessionApi, type SessionMeta } from '@/lib/sessionApi'
+import { deriveSessionKey, isSessionKey, randomSessionKey, SESSION_PARAM } from '@/lib/sessionKey'
+import { migrateLegacySessions } from '@/lib/migrateLegacySessions'
 import { useDesignStore } from '@/yjs/useDesignStore'
 
 interface OptimizeReport {
@@ -36,22 +41,42 @@ interface OptimizeReport {
   total: number
 }
 
-/** 工作台：组件面板 + 画布 + 右侧活动栏（P1：活动栏图标 + 展开面板） */
+/**
+ * 工作台入口（缺陷 4）：解析会话身份并写回 URL，再按会话 key 挂载内部工作台。
+ * 切换会话 = navigate 换 ?session= → key 变化 → 整个工作台干净重挂（会话状态天然不串）。
+ */
 export default function WorkspacePage() {
+  const [searchParams, setSearchParams] = useSearchParams()
+  const designParam = searchParams.get('design')
+  const sessionParam = searchParams.get(SESSION_PARAM)
+  const sessionRef = useRef<string | null>(null)
+  if (sessionRef.current === null) {
+    // 懒初始化：StrictMode 双渲染下随机值只生成一次，会话身份稳定
+    sessionRef.current = deriveSessionKey(sessionParam, designParam, randomSessionKey())
+  }
+  const sessionKey = isSessionKey(sessionParam) ? (sessionParam as string) : sessionRef.current
+  useEffect(() => {
+    if (searchParams.get(SESSION_PARAM) === sessionKey) return
+    const next = new URLSearchParams(searchParams)
+    next.set(SESSION_PARAM, sessionKey)
+    setSearchParams(next, { replace: true })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionKey])
+  return <WorkspaceInner key={sessionKey} sessionKey={sessionKey} />
+}
+
+/** 工作台内部：组件面板 + 画布 + 右侧活动栏（P1：活动栏图标 + 展开面板） */
+function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
   const wsUrl = import.meta.env.VITE_WS_URL ?? 'ws://localhost:1234'
-  const [searchParams] = useSearchParams()
-  // 协作 room（P0-4）：显式 ?room=（E2E/多人同稿）> 已存设计按 design-{id} 隔离 > 其余每标签随机。
-  // useRef 懒初始化保证 StrictMode 双渲染下 room 稳定（随机值只生成一次）。
+  const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const designParam = searchParams.get('design')
+  // 协作 room（P0-4 + 缺陷 4）：?room= > design-{id} > session-{sessionKey}（不再每标签随机）
   const roomRef = useRef<string | null>(null)
   if (roomRef.current === null) {
-    roomRef.current = deriveCollabRoom(
-      searchParams.get('room'),
-      searchParams.get('design'),
-      randomRoom(),
-    )
+    roomRef.current = deriveCollabRoom(searchParams.get('room'), designParam, sessionKey)
   }
   const room = roomRef.current
-  const designParam = searchParams.get('design')
   // D5：presence 昵称（?user= 可区分多标签演示；默认与登录账号一致）
   const userName = searchParams.get('user') ?? 'demo'
   const { design, store } = useDesignStore(wsUrl, DEMO_DESIGNS[0], room)
@@ -101,7 +126,7 @@ export default function WorkspacePage() {
           target = r.design
           meta = { name: r.name }
         } else if (from === 'blank' || from === 'draft') {
-          const d = loadDraft()
+          const d = loadDraft(sessionKey)
           target = d?.design ?? BLANK_DESIGN
           if (d) meta = { id: d.meta.savedId, name: d.meta.savedName }
         } else if (from === 'demo') {
@@ -121,12 +146,26 @@ export default function WorkspacePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // P1 草稿自动保存（缺陷 5/8：刷新/误关不丢；300ms 防抖）
+  // P1 草稿自动保存（缺陷 5/8 + 缺陷 4：按会话分片，300ms 防抖）
   useEffect(() => {
     if (!loaded) return
-    const timer = window.setTimeout(() => saveDraft(design, { savedId: savedMeta.id, savedName: savedMeta.name }), 300)
+    const timer = window.setTimeout(
+      () => saveDraft(sessionKey, design, { savedId: savedMeta.id, savedName: savedMeta.name }),
+      300,
+    )
     return () => window.clearTimeout(timer)
-  }, [design, savedMeta, loaded])
+  }, [design, savedMeta, loaded, sessionKey])
+
+  // 缺陷 4：卸载（切会话/离开工作台）前立即落草稿，避免 300ms 防抖窗口内丢内容
+  const latestDraftRef = useRef({ design, savedMeta, sessionKey, loaded })
+  latestDraftRef.current = { design, savedMeta, sessionKey, loaded }
+  useEffect(
+    () => () => {
+      const { design: d, savedMeta: m, sessionKey: k, loaded: l } = latestDraftRef.current
+      if (l) saveDraft(k, d, { savedId: m.id, savedName: m.name })
+    },
+    [],
+  )
 
   // 保存到后端（缺陷 16/17）：未命名先弹命名框，已命名直接 PUT
   const handleSave = () => {
@@ -164,6 +203,12 @@ export default function WorkspacePage() {
       setSavedMeta({ id: r.id, name: r.name })
       // B3-1：新建保存为正式设计后迁移到 design-{id} 协作房间（保留 ydoc/撤销栈，不整页刷新）
       store.reconnectRoom(wsUrl, `design-${r.id}`)
+      // 缺陷 4：URL 补 design 参数（刷新后 room 派生一致）+ 会话绑定该设计
+      const next = new URLSearchParams(searchParams)
+      next.set('design', String(r.id))
+      next.set(SESSION_PARAM, sessionKey)
+      setSearchParams(next, { replace: true })
+      sessionApi.bindDesign(sessionKey, r.id).catch(() => {})
       lastSavedJsonRef.current = JSON.stringify(design)
       setUnsaved(false)
       setSaveDialogOpen(false)
@@ -201,8 +246,98 @@ export default function WorkspacePage() {
   // AI 生成中：画布锁定（v2.2 §8.8）
   const [generating, setGenerating] = useState(false)
 
+  // ---- 缺陷 4：会话（列表 / 快照 / 老数据迁移）----
+  const [sessions, setSessions] = useState<SessionMeta[]>([])
+  const [sessionsLoading, setSessionsLoading] = useState(false)
+  const [sessionError, setSessionError] = useState('')
+  const [snapshots, setSnapshots] = useState<SessionSnapshot[]>(() => loadSnapshots(sessionKey))
+
+  const refreshSessions = useCallback(async () => {
+    setSessionsLoading(true)
+    try {
+      const r = await sessionApi.list(20)
+      setSessions(r.sessions)
+    } catch (err) {
+      setSessionError(`会话列表加载失败：${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      setSessionsLoading(false)
+    }
+  }, [])
+
+  // 进入工作台：先跑一次性老数据迁移（失败下次重试），再确保本会话存在（幂等），最后拉列表
+  useEffect(() => {
+    let cancelled = false
+    const run = async () => {
+      const report = await migrateLegacySessions()
+      if (report.error && !cancelled) {
+        setSessionError(`历史会话迁移未完成（下次进入自动重试）：${report.error}`)
+      }
+      try {
+        await sessionApi.ensure(sessionKey)
+      } catch (err) {
+        if (!cancelled) {
+          setSessionError(`会话创建失败（当前仅本地可见）：${err instanceof Error ? err.message : String(err)}`)
+        }
+      }
+      if (!cancelled) await refreshSessions()
+    }
+    void run()
+    return () => {
+      cancelled = true
+    }
+  }, [sessionKey, refreshSessions])
+
+  /** 切换会话：换 URL 即换会话（重挂载，零状态泄漏） */
+  const handleSwitchSession = (key: string) => {
+    const roomParam = searchParams.get('room')
+    navigate(`/workspace?session=${encodeURIComponent(key)}${roomParam ? `&room=${encodeURIComponent(roomParam)}` : ''}`)
+  }
+
+  /** 新建会话：全新随机 sessionId + 空白画布（不继承任何历史） */
+  const handleNewSession = () => {
+    navigate(`/workspace?session=${randomSessionKey()}&from=blank`)
+  }
+
+  /** 删除会话（4b：二次确认；连带服务端消息与本地快照） */
+  const handleDeleteSession = (key: string) => {
+    const target = sessions.find((x) => x.session_id === key)
+    if (!window.confirm(`删除会话「${target?.title ?? key}」？该会话的消息与快照将被删除且不可恢复。`)) return
+    void (async () => {
+      try {
+        await sessionApi.remove(key)
+        clearSnapshots(key)
+        if (key === sessionKey) {
+          handleNewSession()
+          return
+        }
+        await refreshSessions()
+      } catch (err) {
+        setSessionError(`删除会话失败：${err instanceof Error ? err.message : String(err)}`)
+      }
+    })()
+  }
+
+  const handleSaveSessionSnapshot = (label: string) => {
+    setSnapshots(saveSnapshot(sessionKey, design, label))
+  }
+
+  /** 回退到会话快照（4b：二次确认 + 可撤销） */
+  const handleRestoreSessionSnapshot = (id: string) => {
+    const snap = snapshots.find((x) => x.id === id)
+    if (!snap) return
+    if (!window.confirm(`回退到快照「${snap.label || '未命名快照'}」？当前画布内容会被覆盖（可撤销）。`)) return
+    store.pushSnapshot()
+    setUndoCount((c) => c + 1)
+    store.resetDesign(snap.design)
+    setSelectedIds(new Set())
+  }
+
+  const handleDeleteSessionSnapshot = (id: string) => {
+    setSnapshots(deleteSnapshot(sessionKey, id))
+  }
+
   // ---- 缺陷 3：美化阶段（版面确认 + 效果白名单 + 基础版对照）----
-  const beautifyScope = designParam ?? undefined
+  const beautifyScope = sessionKey
   const [baseSnapshot, setBaseSnapshot] = useState<BaseSnapshot | null>(() => loadBaseSnapshot(beautifyScope))
   const [layoutLocked, setLayoutLocked] = useState(false)
   const [effectsPreview, setEffectsPreview] = useState(false)
@@ -255,7 +390,9 @@ export default function WorkspacePage() {
       store.pushSnapshot()
       setUndoCount((c) => c + 1)
       store.resetDesign(resp.design)
+      sessionApi.recordToolCall(sessionKey, `apply-effects:${key}`, true).catch(() => {})
     } catch (err) {
+      sessionApi.recordToolCall(sessionKey, `apply-effects:${key}`, false).catch(() => {})
       setBeautifyError(err instanceof Error ? `效果被拒绝：${err.message}` : '效果应用失败')
     } finally {
       setBeautifying(false)
@@ -778,7 +915,23 @@ export default function WorkspacePage() {
                   )
                 )}
                 {activePanel === 'ai' && (
+                  <div className="flex h-full flex-col">
+                    <SessionBar
+                      sessionKey={sessionKey}
+                      sessions={sessions}
+                      loading={sessionsLoading}
+                      error={sessionError}
+                      onSwitch={handleSwitchSession}
+                      onNew={handleNewSession}
+                      onDelete={handleDeleteSession}
+                      snapshots={snapshots}
+                      onSaveSnapshot={handleSaveSessionSnapshot}
+                      onRestoreSnapshot={handleRestoreSessionSnapshot}
+                      onDeleteSnapshot={handleDeleteSessionSnapshot}
+                    />
+                    <div className="min-h-0 flex-1">
                   <AIChatPanel
+                    sessionKey={sessionKey}
                     onGeneratingChange={setGenerating}
                     onGenerate={(generated) => {
                       store.resetDesign(generated)
@@ -788,7 +941,6 @@ export default function WorkspacePage() {
                     onIncrementalEdit={handleIncrementalEdit}
                     onUndo={handleUndo}
                     canUndo={undoCount > 0}
-                    historyScope={designParam ?? undefined}
                     onComplianceRestore={(fix) => {
                       // D1：还原单条合规修正——updateNode 走 Yjs 事务（LOCAL_ORIGIN，单撤销步）
                       store.updateNode(fix.node_id, (n) => ({
@@ -804,6 +956,8 @@ export default function WorkspacePage() {
                       setSelectedIds(new Set())
                     }}
                   />
+                    </div>
+                  </div>
                 )}
                 {activePanel === 'beautify' && (
                   <BeautifyPanel

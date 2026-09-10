@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
@@ -15,6 +15,8 @@ import {
   type ExploreArchive,
   type ExploreOption,
 } from '@/lib/exploreArchive'
+import { createSessionScope } from '@/lib/sessionScope'
+import { sessionApi, type AgentState } from '@/lib/sessionApi'
 import {
   detectQuickCommands,
   getFollowupMode,
@@ -34,6 +36,10 @@ import {
 interface ChatMessage {
   role: 'user' | 'assistant'
   text: string
+  /** 归属会话（缺陷 4：写入盖章、读取校验，防止跨会话串写） */
+  sessionId?: string
+  /** 仅本地占位（欢迎语），不落库 */
+  ephemeral?: boolean
 }
 
 /** B2-2/D1：单条合规拉回明细（与后端 ComplianceFix 对齐） */
@@ -130,34 +136,17 @@ interface PendingFollowup {
   answers: Record<string, string>
 }
 
-/** 会话持久化 key（缺陷 10：切面板/刷新不丢历史）。 */
-const CHAT_STORAGE_KEY = 'design-chat-history'
 const MAX_HISTORY = 50
 
-/** 按设计隔离的聊天存储 key（P0-4）：有 scope（打开已存设计）按 design-{id} 分 key；
- * 无 scope（空白/模板/草稿/新建未保存路径）退回全局 key，向后兼容既有 localStorage 数据。
- * 边界：未保存路径多标签并发互踩不在本期消除范围（记录于 docs/缺陷与差距清单.md P0-4）。 */
-export function chatStorageKey(scope: string | undefined): string {
-  return scope ? `${CHAT_STORAGE_KEY}-${scope}` : CHAT_STORAGE_KEY
+/** 服务器历史与本地新消息都为空（无用例可渲染） */
+function mergesEmpty(list: { text: string }[]): boolean {
+  return list.length === 0
 }
 
-function loadHistory(key: string): ChatMessage[] {
-  try {
-    const raw = localStorage.getItem(key)
-    if (raw) {
-      const parsed = JSON.parse(raw) as unknown
-      if (
-        Array.isArray(parsed) &&
-        parsed.every((m) => m && typeof m === 'object' && typeof (m as ChatMessage).role === 'string' && typeof (m as ChatMessage).text === 'string')
-      ) {
-        return parsed as ChatMessage[]
-      }
-    }
-  } catch {
-    /* 损坏数据忽略，回退默认欢迎语 */
-  }
-  return []
-}
+const WELCOME_TEXT = '你好！我是 AI 设计助手。输入你的需求，我帮你生成设计稿。\n例如：「设计一个电商优惠券领取页，红色调，圆角风格」\n快捷指令：「直接生成」（跳过追问）、「问详细一点」（本次详细追问）、「简单点」（本次精简追问）'
+
+/** 欢迎语：ephemeral（不落库），仅在无真实消息时占位，保持既有消息下标语义不变 */
+const WELCOME_MESSAGE: ChatMessage = { role: 'assistant', text: WELCOME_TEXT, ephemeral: true }
 
 interface AIChatPanelProps {
   onGenerate: (design: DesignNode) => void
@@ -170,27 +159,27 @@ interface AIChatPanelProps {
   /** P0-1 撤销：回到上一版（快照） */
   onUndo?: () => void
   canUndo?: boolean
-  /** P0-4 聊天历史隔离 scope：打开已存设计时传 design id，按设计分 key；缺省保持全局 key */
-  historyScope?: string
+  /** 缺陷 4：当前画布会话 id（消息 / Agent 状态 / 工具调用记录都按它存取；替代原 historyScope） */
+  sessionKey: string
   /** D1：还原单条合规修正（把节点字段改回 original）——上层负责 Yjs 事务（单撤销步） */
   onComplianceRestore?: (fix: ComplianceFixItem) => void
   /** D3：使用某个探索方案（上层 pushSnapshot + resetDesign，可撤销回原稿） */
   onUseExploreDesign?: (design: DesignNode) => void
 }
 
-export default function AIChatPanel({ onGenerate, onGeneratingChange, design, onIncrementalEdit, onUndo, canUndo, historyScope, onComplianceRestore, onUseExploreDesign }: AIChatPanelProps) {
+export default function AIChatPanel({ onGenerate, onGeneratingChange, design, onIncrementalEdit, onUndo, canUndo, sessionKey, onComplianceRestore, onUseExploreDesign }: AIChatPanelProps) {
   const [input, setInput] = useState('')
-  const storageKey = chatStorageKey(historyScope)
-  const [messages, setMessages] = useState<ChatMessage[]>(() => {
-    const history = loadHistory(storageKey)
-    if (history.length > 0) return history
-    return [
-      {
-        role: 'assistant',
-        text: '你好！我是 AI 设计助手。输入你的需求，我帮你生成设计稿。\n例如：「设计一个电商优惠券领取页，红色调，圆角风格」\n快捷指令：「直接生成」（跳过追问）、「问详细一点」（本次详细追问）、「简单点」（本次精简追问）',
-      },
-    ]
-  })
+  /** 会话作用域：本项目会话数据的唯一读写入口（盖章写入 + 过滤读取，跨会话访问抛错） */
+  const scope = useMemo(() => createSessionScope(sessionKey), [sessionKey])
+  const [messages, setMessages] = useState<ChatMessage[]>([WELCOME_MESSAGE])
+  /** 消息是否已从服务端加载完成——未完成前不写库，避免把上一会话的内容写进新会话 */
+  const [sessionReady, setSessionReady] = useState(false)
+  /** 会话同步失败提示（降级为"仅本地可见"，不阻塞对话） */
+  const [sessionError, setSessionError] = useState('')
+  /** 已落库消息条数（增量追加用；切会话时归零） */
+  const persistedRef = useRef(0)
+  /** 已落库的会话 key：与当前 sessionKey 不一致时禁止写入（防串写的第二道闸） */
+  const persistedScopeRef = useRef(sessionKey)
   const [error, setError] = useState('')
   const [generating, setGenerating] = useState(false)
   const [lastPrompt, setLastPrompt] = useState('')
@@ -203,22 +192,119 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
   const [exploreResult, setExploreResult] = useState<ExploreResult | null>(null)
   const [exploring, setExploring] = useState(false)
   /** 缺陷 1：已选定方案的留档（含两套详情，刷新后可还原"我选过哪个方案"） */
-  const [archive, setArchive] = useState<ExploreArchive | null>(() => loadExploreArchive(historyScope))
+  const [archive, setArchive] = useState<ExploreArchive | null>(() => loadExploreArchive(sessionKey))
   /** 缺陷 1：已选档里展开"另一方案"详情 / 重新选择（回到二选一状态） */
   const [viewOther, setViewOther] = useState(false)
   const [rechoosing, setRechoosing] = useState(false)
 
   // 切换 scope（换设计）时重挂留档，避免看到别的会话的选择记录
   useEffect(() => {
-    setArchive(loadExploreArchive(historyScope))
+    setArchive(loadExploreArchive(sessionKey))
     setViewOther(false)
     setRechoosing(false)
-  }, [historyScope])
+  }, [sessionKey])
 
-  // 会话持久化（缺陷 10）：切走面板/刷新后恢复历史
+  // 缺陷 4：会话数据以服务端为权威来源——挂载/切换会话时只加载本会话的消息与 Agent 状态
+  const prevSessionRef = useRef(sessionKey)
   useEffect(() => {
-    localStorage.setItem(storageKey, JSON.stringify(messages.slice(-MAX_HISTORY)))
-  }, [messages, storageKey])
+    let cancelled = false
+    // 只在"真的换了会话"时重置本地会话态；挂载首跑不重置（避免吞掉用户刚落下的消息）
+    const switched = prevSessionRef.current !== sessionKey
+    prevSessionRef.current = sessionKey
+    if (switched) {
+      setMessages([WELCOME_MESSAGE])
+      setPending(null)
+      setFallbackResult(null)
+      setComplianceReport(null)
+      setExploreResult(null)
+      setViewOther(false)
+      setRechoosing(false)
+      setLastPrompt('')
+    }
+    setSessionReady(false)
+    setSessionError('')
+    persistedRef.current = 0
+    persistedScopeRef.current = sessionKey
+
+    sessionApi
+      .messages(sessionKey, MAX_HISTORY)
+      .then((r) => {
+        if (cancelled) return
+        const incoming: ChatMessage[] = r.messages.map((m) => ({ role: m.role, text: m.text, sessionId: sessionKey }))
+        const { messages: own, dropped } = scope.filter(incoming)
+        if (dropped > 0) setSessionError(`已忽略 ${dropped} 条非本会话消息（跨会话读取被拒绝）`)
+        // 合并而非覆盖：加载期间用户可能已发出新消息，直接替换会把它们吞掉；
+        // 欢迎语保持在首位（与改造前一致），避免按索引 key 的节点错位
+        setMessages((prev) => {
+          const keepsWelcome = prev.some((m) => m.ephemeral)
+          const localNew = prev.filter((m) => !m.ephemeral)
+          const merged = [...own, ...localNew]
+          if (mergesEmpty(merged)) return keepsWelcome ? [WELCOME_MESSAGE] : []
+          return keepsWelcome ? [WELCOME_MESSAGE, ...merged] : merged
+        })
+        persistedRef.current = own.length
+        setSessionReady(true)
+      })
+      .catch((err) => {
+        if (cancelled) return
+        setSessionError(`会话同步失败：${err instanceof Error ? err.message : String(err)}（当前仅本地可见）`)
+        setSessionReady(true)
+      })
+
+    sessionApi
+      .get(sessionKey)
+      .then((detail) => {
+        if (cancelled) return
+        const last = (detail.agent_state as AgentState)?.lastPrompt
+        if (typeof last === 'string') setLastPrompt(last)
+      })
+      .catch(() => {
+        /* Agent 状态拉取失败不阻塞对话 */
+      })
+
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionKey])
+
+  // 缺陷 4：增量落库——只追加"尚未落库"的消息；scope 未切换完成前一律不写（防串写）
+  useEffect(() => {
+    if (!sessionReady) return
+    if (persistedScopeRef.current !== sessionKey) return
+    const persistable = messages.filter((m) => !m.ephemeral)
+    if (persistable.length <= persistedRef.current) return
+    const pending = persistable.slice(persistedRef.current)
+    persistedRef.current = persistable.length
+    const stamped = scope.stamp(pending)
+    sessionApi
+      .append(
+        sessionKey,
+        stamped.map(({ role, text }) => ({ role, text })),
+      )
+      .catch((err) => {
+        setSessionError(`消息未同步到会话：${err instanceof Error ? err.message : String(err)}`)
+      })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages, sessionKey, sessionReady])
+
+  // 缺陷 4：Agent 状态（上次需求）随会话持久化——换画布后「重试上次需求」不会串到别的会话
+  useEffect(() => {
+    if (!sessionReady || !lastPrompt || persistedScopeRef.current !== sessionKey) return
+    const timer = window.setTimeout(() => {
+      sessionApi.append(sessionKey, [], { lastPrompt }).catch(() => {
+        /* 状态同步失败不阻塞对话 */
+      })
+    }, 400)
+    return () => window.clearTimeout(timer)
+  }, [lastPrompt, sessionKey, sessionReady])
+
+  /** 工具调用记账（缺陷 4）：失败不影响主流程，不含任何用户文本 */
+  const recordToolCall = (kind: string, ok: boolean) => {
+    sessionApi.recordToolCall(sessionKey, kind, ok).catch(() => {
+      /* 记账失败忽略 */
+    })
+  }
 
   const QUICK_PROMPTS = [
     '设计一个电商优惠券领取页，红色调，圆角风格',
@@ -243,6 +329,7 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
         method: 'POST',
         body: JSON.stringify(body),
       })
+      recordToolCall(isEdit ? 'incremental-edit' : 'generate', !resp.fallback)
       if (resp.fallback) {
         if (isEdit) {
           // 增量修改失败：画布保持原样（后端兜底返回原树），提示重试
@@ -297,6 +384,7 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
         },
       ])
     } catch (err) {
+      recordToolCall(isEdit ? 'incremental-edit' : 'generate', false)
       setError(err instanceof Error ? err.message : '生成失败，请稍后重试')
       setMessages((m) => [...m, { role: 'assistant', text: '生成失败：' + (err instanceof Error ? err.message : '未知错误') }])
     } finally {
@@ -351,8 +439,10 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
         method: 'POST',
         body: JSON.stringify({ prompt }),
       })
+      recordToolCall('explore', true)
       setExploreResult(resp)
     } catch (err) {
+      recordToolCall('explore', false)
       setMessages((m) => [...m, { role: 'assistant', text: `方案探索失败：${err instanceof Error ? err.message : String(err)}` }])
     } finally {
       setExploring(false)
@@ -377,7 +467,7 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
       chosenIndex: index,
     }
     setArchive(next)
-    saveExploreArchive(historyScope, next)
+    saveExploreArchive(sessionKey, next)
     setExploreResult(null)
     setViewOther(false)
     setRechoosing(false)
@@ -434,12 +524,14 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
         method: 'POST',
         body: JSON.stringify({ prompt, mode }),
       })
+      recordToolCall('questions', true)
       if (resp.questions.length > 0) {
         setPending({ prompt, questions: resp.questions, index: 0, answers: {} })
         return
       }
       await runGenerate(prompt)
     } catch {
+      recordToolCall('questions', false)
       await runGenerate(prompt)
     } finally {
       setBusy(false)
@@ -516,6 +608,11 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
           </div>
         )}
         {error && <p className="text-xs text-destructive">{error}</p>}
+        {sessionError && (
+          <p className="text-[11px] text-amber-600" data-testid="session-sync-error">
+            {sessionError}
+          </p>
+        )}
       </div>
       {pending && currentQuestion && (
         <div className="space-y-2 border-t p-3" data-testid="followup-card">
@@ -551,12 +648,18 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
             className="w-full text-center text-[11px] text-muted-foreground hover:text-foreground"
             data-testid="chat-clear-history"
             onClick={() => {
-              setMessages([
-                {
-                  role: 'assistant',
-                  text: '你好！我是 AI 设计助手。输入你的需求，我帮你生成设计稿。',
-                },
-              ])
+              // 缺陷 4b：清空会话需二次确认；只清当前 sessionId 的消息与 Agent 状态
+              if (!window.confirm('清空当前会话的消息与 Agent 状态？（不影响其他画布会话）')) return
+              setMessages([WELCOME_MESSAGE])
+              setPending(null)
+              setFallbackResult(null)
+              setComplianceReport(null)
+              setExploreResult(null)
+              setLastPrompt('')
+              persistedRef.current = 0
+              sessionApi.clear(sessionKey).catch((err) => {
+                setSessionError(`清空会话失败：${err instanceof Error ? err.message : String(err)}`)
+              })
             }}
           >
             清空会话

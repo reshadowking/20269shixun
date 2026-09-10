@@ -8,7 +8,7 @@ from .config import get_settings
 from .db import init_db
 from .logging_config import init_generate_logging
 from .otel import init_otel
-from .routers import assist, auth, designs, export, generate, health, images, llm_config, tokens
+from .routers import assist, auth, designs, export, generate, health, images, llm_config, sessions, tokens
 
 
 @asynccontextmanager
@@ -38,6 +38,7 @@ app.include_router(assist.router)
 app.include_router(llm_config.router)
 app.include_router(export.router)
 app.include_router(designs.router)
+app.include_router(sessions.router)
 app.include_router(images.router)
 
 
