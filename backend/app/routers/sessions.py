@@ -24,7 +24,9 @@ router = APIRouter(tags=["sessions"])
 def _owner_id(db: DbSession, username: str) -> int:
     user = db.execute(select(User).where(User.username == username)).scalar_one_or_none()
     if user is None:
-        raise HTTPException(status_code=401, detail="用户不存在")
+        # 403 而非 401：token 本身合法，只是库里没有该用户。用 401 会触发前端的
+        # "清凭证 + 跳登录"逻辑，把一次数据异常放大成整站掉线（见排查报告 P1-2）
+        raise HTTPException(status_code=403, detail="账号不存在，请重新登录")
     return user.id
 
 

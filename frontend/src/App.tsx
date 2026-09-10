@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { Navigate, Route, Routes } from 'react-router-dom'
 
 import ApiConfigPage from '@/pages/ApiConfigPage'
@@ -5,7 +6,7 @@ import HomePage from '@/pages/HomePage'
 import LoginPage from '@/pages/LoginPage'
 import WorkspacePage from '@/pages/WorkspacePage'
 
-import { getToken } from '@/lib/api'
+import { api, getToken } from '@/lib/api'
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   if (!getToken()) {
@@ -17,6 +18,15 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
 }
 
 export default function App() {
+  // P2-1：启动时校验一次凭证（token 存在但已失效 → 由 api() 的 401 处理清凭证并跳登录），
+  // 消除"看着已登录、实际请求全 401"的中间态
+  useEffect(() => {
+    if (!getToken()) return
+    api('/api/auth/me').catch(() => {
+      /* 401 已由 handleUnauthorized 处理；其它错误（后端未启动）不阻塞使用 */
+    })
+  }, [])
+
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />

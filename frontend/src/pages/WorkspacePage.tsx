@@ -276,7 +276,7 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
         await sessionApi.ensure(sessionKey)
       } catch (err) {
         if (!cancelled) {
-          setSessionError(`会话创建失败（当前仅本地可见）：${err instanceof Error ? err.message : String(err)}`)
+          setSessionError(`会话同步失败（当前仅本地可见）：${err instanceof Error ? err.message : String(err)}`)
         }
       }
       if (!cancelled) await refreshSessions()
