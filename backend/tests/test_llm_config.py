@@ -126,3 +126,35 @@ class TestRuntimeTakesPrecedence:
         llm = LLMClient()
         assert llm.cfg("llm_base_url") == "https://api.example.com/v1"
         assert llm.cfg("llm_model") == "test-model"
+
+
+class TestTestIsolationSafety:
+    """事故回归（2026-09-10）：全量 pytest 曾把开发者保存的 LLM 运行时配置删掉。"""
+
+    def test_runtime_config_path_is_redirected_in_tests(self):
+        from app import llm_runtime
+
+        # 测试期必须指向临时目录，而不是 backend/data/llm-config.json
+        assert llm_runtime.CONFIG_FILE.name == "llm-config.json"
+        assert "llm-runtime" in str(llm_runtime.CONFIG_FILE), (
+            f"测试期配置路径未重定向到临时目录：{llm_runtime.CONFIG_FILE}（会造成开发者配置被删）"
+        )
+        assert llm_runtime.CONFIG_FILE.parent != llm_runtime.DATA_DIR
+
+    def test_saving_runtime_config_does_not_touch_dev_file(self, client, auth_headers):
+        """保存运行时配置只写测试临时文件；开发者真实配置路径不受影响。"""
+        from app import llm_runtime
+
+        before = llm_runtime.CONFIG_FILE.exists()
+        resp = client.post(
+            "/api/llm-config",
+            json={"llm_base_url": "https://example.invalid/v1", "llm_api_key": "sk-test-not-real"},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        real = llm_runtime.DATA_DIR / "llm-config.json"
+        # 真实路径要么不存在、要么未被这次测试改写（存在时内容不含测试值）
+        if real.exists():
+            assert "example.invalid" not in real.read_text(encoding="utf-8")
+        assert llm_runtime.CONFIG_FILE != real
+        assert llm_runtime.CONFIG_FILE.exists() or not before
