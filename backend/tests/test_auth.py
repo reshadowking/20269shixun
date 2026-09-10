@@ -57,3 +57,55 @@ def test_login_extremely_long_input(client):
 def test_login_weird_types(client):
     resp = client.post("/api/auth/login", json={"username": 123, "password": ["x"]})
     assert resp.status_code == 422
+
+
+class TestPasswordHashSaltMigration:
+    """P1-1 事故回归：口令盐与 jwt_secret 解耦——轮换密钥不再把所有账号锁在门外。"""
+
+    def test_legacy_hash_still_logs_in_and_gets_upgraded(self, client):
+        """库里存的是"旧实现（jwt_secret 当盐）"的哈希时：仍能登录，且登录后已升级到当前盐。"""
+        import hashlib
+
+        from app.db import SessionLocal
+        from app.models import User
+        from app.security import get_settings
+
+        legacy_hash = hashlib.sha256(
+            f"{get_settings().jwt_secret}::demo123".encode()
+        ).hexdigest()
+        db = SessionLocal()
+        try:
+            user = db.query(User).filter(User.username == "demo").first()
+            assert user is not None, "测试前置：demo 用户应由其它用例创建"
+            user.password_hash = legacy_hash
+            db.commit()
+        finally:
+            db.close()
+
+        resp = client.post("/api/auth/login", json={"username": "demo", "password": "demo123"})
+        assert resp.status_code == 200, resp.text
+
+        from app.security import hash_password
+
+        db = SessionLocal()
+        try:
+            user = db.query(User).filter(User.username == "demo").first()
+            assert user.password_hash == hash_password("demo123")  # 已升级到当前盐
+            assert user.password_hash != legacy_hash
+        finally:
+            db.close()
+
+    def test_new_scheme_hash_unchanged_by_jwt_secret(self):
+        """哈希只依赖 password_salt：改 .env 的 JWT_SECRET 不会改变同一口令的哈希。"""
+        import hashlib
+
+        from app.security import get_settings, hash_password
+
+        assert hash_password("demo123") == hashlib.sha256(
+            f"{get_settings().password_salt}::demo123".encode()
+        ).hexdigest()
+        assert get_settings().password_salt != get_settings().jwt_secret
+
+    def test_wrong_password_still_rejected(self, client, auth_headers):
+        resp = client.post("/api/auth/login", json={"username": "demo", "password": "wrong-password"})
+        assert resp.status_code == 401
