@@ -74,20 +74,26 @@ test('0 条：空状态，无「查看更多」按钮', async ({ page }) => {
   await expect(page.getByTestId('home-collapse')).toHaveCount(0)
 })
 
+/** 该 spec 只清理自己的前缀数据，因此条数断言必须"相对基线"：共享库（账号已有设计）下也能跑 */
 test('1 条 / 8 条：全部展示，无「查看更多」（不允许空按钮）', async ({ page }) => {
   await loginHome(page)
   await cleanPrefix(page)
+  const base = (await api<{ total: number }>(page, '/api/designs')).total
   const seeded = await seed(page, [`${PREFIX}1`])
   try {
     await page.reload()
-    await expect(cards(page)).toHaveCount(1, { timeout: 10_000 })
-    await expect(page.getByTestId('home-load-more')).toHaveCount(0)
+    // 边界不变式：可见卡片数 = min(8, 总数)；仅当总数 > 8 才出现「查看更多」
+    await expect(cards(page)).toHaveCount(Math.min(8, base + 1), { timeout: 10_000 })
+    await expect(page.getByTestId('home-load-more')).toHaveCount(base + 1 > 8 ? 1 : 0)
 
-    await seed(page, Array.from({ length: 7 }, (_, i) => `${PREFIX}${i + 2}`))
-    await page.reload()
-    await expect(cards(page)).toHaveCount(8, { timeout: 10_000 })
-    await expect(page.getByTestId('home-load-more')).toHaveCount(0)
-    await expect(page.getByTestId('home-collapse')).toHaveCount(0)
+    if (base === 0) {
+      // 空库环境（CI/一次性库）下补齐严格边界：正好 8 条 → 全展示且无按钮
+      await seed(page, Array.from({ length: 7 }, (_, i) => `${PREFIX}${i + 2}`))
+      await page.reload()
+      await expect(cards(page)).toHaveCount(8, { timeout: 10_000 })
+      await expect(page.getByTestId('home-load-more')).toHaveCount(0)
+      await expect(page.getByTestId('home-collapse')).toHaveCount(0)
+    }
   } finally {
     const { designs } = await api<{ designs: Array<{ id: number; name: string }> }>(page, '/api/designs')
     await remove(page, designs.filter((d) => d.name.startsWith(PREFIX)).map((d) => d.id))
