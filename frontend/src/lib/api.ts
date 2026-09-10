@@ -33,6 +33,23 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * 401 统一处理（P0-3）：清凭证 + 跳登录页。
+ *
+ * 原实现只 clearAuth() 不跳转，于是一条 401 会连锁：凭证被清 → 后续所有请求都没带 token →
+ * 全部 401，用户看到的是"满屏 401"而不是登录页。这里补上跳转（带 redirect 回来路）。
+ */
+export function handleUnauthorized(): void {
+  clearAuth()
+  try {
+    if (window.location.pathname.startsWith('/login')) return // 已在登录页，避免自我重定向
+    const redirect = encodeURIComponent(`${window.location.pathname}${window.location.search}`)
+    window.location.assign(`/login?redirect=${redirect}`)
+  } catch {
+    /* 非浏览器环境（测试/SSR）：忽略跳转 */
+  }
+}
+
 export async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -43,7 +60,7 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
 
   const resp = await fetch(`${API_BASE}${path}`, { ...options, headers })
   if (resp.status === 401) {
-    clearAuth()
+    handleUnauthorized()
     throw new ApiError(401, '登录已过期，请重新登录')
   }
   if (!resp.ok) {
