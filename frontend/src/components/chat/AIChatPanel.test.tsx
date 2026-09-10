@@ -301,6 +301,35 @@ describe('D1 合规逐项报告（B2-2 明细 → UI）', () => {
   })
 })
 
+describe('演示模式显式标注（未配置模型 Key = 预置模板稿）', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    localStorage.clear()
+  })
+
+  it('mock=true：生成文案明确标注"演示模式…预置模板（非模型生成）"', async () => {
+    localStorage.clear()
+    const fetchMock = mockFetch({ questions: [] }, { design: DESIGN, template: 'login', compliance: 100, violations: 0, fallback: false, mock: true })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<AIChatPanel onGenerate={() => {}} />)
+    typeAndSend('设计一个页面')
+    await waitFor(() => expect(screen.getByText(/已生成设计稿/)).toBeInTheDocument())
+    const msg = screen.getByText(/已生成设计稿/)
+    expect(msg).toHaveTextContent('演示模式')
+    expect(msg).toHaveTextContent('预置模板（非模型生成）')
+  })
+
+  it('mock 缺省（模型产物）：不出现演示模式标注', async () => {
+    localStorage.clear()
+    const fetchMock = mockFetch({ questions: [] })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<AIChatPanel onGenerate={() => {}} />)
+    typeAndSend('设计一个页面')
+    await waitFor(() => expect(screen.getByText(/已生成设计稿/)).toBeInTheDocument())
+    expect(screen.getByText(/已生成设计稿/)).not.toHaveTextContent('演示模式')
+  })
+})
+
 describe('D3 方案探索', () => {
   let fetchMock: ReturnType<typeof vi.fn>
 

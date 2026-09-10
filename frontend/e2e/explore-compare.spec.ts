@@ -3,9 +3,28 @@ import { expect, test } from '@playwright/test'
 /**
  * 缺陷 1 回归：方案预览与对比留档（真实后端 /api/generate/explore）。
  * 覆盖：二选一预览（缩略图/定位/关键差异）→ 选用 → 已选档查看另一方案（≤2 击、零额外生成）
- *      → 刷新后仍能还原选过的方案 → 重新选择需二次确认。
+ *      → 刷新后仍能还原选过的方案 → 重新选择需二次确认；
+ *      以及演示模式方案显式标注「演示模板稿」（未配置模型 Key 时不得混同为模型产物）。
  * 前置：后端 :8000 + Vite :5173（本用例不进协作房间同步，不依赖 y-websocket）。
  */
+
+test('演示模式：/api/generate 成功文案显式标注"演示模式"', async ({ page }) => {
+  test.setTimeout(90_000)
+  await page.goto(`/workspace?room=e2e-${Math.random().toString(36).slice(2, 10)}`)
+  if (await page.getByTestId('login-password').isVisible().catch(() => false)) {
+    await page.getByTestId('login-password').fill('demo123')
+    await page.getByTestId('login-submit').click()
+  }
+  await expect(page.getByTestId('workspace-page')).toBeVisible({ timeout: 15_000 })
+  await page.getByTestId('activity-ai').click()
+  await page.getByTestId('chat-input').fill('设计一个登录页面，简洁现代风格')
+  await page.getByTestId('chat-send').click()
+
+  const msg = page.getByTestId('chat-msg-assistant-2')
+  await expect(msg).toContainText('已生成设计稿', { timeout: 30_000 })
+  await expect(msg).toContainText('演示模式')
+  await expect(msg).toContainText('预置模板（非模型生成）')
+})
 
 test('方案探索：预览 → 选用 → 查看另一方案 → 刷新还原 → 重新选择（含二次确认）', async ({ page }) => {
   test.setTimeout(120_000)
@@ -39,11 +58,16 @@ test('方案探索：预览 → 选用 → 查看另一方案 → 刷新还原 �
   expect(diffLines - 1).toBeGreaterThanOrEqual(3)
   expect(diffLines - 1).toBeLessThanOrEqual(5)
 
+  // ①b 演示模式（未配置模型 Key）：来源必须显式标注为「演示模板稿」，不得混同为模型产物
+  await expect(page.getByTestId('explore-source-0')).toHaveAttribute('data-source', 'demo')
+  await expect(page.getByTestId('explore-source-0')).toContainText('演示模板稿')
+
   // ② 选用方案一（首次选定，无需二次确认）
   await page.getByTestId('explore-use-0').click()
   await expect(page.getByTestId('explore-result')).toHaveCount(0)
   await expect(page.getByTestId('explore-archive')).toBeVisible()
   await expect(page.getByTestId('explore-archive-chosen')).toContainText('方案一')
+  await expect(page.getByTestId('explore-archive-source')).toHaveAttribute('data-source', 'demo')
   await expect(page.getByText(/已加载「方案一/)).toBeVisible({ timeout: 10_000 })
 
   // ③ 已选档 → 查看另一方案：1 次点击即可见完整详情，且不触发任何重新生成

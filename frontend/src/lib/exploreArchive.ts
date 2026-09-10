@@ -17,8 +17,10 @@ export interface ExploreOption {
   template: string
   compliance: number
   violations: number
-  /** 该方案是否降级（模型不可用回退预置模板；mock 演示模式按后端约定为 false） */
+  /** 该方案是否降级（模型不可用回退预置模板） */
   fallback?: boolean
+  /** 是否演示模式产出（未配置模型 Key 的模板稿，须与模型产物显式区分） */
+  mock?: boolean
 }
 
 export interface ExploreOptionLists {

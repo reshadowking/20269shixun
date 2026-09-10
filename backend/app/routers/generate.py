@@ -29,6 +29,8 @@ class GenerateResponse(BaseModel):
     violations: int
     style_attrs: int
     fallback: bool
+    # 演示模式产出（未配置模型 Key：模板稿即演示稿）——前端须与模型产物显式区分
+    mock: bool = False
     error: str = ""
     # B2-2：逐项合规拉回明细 [{node_id, field, original, corrected}]（前端逐项报告/还原用）
     violations_detail: list = []
@@ -51,6 +53,7 @@ def generate(req: GenerateRequest, _user: str = Depends(get_current_user)):
         violations=result.violations,
         style_attrs=result.style_attrs,
         fallback=result.fallback,
+        mock=result.mock,
         error=result.error,
         violations_detail=result.violations_detail,
     )
@@ -173,8 +176,9 @@ async def explore_options(req: ExploreRequest, _user: str = Depends(get_current_
                 "template": result.template,
                 "compliance": result.compliance,
                 "violations": result.violations,
-                # 缺陷 1：逐方案降级标记——前端必须能把回退预置模板的方案与真实生成结果区分开
+                # 缺陷 1：逐方案来源标记——降级（fallback）与演示模板稿（mock）都必须能与模型产物区分
                 "fallback": result.fallback,
+                "mock": result.mock,
             }
         )
     return {"options": options, "degraded": degraded}

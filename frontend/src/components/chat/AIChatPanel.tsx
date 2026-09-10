@@ -51,8 +51,11 @@ interface ExploreResult {
   degraded: boolean
 }
 
-/** 方案来源徽标（缺陷 1）：降级方案必须与真实生成结果明确区分，不得混同 */
-function SourceBadge({ fallback, testId }: { fallback?: boolean; testId: string }) {
+/**
+ * 方案来源徽标（缺陷 1）：模型产物 / 演示模板稿 / 降级回退必须显式区分，不得混同。
+ * 优先级：降级（模型不可用回退）> 演示模板稿（未配置模型 Key）> AI 生成。
+ */
+function SourceBadge({ fallback, mock, testId }: { fallback?: boolean; mock?: boolean; testId: string }) {
   if (fallback) {
     return (
       <span
@@ -61,6 +64,17 @@ function SourceBadge({ fallback, testId }: { fallback?: boolean; testId: string 
         data-source="fallback"
       >
         已降级 · 预置模板
+      </span>
+    )
+  }
+  if (mock) {
+    return (
+      <span
+        className="shrink-0 rounded-full border border-sky-300 bg-sky-50 px-1.5 py-0.5 text-[10px] text-sky-700"
+        data-testid={testId}
+        data-source="demo"
+      >
+        演示模板稿 · 未配置模型
       </span>
     )
   }
@@ -81,6 +95,8 @@ interface GenerateResponse {
   compliance: number
   violations: number
   fallback: boolean
+  /** 演示模式产出（未配置模型 Key：展示的是预置模板稿，须与模型产物区分） */
+  mock?: boolean
   error?: string
   violations_detail?: ComplianceFixItem[]
 }
@@ -269,11 +285,15 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
         resp.template === 'free'
           ? '\n当前为自由生成模式，建议使用顶部「✨智能优化布局」统一间距与对齐。'
           : ''
+      // 演示模式必须显式标注：未配置模型 Key 时给出的是预置模板稿，不得与模型产物混同
+      const sourceNote = resp.mock
+        ? '\n⚠️ 演示模式：未配置模型 Key，本稿为预置模板（非模型生成）。到「API 配置」填入 Key 后可调用模型。'
+        : ''
       setMessages((m) => [
         ...m,
         {
           role: 'assistant',
-          text: `已生成设计稿（模板：${resp.template === 'free' ? '自由生成' : resp.template}）✓ 规范兼容率 ${resp.compliance}%${freeNote}\n可在右侧属性面板继续编辑，或输入新需求重新生成。`,
+          text: `已生成设计稿（模板：${resp.template === 'free' ? '自由生成' : resp.template}）✓ 规范兼容率 ${resp.compliance}%${sourceNote}${freeNote}\n可在右侧属性面板继续编辑，或输入新需求重新生成。`,
         },
       ])
     } catch (err) {
@@ -593,7 +613,7 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
             <div key={i} className="rounded-md border bg-muted/40 p-2 text-xs" data-testid={`explore-option-${i}`}>
               <div className="flex items-start justify-between gap-2">
                 <div className="font-medium text-foreground">{opt.label}</div>
-                <SourceBadge fallback={opt.fallback} testId={`explore-source-${i}`} />
+                <SourceBadge fallback={opt.fallback} mock={opt.mock} testId={`explore-source-${i}`} />
               </div>
               <DesignThumbnail design={opt.design} testId={`explore-thumb-${i}`} />
               <div className="mt-0.5 text-muted-foreground">
@@ -630,7 +650,7 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
           <div className="rounded-md border bg-muted/40 p-2 text-xs">
             <div className="flex items-start justify-between gap-2">
               <span className="text-muted-foreground">已选定方案</span>
-              <SourceBadge fallback={archivedChosen.fallback} testId="explore-archive-source" />
+              <SourceBadge fallback={archivedChosen.fallback} mock={archivedChosen.mock} testId="explore-archive-source" />
             </div>
             <div className="mt-0.5 font-medium text-foreground" data-testid="explore-archive-chosen">
               {archivedChosen.label}
@@ -667,7 +687,7 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
                   <div key={index} className="rounded-md border bg-background p-2" data-testid={`explore-other-${index}`}>
                     <div className="flex items-start justify-between gap-2">
                       <div className="font-medium text-foreground">{opt.label}</div>
-                      <SourceBadge fallback={opt.fallback} testId={`explore-other-source-${index}`} />
+                      <SourceBadge fallback={opt.fallback} mock={opt.mock} testId={`explore-other-source-${index}`} />
                     </div>
                     <DesignThumbnail design={opt.design} testId={`explore-other-thumb-${index}`} />
                     <div className="mt-0.5 text-muted-foreground">
@@ -706,7 +726,7 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
                   <div key={i} className="rounded-md border bg-background p-2" data-testid={`explore-rechoose-${i}`}>
                     <div className="flex items-start justify-between gap-2">
                       <div className="font-medium text-foreground">{opt.label}</div>
-                      <SourceBadge fallback={opt.fallback} testId={`explore-rechoose-source-${i}`} />
+                      <SourceBadge fallback={opt.fallback} mock={opt.mock} testId={`explore-rechoose-source-${i}`} />
                     </div>
                     <DesignThumbnail design={opt.design} width={140} height={84} testId={`explore-rechoose-thumb-${i}`} />
                     <div className="mt-0.5 text-muted-foreground">

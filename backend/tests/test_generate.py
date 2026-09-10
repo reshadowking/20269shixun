@@ -262,6 +262,38 @@ class TestGenerateAPI:
         assert body["degraded"] is True
         assert [o["fallback"] for o in body["options"]] == [False, True]
 
+    def test_explore_exposes_demo_source(self, client, auth_headers):
+        """演示模式（未配置模型 Key）显式标注：方案带 mock=True，前端据此显示"演示模板稿"。"""
+        resp = client.post("/api/generate/explore", json={"prompt": "设计一个电商优惠券页"}, headers=auth_headers)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert all(isinstance(o["mock"], bool) for o in body["options"])
+        assert [o["mock"] for o in body["options"]] == [True, True]
+
+    def test_generate_response_carries_source_flags(self, client, auth_headers):
+        """/api/generate 同样区分演示模板稿与模型产物（fallback 与 mock 语义互斥且都向后兼容）。"""
+        body = client.post("/api/generate", json={"prompt": "设计一个登录页"}, headers=auth_headers).json()
+        assert body["mock"] is True  # 测试环境未配 Key = 演示模式
+        assert body["fallback"] is False
+
+    def test_generate_not_mock_when_model_configured_but_fails(self, client, auth_headers, monkeypatch):
+        """配了真实模型但调用失败：mock=False + fallback=True（与"演示模板稿"区分开）。
+
+        注意：本用例必须零网络——同时把 is_mock 置 False 并让真实调用立即抛错，
+        否则会真的打出去（本地若配了 Key 会消耗额度）。
+        """
+        from app.services import llm as llm_module
+
+        monkeypatch.setattr(llm_module.LLMClient, "is_mock", property(lambda self: False))
+
+        def boom(self, system, user, temperature):
+            raise RuntimeError("模拟模型不可用")
+
+        monkeypatch.setattr(llm_module.LLMClient, "_real_chat", boom)
+        body = client.post("/api/generate", json={"prompt": "设计一个登录页"}, headers=auth_headers).json()
+        assert body["mock"] is False
+        assert body["fallback"] is True
+
 
 class TestApiErrorDescription:
     def test_status_error_has_http_code(self):

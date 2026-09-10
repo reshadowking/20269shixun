@@ -341,6 +341,7 @@ class GenerateResult:
     style_attrs: int = 0
     time_ms: dict[str, float] = field(default_factory=dict)
     fallback: bool = False  # 是否走了兜底（mock/失败）
+    mock: bool = False  # 是否演示模式产出（未配置模型 Key：模板稿即"演示稿"，须与模型产物区分）
     error: str = ""  # LLM 失败原因（限流/超时等），供前端展示与排查
     # B2-2：逐项合规拉回明细（node_id/field/original/corrected），供逐项报告 UI
     violations_detail: list = field(default_factory=list)
@@ -460,6 +461,7 @@ def generate_design(prompt: str, client: LLMClient | None = None, current_design
         style_attrs=total,
         time_ms=times,
         fallback=fallback,
+        mock=client.is_mock,
         error=error,
         violations_detail=[asdict(f) for f in fixes],
     )

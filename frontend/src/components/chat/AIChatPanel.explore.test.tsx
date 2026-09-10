@@ -170,6 +170,39 @@ describe('AIChatPanel 方案预览与留档（缺陷 1）', () => {
     expect(screen.getByTestId('explore-archive-source')).toHaveAttribute('data-source', 'fallback')
   })
 
+  it('演示模式（mock）方案显式标注「演示模板稿」，与模型产物区分', async () => {
+    await explore(
+      explorePayload({
+        options: [
+          { label: '方案一 · 默认风格', design: LIGHT, template: 'login', compliance: 92, violations: 0, fallback: false, mock: true },
+          { label: '方案二 · 差异化风格', design: DARK, template: 'dashboard', compliance: 100, violations: 0, fallback: false, mock: false },
+        ],
+      }),
+    )
+    expect(screen.getByTestId('explore-source-0')).toHaveAttribute('data-source', 'demo')
+    expect(screen.getByTestId('explore-source-0')).toHaveTextContent('演示模板稿 · 未配置模型')
+    expect(screen.getByTestId('explore-source-1')).toHaveAttribute('data-source', 'model')
+    expect(screen.getByTestId('explore-source-1')).toHaveTextContent('AI 生成')
+
+    // 选定演示稿后留档同样保留来源标注（刷新后仍不混同）
+    await userEvent.click(screen.getByTestId('explore-use-0'))
+    expect(screen.getByTestId('explore-archive-source')).toHaveAttribute('data-source', 'demo')
+  })
+
+  it('来源徽标优先级：降级优先于演示（两者同时为真时不显示为演示稿）', async () => {
+    await explore(
+      explorePayload({
+        degraded: true,
+        options: [
+          { label: '方案一 · 默认风格', design: LIGHT, template: 'login', compliance: 92, violations: 0, fallback: true, mock: true },
+          { label: '方案二 · 差异化风格', design: DARK, template: 'dashboard', compliance: 100, violations: 0, fallback: false, mock: false },
+        ],
+      }),
+    )
+    expect(screen.getByTestId('explore-source-0')).toHaveAttribute('data-source', 'fallback')
+    expect(screen.getByTestId('explore-source-0')).toHaveTextContent('已降级 · 预置模板')
+  })
+
   it('关闭探索面板不影响已选留档', async () => {
     await explore()
     await userEvent.click(screen.getByTestId('explore-use-0'))
