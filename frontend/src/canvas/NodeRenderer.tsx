@@ -82,14 +82,16 @@ interface NodeRendererProps {
   highlightIds?: Set<string>
   /** 缺陷 4/14：组件内部交互写回 props */
   onComponentPropsChange?: (id: string, key: string, value: unknown) => void
-  onDragStart: (e: React.PointerEvent, id: string) => void
+  onDragStart?: (e: React.PointerEvent, id: string) => void
   /** 父容器是 free 布局时，子节点以绝对定位渲染（v2.2 §3.2） */
   isFreeChild?: boolean
   /** 选中节点开始缩放（free 子节点显示 8 向手柄） */
   onResizeStart?: (e: React.PointerEvent, id: string, dir: string) => void
+  /** 缩略图等只读投影：不输出 data-testid/指针事件，避免与画布选择器冲突（缺陷 1） */
+  decorative?: boolean
 }
 
-export function NodeRenderer({ node, selectedIds, highlightIds, onDragStart, isFreeChild = false, onResizeStart, onComponentPropsChange }: NodeRendererProps) {
+export function NodeRenderer({ node, selectedIds, highlightIds, onDragStart, isFreeChild = false, onResizeStart, onComponentPropsChange, decorative = false }: NodeRendererProps) {
   const style = node.style ?? {}
   const isSelected = selectedIds.has(node.id)
   const isHighlighted = Boolean(highlightIds?.has(node.id))
@@ -101,7 +103,7 @@ export function NodeRenderer({ node, selectedIds, highlightIds, onDragStart, isF
     outline: isHighlighted ? '2px solid #F59E0B' : isSelected ? '2px solid rgba(0, 82, 217, 0.65)' : undefined,
     outlineOffset: isSelected || isHighlighted ? 2 : undefined,
     animation: isHighlighted ? 'highlight-pulse 0.55s ease-in-out 3' : undefined,
-    cursor: 'pointer',
+    cursor: decorative ? 'default' : 'pointer',
     boxSizing: 'border-box',
     minWidth: node.type === 'text' ? undefined : 8,
     minHeight: node.type === 'text' ? undefined : 8,
@@ -120,24 +122,27 @@ export function NodeRenderer({ node, selectedIds, highlightIds, onDragStart, isF
           onComponentPropsChange={onComponentPropsChange}
           isFreeChild={style.layout === 'free'}
           onResizeStart={onResizeStart}
+          decorative={decorative}
         />
       ))
 
-  // 选中且为 free 子节点时显示 8 向缩放手柄
-  const handles = isSelected && isFreeChild && onResizeStart
+  // 选中且为 free 子节点时显示 8 向缩放手柄（缩略图等只读投影不显示）
+  const handles = isSelected && isFreeChild && onResizeStart && !decorative
     ? <ResizeHandles onResizeStart={(e, dir) => onResizeStart(e, node.id, dir)} />
     : null
 
   const nodeProps = {
-    'data-node-id': node.id,
+    'data-node-id': decorative ? undefined : node.id,
     'data-highlighted': isHighlighted ? 'true' : undefined,
-    'data-testid': `node-${node.id}`,
+    'data-testid': decorative ? undefined : `node-${node.id}`,
     style: { ...styleToCss(style), ...common },
-    onPointerDown: (e: React.PointerEvent) => onDragStart(e, node.id),
-    onClick: (e: React.MouseEvent) => {
-      // 选中已在 pointerdown 处理（additive 依据 e.ctrlKey）；此处仅阻止冒泡到画布背景
-      e.stopPropagation()
-    },
+    onPointerDown: decorative ? undefined : (e: React.PointerEvent) => onDragStart?.(e, node.id),
+    onClick: decorative
+      ? undefined
+      : (e: React.MouseEvent) => {
+          // 选中已在 pointerdown 处理（additive 依据 e.ctrlKey）；此处仅阻止冒泡到画布背景
+          e.stopPropagation()
+        },
   }
 
   if (node.type === 'frame' || node.type === 'group') {

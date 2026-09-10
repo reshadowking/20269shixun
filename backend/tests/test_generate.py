@@ -228,6 +228,40 @@ class TestGenerateAPI:
         resp = client.post("/api/generate/explore", json={"prompt": "帮我写一首诗"}, headers=auth_headers)
         assert resp.status_code == 422
 
+    def test_explore_exposes_per_option_fallback(self, client, auth_headers):
+        """缺陷 1：每个方案带 fallback 标记——降级方案必须能与真实生成结果区分，不得混同。
+
+        mock 模式（未配 Key 的演示路径）按产品既有约定不标记降级，故此处全为 False。
+        """
+        resp = client.post("/api/generate/explore", json={"prompt": "设计一个电商优惠券页"}, headers=auth_headers)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert all(isinstance(o["fallback"], bool) for o in body["options"])
+        assert [o["fallback"] for o in body["options"]] == [False, False]
+        assert body["degraded"] is False
+
+    def test_explore_marks_degraded_option_when_model_fails(self, client, auth_headers, monkeypatch):
+        """模型不可用回退预置模板：该方案 fallback=True、整体 degraded=True（前端据此区分展示）。"""
+        from dataclasses import replace
+
+        from app.routers import generate as generate_router
+
+        real = generate_router.generate_design
+
+        def flaky(prompt, *args, **kwargs):
+            result = real(prompt, *args, **kwargs)
+            # 两个方案在线程池并发执行：按提示词特征定位"方案二"（差异化风格附加约束）而非计数器，避免竞态
+            if "明显不同" in prompt:
+                return replace(result, fallback=True, error="模拟模型不可用")
+            return result
+
+        monkeypatch.setattr(generate_router, "generate_design", flaky)
+        resp = client.post("/api/generate/explore", json={"prompt": "设计一个电商优惠券页"}, headers=auth_headers)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["degraded"] is True
+        assert [o["fallback"] for o in body["options"]] == [False, True]
+
 
 class TestApiErrorDescription:
     def test_status_error_has_http_code(self):

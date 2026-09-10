@@ -2,11 +2,19 @@ import { useEffect, useState } from 'react'
 
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
+import DesignThumbnail from '@/components/chat/DesignThumbnail'
+import { optionPositioning, compareOptions } from '@/design/exploreSummary'
 import type { DesignNode } from '@/design/types'
 import { api } from '@/lib/api'
 import { GUARD_HINT, isDesignRequest } from '@/lib/designGuard'
 import { diffDesign } from '@/design/diff'
 import { isEditIntent } from '@/lib/editIntent'
+import {
+  loadExploreArchive,
+  saveExploreArchive,
+  type ExploreArchive,
+  type ExploreOption,
+} from '@/lib/exploreArchive'
 import {
   detectQuickCommands,
   getFollowupMode,
@@ -20,6 +28,7 @@ import {
  * 追问模式（Q1-Q5）：发送前先调 /api/generate/questions 判断是否需要追问，
  * 需要则展示追问卡片（选项 + 永远在的"跳过追问，直接生成"），回答后合并进 prompt 再生成。
  * 快捷指令（Q3）："直接生成/不用问"跳过追问；"问详细一点/简单点"只本次切换模式。
+ * 缺陷 1：探索的两份方案带预览与关键差异；选定后留档（另一方案仍可查、刷新可还原）。
  */
 
 interface ChatMessage {
@@ -36,16 +45,34 @@ export interface ComplianceFixItem {
 }
 
 /** D3：方案探索结果（与 /api/generate/explore 响应对齐） */
-export interface ExploreOption {
-  label: string
-  design: DesignNode
-  template: string
-  compliance: number
-  violations: number
-}
+export type { ExploreOption }
 interface ExploreResult {
   options: ExploreOption[]
   degraded: boolean
+}
+
+/** 方案来源徽标（缺陷 1）：降级方案必须与真实生成结果明确区分，不得混同 */
+function SourceBadge({ fallback, testId }: { fallback?: boolean; testId: string }) {
+  if (fallback) {
+    return (
+      <span
+        className="shrink-0 rounded-full border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[10px] text-amber-700"
+        data-testid={testId}
+        data-source="fallback"
+      >
+        已降级 · 预置模板
+      </span>
+    )
+  }
+  return (
+    <span
+      className="shrink-0 rounded-full border border-border bg-background px-1.5 py-0.5 text-[10px] text-muted-foreground"
+      data-testid={testId}
+      data-source="model"
+    >
+      AI 生成
+    </span>
+  )
 }
 
 interface GenerateResponse {
@@ -159,6 +186,18 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
   /** D3：方案探索结果（2 份方案 + 降级标记）与请求中状态 */
   const [exploreResult, setExploreResult] = useState<ExploreResult | null>(null)
   const [exploring, setExploring] = useState(false)
+  /** 缺陷 1：已选定方案的留档（含两套详情，刷新后可还原"我选过哪个方案"） */
+  const [archive, setArchive] = useState<ExploreArchive | null>(() => loadExploreArchive(historyScope))
+  /** 缺陷 1：已选档里展开"另一方案"详情 / 重新选择（回到二选一状态） */
+  const [viewOther, setViewOther] = useState(false)
+  const [rechoosing, setRechoosing] = useState(false)
+
+  // 切换 scope（换设计）时重挂留档，避免看到别的会话的选择记录
+  useEffect(() => {
+    setArchive(loadExploreArchive(historyScope))
+    setViewOther(false)
+    setRechoosing(false)
+  }, [historyScope])
 
   // 会话持久化（缺陷 10）：切走面板/刷新后恢复历史
   useEffect(() => {
@@ -285,6 +324,8 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
     }
     setExploring(true)
     setExploreResult(null)
+    setViewOther(false)
+    setRechoosing(false)
     try {
       const resp = await api<ExploreResult>('/api/generate/explore', {
         method: 'POST',
@@ -298,11 +339,36 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
     }
   }
 
-  /** D3：采用某份方案（上层快照后可撤销回原稿） */
-  const handleUseExplore = (opt: ExploreOption) => {
+  /**
+   * 缺陷 1：采用/改用某份方案（上层快照后可撤销回原稿）。
+   * 已选定过方案时再选会覆盖当前画布 → 二次确认；选定后写入留档，刷新仍能还原"我选过哪个方案"。
+   * 全程不请求后端、不产生任何模型调用。
+   */
+  const applyExploreOption = (index: number) => {
+    const source = exploreResult ?? archive
+    const opt = source?.options[index]
+    if (!source || !opt) return
+    const overwrites = archive !== null
+    if (overwrites && !window.confirm(`改用「${opt.label}」会覆盖当前画布内容（可撤销），确定吗？`)) return
     onUseExploreDesign?.(opt.design)
+    const next: ExploreArchive = {
+      options: source.options,
+      degraded: source.degraded,
+      chosenIndex: index,
+    }
+    setArchive(next)
+    saveExploreArchive(historyScope, next)
     setExploreResult(null)
+    setViewOther(false)
+    setRechoosing(false)
     setMessages((m) => [...m, { role: 'assistant', text: `已加载「${opt.label}」（模板：${opt.template}，兼容率 ${opt.compliance}%）。可点击「↩ 撤销」回到加载前。` }])
+  }
+
+  /** 关闭本次探索面板（已选定的留档保留） */
+  const handleExploreClose = () => {
+    setExploreResult(null)
+    setViewOther(false)
+    setRechoosing(false)
   }
 
   const handleSend = async (promptOverride?: string) => {
@@ -385,6 +451,14 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
   }
 
   const currentQuestion = pending ? pending.questions[pending.index] : null
+
+  /** 缺陷 1：留档里的当前方案与其它方案（查看/重新选择都读留档，不触发任何重新生成） */
+  const archivedChosen = archive ? archive.options[archive.chosenIndex] : null
+  const archivedOthers = archive
+    ? archive.options
+        .map((opt, index) => ({ opt, index }))
+        .filter(({ index }) => index !== archive.chosenIndex)
+    : []
 
   return (
     <div className="flex h-full flex-col" data-testid="ai-chat-panel">
@@ -505,29 +579,153 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
               type="button"
               className="text-xs text-muted-foreground hover:text-foreground"
               data-testid="explore-close"
-              onClick={() => setExploreResult(null)}
+              onClick={handleExploreClose}
             >
               ✕
             </button>
           </div>
-          {exploreResult.degraded && <div className="text-[11px] text-amber-600">部分方案已降级为预置模板（模型暂不可用）</div>}
+          {exploreResult.degraded && (
+            <div className="text-[11px] text-amber-600" data-testid="explore-degraded-notice">
+              部分方案已降级为预置模板（模型暂不可用），已在每份方案上标出来源。
+            </div>
+          )}
           {exploreResult.options.map((opt, i) => (
             <div key={i} className="rounded-md border bg-muted/40 p-2 text-xs" data-testid={`explore-option-${i}`}>
-              <div className="font-medium text-foreground">{opt.label}</div>
+              <div className="flex items-start justify-between gap-2">
+                <div className="font-medium text-foreground">{opt.label}</div>
+                <SourceBadge fallback={opt.fallback} testId={`explore-source-${i}`} />
+              </div>
+              <DesignThumbnail design={opt.design} testId={`explore-thumb-${i}`} />
               <div className="mt-0.5 text-muted-foreground">
                 模板：{opt.template} ｜ 兼容率 {opt.compliance}%
+              </div>
+              <div className="mt-0.5 text-muted-foreground" data-testid={`explore-positioning-${i}`}>
+                {optionPositioning(opt)}
               </div>
               <div className="mt-0.5 line-clamp-2 text-muted-foreground">{extractPreviewTexts(opt.design)}</div>
               <Button
                 size="sm"
                 className="mt-1.5 h-6 w-full text-[11px]"
                 data-testid={`explore-use-${i}`}
-                onClick={() => handleUseExplore(opt)}
+                onClick={() => applyExploreOption(i)}
               >
                 使用此方案
               </Button>
             </div>
           ))}
+          {exploreResult.options.length >= 2 && (
+            <ul className="space-y-0.5 rounded-md border bg-background p-2" data-testid="explore-diff">
+              <li className="text-[11px] font-medium text-muted-foreground">关键差异</li>
+              {compareOptions(exploreResult.options[0], exploreResult.options[1]).map((line) => (
+                <li key={line} className="text-[11px] text-muted-foreground">
+                  · {line}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+      {archive && archivedChosen && (
+        <div className="border-t p-3" data-testid="explore-archive">
+          <div className="rounded-md border bg-muted/40 p-2 text-xs">
+            <div className="flex items-start justify-between gap-2">
+              <span className="text-muted-foreground">已选定方案</span>
+              <SourceBadge fallback={archivedChosen.fallback} testId="explore-archive-source" />
+            </div>
+            <div className="mt-0.5 font-medium text-foreground" data-testid="explore-archive-chosen">
+              {archivedChosen.label}
+            </div>
+            <div className="mt-1 flex gap-1.5">
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-6 flex-1 px-1 text-[11px]"
+                data-testid="explore-view-other"
+                onClick={() => {
+                  setViewOther((v) => !v)
+                  setRechoosing(false)
+                }}
+              >
+                {viewOther ? '收起另一方案' : `查看另一方案（${archivedOthers.length}）`}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-6 flex-1 px-1 text-[11px]"
+                data-testid="explore-rechoose"
+                onClick={() => {
+                  setRechoosing((v) => !v)
+                  setViewOther(false)
+                }}
+              >
+                {rechoosing ? '取消重新选择' : '重新选择方案'}
+              </Button>
+            </div>
+            {viewOther && (
+              <div className="mt-2 space-y-2" data-testid="explore-other-panel">
+                {archivedOthers.map(({ opt, index }) => (
+                  <div key={index} className="rounded-md border bg-background p-2" data-testid={`explore-other-${index}`}>
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="font-medium text-foreground">{opt.label}</div>
+                      <SourceBadge fallback={opt.fallback} testId={`explore-other-source-${index}`} />
+                    </div>
+                    <DesignThumbnail design={opt.design} testId={`explore-other-thumb-${index}`} />
+                    <div className="mt-0.5 text-muted-foreground">
+                      模板：{opt.template} ｜ 兼容率 {opt.compliance}%
+                    </div>
+                    <div className="mt-0.5 text-muted-foreground">{optionPositioning(opt)}</div>
+                    <div className="mt-0.5 line-clamp-2 text-muted-foreground">{extractPreviewTexts(opt.design)}</div>
+                    <Button
+                      size="sm"
+                      className="mt-1.5 h-6 w-full text-[11px]"
+                      data-testid={`explore-other-use-${index}`}
+                      onClick={() => applyExploreOption(index)}
+                    >
+                      改用此方案
+                    </Button>
+                  </div>
+                ))}
+                {archive.options.length >= 2 && (
+                  <ul className="space-y-0.5 rounded-md border bg-background p-2" data-testid="explore-other-diff">
+                    <li className="text-[11px] font-medium text-muted-foreground">关键差异</li>
+                    {compareOptions(archive.options[0], archive.options[1]).map((line) => (
+                      <li key={line} className="text-[11px] text-muted-foreground">
+                        · {line}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+            {rechoosing && (
+              <div className="mt-2 space-y-2" data-testid="explore-rechoose-panel">
+                <div className="text-[11px] text-muted-foreground">
+                  重新选择会覆盖当前画布内容（可撤销），选择时需要二次确认。
+                </div>
+                {archive.options.map((opt, i) => (
+                  <div key={i} className="rounded-md border bg-background p-2" data-testid={`explore-rechoose-${i}`}>
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="font-medium text-foreground">{opt.label}</div>
+                      <SourceBadge fallback={opt.fallback} testId={`explore-rechoose-source-${i}`} />
+                    </div>
+                    <DesignThumbnail design={opt.design} width={140} height={84} testId={`explore-rechoose-thumb-${i}`} />
+                    <div className="mt-0.5 text-muted-foreground">
+                      模板：{opt.template} ｜ 兼容率 {opt.compliance}%
+                    </div>
+                    <Button
+                      size="sm"
+                      variant={i === archive.chosenIndex ? 'secondary' : 'default'}
+                      className="mt-1.5 h-6 w-full text-[11px]"
+                      data-testid={`explore-rechoose-use-${i}`}
+                      onClick={() => applyExploreOption(i)}
+                    >
+                      {i === archive.chosenIndex ? '当前方案（重新应用）' : '改用此方案'}
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       )}
       {complianceReport && complianceReport.length > 0 && (

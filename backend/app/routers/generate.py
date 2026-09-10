@@ -173,6 +173,8 @@ async def explore_options(req: ExploreRequest, _user: str = Depends(get_current_
                 "template": result.template,
                 "compliance": result.compliance,
                 "violations": result.violations,
+                # 缺陷 1：逐方案降级标记——前端必须能把回退预置模板的方案与真实生成结果区分开
+                "fallback": result.fallback,
             }
         )
     return {"options": options, "degraded": degraded}
