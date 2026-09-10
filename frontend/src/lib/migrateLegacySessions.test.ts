@@ -145,14 +145,15 @@ describe('migrateLegacySessions（缺陷 4 老数据迁移）', () => {
     // 未落完成标记，下次进入仍会重试
     expect(markerState()?.complete).not.toBe(true)
     expect(hasLegacyData()).toBe(true)
-    // 搬家失败发生在"上传之前"：不该有任何消息被上传（避免重试时重复）
-    expect(appendCalls).toEqual([])
+    // 新顺序为"先上传、后搬家"：上传已完成（且标记了 done），重试时不会重复上传
+    expect(appendCalls.flatMap((c) => c.texts)).toEqual(['老朋友的问题', '设计 9 的历史'])
 
     // 恢复存储后重试：一次补齐，且消息只上传一次
     spy.mockRestore()
     const second = await migrateLegacySessions()
     expect(second.ran).toBe(true)
-    expect(second.messages).toBe(2)
+    expect(second.messages).toBe(0) // 消息在第一次运行已上传并记账，重试不重复
+    expect(second.localKeysMoved).toBeGreaterThanOrEqual(2) // 重试补齐剩余的本地搬家
     expect(markerState()?.complete).toBe(true)
     expect(appendCalls.flatMap((c) => c.texts)).toEqual(['老朋友的问题', '设计 9 的历史'])
     expect(localStorage.getItem('design-base-snapshot-s-design-7')).toBeTruthy()
@@ -179,5 +180,60 @@ describe('migrateLegacySessions（缺陷 4 老数据迁移）', () => {
     expect(localStorage.getItem(baseSnapshotKey('s-design-7'))).toBeTruthy()
     // 消息只上传一次（进度按来源键记账）
     expect(appendCalls.flatMap((c) => c.texts).filter((t) => t === '老朋友的问题')).toHaveLength(1)
+  })
+
+  it('旧代码持久化的欢迎语占位不当作真实消息上传（避免查看会话时两条欢迎语）', async () => {
+    localStorage.setItem(
+      'design-chat-history',
+      JSON.stringify([
+        { role: 'assistant', text: '你好！我是 AI 设计助手。输入你的需求，我帮你生成设计稿。' },
+        { role: 'user', text: '真的需求' },
+      ]),
+    )
+    await migrateLegacySessions()
+    expect(appendCalls.flatMap((c) => c.texts)).toEqual(['真的需求'])
+  })
+
+  it('同标签并发调用只跑一次（in-flight 去重）', async () => {
+    seedLegacyGlobal()
+    const [a, b] = await Promise.all([migrateLegacySessions(), migrateLegacySessions()])
+    expect(a).toBe(b) // 返回同一个报告对象
+    expect(appendCalls.flatMap((c) => c.texts)).toEqual(['老朋友的问题', '设计 9 的历史']) // 未重复上传
+    expect(markerState()?.complete).toBe(true)
+
+    // 去重状态必须清理干净：后续调用能正常再次执行（换一批老数据）
+    localStorage.removeItem(MIGRATION_MARKER)
+    localStorage.setItem('design-chat-history', JSON.stringify([{ role: 'user', text: '第二批' }]))
+    const third = await migrateLegacySessions()
+    expect(third.ran).toBe(true)
+    expect(appendCalls.flatMap((c) => c.texts)).toContain('第二批')
+  })
+
+  it('归属一次定音：草稿已被搬走但标记记了 homeKey 时，重试仍归原会话', async () => {
+    // 模拟：首次运行已搬走草稿并记下 homeKey，但消息上传未完成
+    localStorage.setItem(
+      MIGRATION_MARKER,
+      JSON.stringify({ complete: false, done: ['design-draft'], homeKey: 's-design-7' }),
+    )
+    localStorage.setItem('design-chat-history', JSON.stringify([{ role: 'user', text: '待补传' }]))
+
+    const report = await migrateLegacySessions()
+    expect(report.ran).toBe(true)
+    expect(appendCalls.map((c) => c.key)).toEqual(['s-design-7']) // 不回退成 orphan
+    expect(appendCalls[0].texts).toEqual(['待补传'])
+  })
+
+  it('跨标签锁：他人持锁时本次跳过；锁过期后可继续', async () => {
+    seedLegacyGlobal()
+    localStorage.setItem('ds:migration:lock', String(Date.now()))
+    const blocked = await migrateLegacySessions()
+    expect(blocked.ran).toBe(false)
+    expect(appendCalls).toEqual([])
+    expect(localStorage.getItem('design-chat-history')).toBeTruthy() // 数据没动
+
+    localStorage.setItem('ds:migration:lock', String(Date.now() - 60_000)) // 过期锁
+    const ok = await migrateLegacySessions()
+    expect(ok.ran).toBe(true)
+    expect(appendCalls.flatMap((c) => c.texts)).toContain('老朋友的问题')
   })
 })

@@ -8,11 +8,14 @@
  *   design-base-snapshot*     → {sessionKey}:base 本地键
  *   design-draft（全局树）     → design-draft-{sessionKey}
  *
- * 安全语义（P1 修复）：
+ * 安全语义：
  * - 本地键"先写新键、**写入成功后才删旧键**"；写入失败（配额不足/localStorage 禁用）→ 抛错中止，
  *   旧键原样保留、不落完成标记，下次进入重试；
  * - 聊天历史旧键始终保留（只读备份，体积小）；留档/基础版/草稿为"搬迁"（成功后删旧键，避免双份占配额）；
- * - 进度按"来源键"记账（标记 ds:migration:v1 存 {complete, done[]}），失败重试不会重复上传消息。
+ * - 进度按"来源键"记账（标记存 {complete, done[], homeKey}），失败重试不会重复上传消息；
+ * - **归属一次定音**：首次解析出的归属会话写进标记（homeKey），后续重试即使草稿已被搬走也不会改判归属；
+ * - **并发安全**：同标签内 in-flight 去重（StrictMode 双挂载/重复调用只跑一次）+ 跨标签锁（30s 过期）；
+ * - 旧实现（改造前）会把欢迎语占位一起持久化，迁移时按占位文案剔除，避免会话历史里出现两条欢迎语。
  */
 import { saveExploreArchive, type ExploreArchive } from '@/lib/exploreArchive'
 import { baseSnapshotKey, type BaseSnapshot } from '@/lib/baseSnapshot'
@@ -66,13 +69,22 @@ export interface MigrationReport {
 interface MigrationState {
   complete: boolean
   done: string[]
+  /** 首次解析出的归属会话：归属一次定音，重试不因草稿被搬走而改判 */
+  homeKey?: string
 }
+
+const LOCK_KEY = 'ds:migration:lock'
+const LOCK_TTL_MS = 30_000
+
+/** 改造前会把这条 UI 占位欢迎语写进 localStorage 历史，迁移时应剔除（它不是用户消息） */
+const LEGACY_WELCOME_PREFIX = '你好！我是 AI 设计助手'
 
 function readLegacyMessages(key: string): LegacyMessage[] {
   const parsed = loadJson<LegacyMessage[]>(key, (v): v is LegacyMessage[] =>
     Array.isArray(v) && v.every((m) => m && typeof m.text === 'string' && (m.role === 'user' || m.role === 'assistant')),
   )
-  return parsed ?? []
+  if (!parsed) return []
+  return parsed.filter((m) => !(m.role === 'assistant' && m.text.trimStart().startsWith(LEGACY_WELCOME_PREFIX)))
 }
 
 interface LegacyDraft {
@@ -96,11 +108,36 @@ function readState(): MigrationState | null {
   if (raw === '1') return { complete: true, done: [] } // 兼容最初的布尔式标记
   try {
     const parsed = JSON.parse(raw) as MigrationState
-    if (parsed && typeof parsed.complete === 'boolean' && Array.isArray(parsed.done)) return parsed
+    if (parsed && typeof parsed.complete === 'boolean' && Array.isArray(parsed.done)) {
+      return {
+        complete: parsed.complete,
+        done: parsed.done,
+        homeKey: typeof parsed.homeKey === 'string' ? parsed.homeKey : undefined,
+      }
+    }
   } catch {
     /* 脏值：按完成处理 */
   }
   return { complete: true, done: [] }
+}
+
+/** 跨标签锁：拿不到锁说明另一个标签正在迁移（返回 null 表示可继续） */
+function acquireLock(): boolean {
+  try {
+    const raw = localStorage.getItem(LOCK_KEY)
+    if (raw) {
+      const at = Number(raw)
+      if (Number.isFinite(at) && Date.now() - at < LOCK_TTL_MS) return false // 有人在做
+    }
+    localStorage.setItem(LOCK_KEY, String(Date.now()))
+    return true
+  } catch {
+    return true // localStorage 不可用时不做跨标签保护（同标签仍有 in-flight 去重）
+  }
+}
+
+function releaseLock(): void {
+  removeJson(LOCK_KEY)
 }
 
 function writeState(state: MigrationState): boolean {
@@ -108,7 +145,7 @@ function writeState(state: MigrationState): boolean {
 }
 
 /** 收集所有旧键 → 归属会话 的映射（不做任何写入） */
-function collectPlan(): Map<string, PlanItem> {
+function collectPlan(homeKeyOverride?: string): Map<string, PlanItem> {
   const plan = new Map<string, PlanItem>()
   const ensure = (sessionKey: string) => {
     if (!plan.has(sessionKey)) plan.set(sessionKey, { messages: [], localMoves: [] })
@@ -119,7 +156,7 @@ function collectPlan(): Map<string, PlanItem> {
   const legacyDraft = loadJson(draftKey(undefined), isLegacyDraft)
   const globalMessages = readLegacyMessages(LEGACY_CHAT_KEY)
   const savedId = legacyDraft?.meta?.savedId
-  const homeKey = savedId ? designSessionKey(savedId) : ORPHAN_SESSION_KEY
+  const homeKey = homeKeyOverride ?? (savedId ? designSessionKey(savedId) : ORPHAN_SESSION_KEY)
 
   if (globalMessages.length > 0) {
     ensure(homeKey).messages.push({ sourceKey: LEGACY_CHAT_KEY, items: globalMessages })
@@ -175,7 +212,7 @@ export function hasLegacyData(): boolean {
   if (state?.complete) return false
   const done = new Set(state?.done ?? [])
   try {
-    for (const item of collectPlan().values()) {
+    for (const item of collectPlan(state?.homeKey).values()) {
       if (item.localMoves.some((m) => !done.has(m.sourceKey))) return true
       if (item.messages.some((c) => !done.has(c.sourceKey))) return true
     }
@@ -185,24 +222,39 @@ export function hasLegacyData(): boolean {
   return false
 }
 
-/**
- * 执行迁移（幂等、可重入）。
- * 顺序：先本地搬家（失败即中止且不删旧键）→ 再上传消息；失败时 report.error 非空且不落完成标记。
- */
-export async function migrateLegacySessions(): Promise<MigrationReport> {
+/** 同标签并发去重：StrictMode 双挂载/重复调用只跑一次 */
+let inFlight: Promise<MigrationReport> | null = null
+
+async function runMigration(): Promise<MigrationReport> {
   const report: MigrationReport = { ran: false, sessions: [], messages: 0, localKeysMoved: 0 }
   const state = readState()
   if (state?.complete) return report
 
+  // 归属一次定音：初次解析后写进标记，重试时即使草稿已被搬走也不改判归属
+  const plan = collectPlan(state?.homeKey)
+  const resolvedHomeKey = state?.homeKey ?? [...plan.keys()][0]
   const done = new Set(state?.done ?? [])
-  const plan = collectPlan()
   const markDone = (sourceKey: string) => {
     done.add(sourceKey)
-    writeState({ complete: false, done: [...done] })
+    writeState({ complete: false, done: [...done], homeKey: resolvedHomeKey })
   }
 
   try {
-    // ① 本地键搬家：先写新键，确认成功才删旧键（写入失败 → 抛错保留旧键，下次重试）
+    // ① 先上传消息：此刻旧草稿仍在，归属可稳定推导（且失败不会产生"消息未传、本地键已删"）
+    for (const [sessionKey, item] of plan) {
+      for (const chunk of item.messages) {
+        if (done.has(chunk.sourceKey)) continue
+        // 不绑定 design_id：历史草稿引用的设计可能已被删除（404 会让迁移永远卡住，且绑定不是迁移的职责）
+        await sessionApi.ensure(sessionKey)
+        const payload: SessionMessage[] = chunk.items.map((m) => ({ role: m.role, text: m.text }))
+        await sessionApi.append(sessionKey, payload)
+        markDone(chunk.sourceKey)
+        report.messages += payload.length
+      }
+      if (!report.sessions.includes(sessionKey)) report.sessions.push(sessionKey)
+    }
+
+    // ② 本地键搬家：先写新键，确认成功才删旧键（写入失败 → 抛错保留旧键，下次重试）
     for (const [sessionKey, item] of plan) {
       for (const move of item.localMoves) {
         if (done.has(move.sourceKey)) continue
@@ -219,25 +271,42 @@ export async function migrateLegacySessions(): Promise<MigrationReport> {
       }
     }
 
-    // ② 上传会话消息：放在本地搬家之后——此步失败也不会出现"消息未传、本地键已删"
-    for (const [sessionKey, item] of plan) {
-      for (const chunk of item.messages) {
-        if (done.has(chunk.sourceKey)) continue
-        await sessionApi.ensure(sessionKey, sessionKey.startsWith('s-design-') ? Number(sessionKey.split('-')[2]) : null)
-        const payload: SessionMessage[] = chunk.items.map((m) => ({ role: m.role, text: m.text }))
-        await sessionApi.append(sessionKey, payload)
-        markDone(chunk.sourceKey)
-        report.messages += payload.length
-      }
-      if (!report.sessions.includes(sessionKey)) report.sessions.push(sessionKey)
-    }
-
-    writeState({ complete: true, done: [...done] })
+    writeState({ complete: true, done: [...done], homeKey: resolvedHomeKey })
     report.ran = true
     return report
   } catch (err) {
     // 失败（本地写入受阻/后端不可用）：旧键保留、不落完成标记，下次进入重试
     report.error = err instanceof Error ? err.message : String(err)
     return report
+  }
+}
+
+async function runGuarded(): Promise<MigrationReport> {
+  const report: MigrationReport = { ran: false, sessions: [], messages: 0, localKeysMoved: 0 }
+  let acquired = false
+  try {
+    if (readState()?.complete) return report
+    acquired = acquireLock()
+    if (!acquired) return report // 另一个标签正在迁移：本次跳过
+    return await runMigration()
+  } finally {
+    if (acquired) releaseLock()
+  }
+}
+
+/**
+ * 执行迁移（幂等、可重入、并发安全）。
+ * 同标签：in-flight 去重（StrictMode 双挂载只跑一次）；跨标签：30s 锁，拿不到锁直接跳过（对方在做）。
+ * 注意：清理必须由调用方在 await 之后做——若在被调 async 函数内部清，函数同步返回时
+ * finally 会先执行、赋值后执行，导致 inFlight 永久残留一个已完成 promise。
+ */
+export async function migrateLegacySessions(): Promise<MigrationReport> {
+  if (inFlight) return inFlight
+  const run = runGuarded()
+  inFlight = run
+  try {
+    return await run
+  } finally {
+    if (inFlight === run) inFlight = null
   }
 }
