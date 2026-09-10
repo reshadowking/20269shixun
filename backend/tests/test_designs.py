@@ -139,6 +139,72 @@ class TestDesignsCrud:
         assert full["design"]["children"][0]["props"]["text"] == "最新值"
 
 
+class TestDesignsPaging:
+    """缺陷 2：列表分页——limit/offset 为可选参数（缺省全量，向后兼容），响应新增 total。"""
+
+    def _seed(self, client, headers, n: int) -> list[int]:
+        ids = []
+        for i in range(n):
+            resp = client.post("/api/designs", json={"name": f"分页-{i}", "design": SAMPLE}, headers=headers)
+            assert resp.status_code == 200
+            ids.append(resp.json()["id"])
+        return ids
+
+    def test_default_returns_all_with_total(self, client, auth_headers):
+        """缺省（不传 limit/offset）：返回全部 + total，与旧版行为一致。"""
+        base = client.get("/api/designs", headers=auth_headers).json()
+        assert "total" in base  # 新增字段（向后兼容：既有字段 designs 不变）
+        assert base["total"] == len(base["designs"])
+
+        self._seed(client, auth_headers, 3)
+        body = client.get("/api/designs", headers=auth_headers).json()
+        assert body["total"] == base["total"] + 3
+        assert len(body["designs"]) == base["total"] + 3
+
+    def test_limit_offset_pages_no_overlap_and_complete(self, client, auth_headers):
+        """9 条数据：limit=8 取 8 条，offset=8 取剩余；按 limit 翻页无重叠、并集为全量。"""
+        base_ids = {d["id"] for d in client.get("/api/designs", headers=auth_headers).json()["designs"]}
+        new_ids = self._seed(client, auth_headers, 9)
+        total = len(base_ids) + 9
+
+        first = client.get("/api/designs?limit=8", headers=auth_headers).json()
+        assert first["total"] == total
+        assert len(first["designs"]) == 8
+        # 只传 offset 不传 limit = 取该位置之后的全部（前端"加载剩余"用）
+        rest = client.get("/api/designs?offset=8", headers=auth_headers).json()
+        assert rest["total"] == total
+        assert len(rest["designs"]) == total - 8
+
+        first_ids = [d["id"] for d in first["designs"]]
+        rest_ids = [d["id"] for d in rest["designs"]]
+        assert not set(first_ids) & set(rest_ids)  # 无重叠（分页稳定）
+        assert set(first_ids) | set(rest_ids) == base_ids | set(new_ids)  # 无遗漏
+
+        # 小页翻页（limit=3）逐页取完同样无重叠、无遗漏
+        seen: list[int] = []
+        for offset in range(0, total, 3):
+            page = client.get(f"/api/designs?limit=3&offset={offset}", headers=auth_headers).json()
+            seen.extend(d["id"] for d in page["designs"])
+        assert len(seen) == len(set(seen)) == total
+        assert set(seen) == base_ids | set(new_ids)
+
+    def test_offset_beyond_total_returns_empty_page(self, client, auth_headers):
+        """offset 超过总数：空列表 + total 不变（不报错）。"""
+        total = client.get("/api/designs", headers=auth_headers).json()["total"]
+        body = client.get(f"/api/designs?limit=8&offset={total + 5}", headers=auth_headers).json()
+        assert body["designs"] == []
+        assert body["total"] == total
+
+    def test_invalid_params_rejected(self, client, auth_headers):
+        """非法参数 422（limit 下界/上界、offset 下界），不静默截断。"""
+        assert client.get("/api/designs?limit=0", headers=auth_headers).status_code == 422
+        assert client.get("/api/designs?limit=201", headers=auth_headers).status_code == 422
+        assert client.get("/api/designs?offset=-1", headers=auth_headers).status_code == 422
+
+    def test_paging_requires_auth(self, client):
+        assert client.get("/api/designs?limit=8").status_code == 401
+
+
 def _token(client, username: str) -> str:
     resp = client.post("/api/auth/login", json={"username": username, "password": "demo123"})
     assert resp.status_code == 200, resp.text

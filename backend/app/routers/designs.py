@@ -7,9 +7,9 @@
 import json
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
 from ..db import get_db
@@ -113,13 +113,31 @@ def _design_meta(design: Design) -> dict:
 
 
 @router.get("/api/designs")
-def list_designs(_user: str = Depends(get_current_user), db=Depends(get_db)):
-    """当前用户的设计列表（不含 design_json 全文，轻量元数据）。"""
+def list_designs(
+    limit: int | None = Query(default=None, ge=1, le=200, description="返回条数上限；缺省返回全部"),
+    offset: int = Query(default=0, ge=0, description="跳过的条数"),
+    _user: str = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    """当前用户的设计列表（不含 design_json 全文，轻量元数据）。
+
+    缺陷 2：新增可选 limit/offset 分页参数（缺省不传 = 返回全部，既有调用方行为不变）；
+    响应新增 total（当前用户设计总数），既有字段不变。排序按 updated_at 倒序，id 倒序作稳定分页的次级键。
+    """
     owner = _owner_id(db, _user)
-    designs = db.execute(
-        select(Design).where(Design.owner_id == owner).order_by(Design.updated_at.desc())
-    ).scalars().all()
-    return {"designs": [_design_meta(d) for d in designs]}
+    total = db.execute(
+        select(func.count()).select_from(Design).where(Design.owner_id == owner)
+    ).scalar_one()
+    stmt = (
+        select(Design)
+        .where(Design.owner_id == owner)
+        .order_by(Design.updated_at.desc(), Design.id.desc())
+        .offset(offset)
+    )
+    if limit is not None:
+        stmt = stmt.limit(limit)
+    designs = db.execute(stmt).scalars().all()
+    return {"designs": [_design_meta(d) for d in designs], "total": total}
 
 
 @router.post("/api/designs")
