@@ -276,3 +276,101 @@ class TestSessionDesignBinding:
         key = _uniq("bindbad")
         _create(client, auth_headers, key)
         assert client.patch(f"/api/sessions/{key}", json={"design_id": 999999}, headers=auth_headers).status_code == 404
+
+
+class TestCreateSessionConcurrency:
+    """P0-1：会话创建必须并发安全（原实现先查后插，撞唯一约束直接 500）。"""
+
+    def test_create_is_idempotent_when_row_appears_between_check_and_insert(self, client, auth_headers, monkeypatch):
+        """确定性复现竞态窗口：存在性检查通过后，对手已插入 → 撞唯一约束必须回滚回查而不是 500。
+
+        （等价于排查报告里的屏障手法，但不用多线程，避免 SQLite 并发写导致的偶发。）
+        """
+        from app.services import sessions as sessions_service
+
+        key = _uniq("race")
+        assert _create(client, auth_headers, key, title="对手先建的").status_code == 200
+
+        real_get = sessions_service.get_owned_session
+        calls = {"n": 0}
+
+        def blind_first_check(db, owner_id, k):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return None  # 模拟"检查的那一刻还不存在"
+            return real_get(db, owner_id, k)
+
+        monkeypatch.setattr(sessions_service, "get_owned_session", blind_first_check)
+        resp = _create(client, auth_headers, key, title="不该覆盖")
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["session_id"] == key
+        assert body["title"] == "对手先建的"  # 幂等：返回对手建好的那条，不覆盖
+        assert body["created"] is False
+        assert calls["n"] >= 2  # 走过"回查"分支
+
+    def test_concurrent_create_returns_same_session(self, client, auth_headers):
+        """真并发（两线程 + 各自 DB 会话）：两次都成功且返回同一 session_id。"""
+        import threading
+
+        from app.db import SessionLocal
+        from app.services import sessions as sessions_service
+
+        key = _uniq("thr")
+        barrier = threading.Barrier(2)
+        real_get = sessions_service.get_owned_session
+        results: list[tuple[str, bool]] = []
+        errors: list[Exception] = []
+
+        def patched(db, owner_id, k):
+            found = real_get(db, owner_id, k)
+            if found is None:
+                barrier.wait(timeout=10)  # 两个线程都完成"不存在"检查后再各自 INSERT
+            return found
+
+        original = sessions_service.get_owned_session
+        sessions_service.get_owned_session = patched
+        try:
+            def worker():
+                db = SessionLocal()
+                try:
+                    session, created = sessions_service.get_or_create_session(db, owner_id=1, key=key)
+                    results.append((session.session_key, created))
+                except Exception as exc:  # noqa: BLE001 - 测试里收集所有异常
+                    errors.append(exc)
+                finally:
+                    db.close()
+
+            threads = [threading.Thread(target=worker) for _ in range(2)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(timeout=20)
+        finally:
+            sessions_service.get_owned_session = original
+
+        assert errors == [], f"并发创建不应抛异常：{errors}"
+        assert {r[0] for r in results} == {key}      # 同一会话
+        assert sorted(r[1] for r in results) == [False, True]  # 一个新建、一个复用
+
+
+class TestAuthMeAndOwnerErrors:
+    """P2-1 /api/auth/me；P1-2 "用户不存在"改为 403（避免触发前端清凭证连锁）。"""
+
+    def test_auth_me_returns_username(self, client, auth_headers):
+        resp = client.get("/api/auth/me", headers=auth_headers)
+        assert resp.status_code == 200
+        assert resp.json() == {"username": "demo"}
+
+    def test_auth_me_rejects_missing_and_invalid_token(self, client):
+        assert client.get("/api/auth/me").status_code == 401
+        assert client.get("/api/auth/me", headers={"Authorization": "Bearer not-a-jwt"}).status_code == 401
+
+    def test_unknown_user_returns_403_not_401(self, client):
+        """token 合法但库里无此用户 → 403（401 会触发前端清凭证 + 跳登录的连锁）。"""
+        from app.security import create_token
+
+        ghost = {"Authorization": f"Bearer {create_token('ghost-user-not-in-db')}"}
+        assert client.get("/api/sessions", headers=ghost).status_code == 403
+        assert client.post("/api/sessions", json={"session_key": "s-ghost-1"}, headers=ghost).status_code == 403
+        assert client.get("/api/designs", headers=ghost).status_code == 403

@@ -34,12 +34,19 @@ export interface ToolCallRecord {
   created_at: string | null
 }
 
+/** 在途 ensure 去重（P0-2）：StrictMode 双挂载/多处调用只发一次请求，避免并发创建撞唯一约束 */
+const ensureInflight = new Map<string, Promise<SessionMeta>>()
+
 export const sessionApi = {
   ensure(sessionKey: string, designId?: number | null): Promise<SessionMeta> {
-    return api<SessionMeta>('/api/sessions', {
+    const cached = ensureInflight.get(sessionKey)
+    if (cached) return cached
+    const pending = api<SessionMeta>('/api/sessions', {
       method: 'POST',
       body: JSON.stringify({ session_key: sessionKey, design_id: designId ?? undefined }),
-    })
+    }).finally(() => ensureInflight.delete(sessionKey))
+    ensureInflight.set(sessionKey, pending)
+    return pending
   },
   list(limit = 20): Promise<{ sessions: SessionMeta[]; total: number }> {
     return api(`/api/sessions?limit=${limit}&offset=0`)

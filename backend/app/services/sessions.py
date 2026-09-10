@@ -13,6 +13,7 @@ import re
 from datetime import UTC, datetime
 
 from sqlalchemy import delete, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session as DbSession
 
 from ..models import ChatMessage, ChatSession, SessionToolCall
@@ -51,7 +52,12 @@ def get_owned_session(db: DbSession, owner_id: int, key: str) -> ChatSession | N
 def get_or_create_session(
     db: DbSession, owner_id: int, key: str, title: str | None = None, design_id: int | None = None
 ) -> tuple[ChatSession, bool]:
-    """幂等创建：已存在则原样返回（不覆盖标题/绑定），不存在才新建。"""
+    """幂等创建：已存在则原样返回（不覆盖标题/绑定），不存在才新建。
+
+    并发安全：两个请求同时通过"不存在"检查时会一起 INSERT，后到的撞唯一约束
+    uq_chat_sessions_owner_key。此处捕获 IntegrityError 后回滚回查，返回对手已建好的那条
+    （幂等语义），而不是把 500 冒给用户——会话其实已经建成功了，报错是假失败。
+    """
     validate_session_key(key)
     existing = get_owned_session(db, owner_id, key)
     if existing is not None:
@@ -63,7 +69,14 @@ def get_or_create_session(
         design_id=design_id,
     )
     db.add(session)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        existing = get_owned_session(db, owner_id, key)
+        if existing is None:  # 不是"对手已插入"这类可恢复冲突 → 原样抛出
+            raise
+        return existing, False
     db.refresh(session)
     return session, True
 
