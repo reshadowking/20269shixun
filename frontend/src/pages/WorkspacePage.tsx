@@ -4,7 +4,11 @@ import { X } from 'lucide-react'
 
 import ActivityBar, { ACTIVITY_TITLES } from '@/components/activity/ActivityBar'
 import LayerTree from '@/components/activity/LayerTree'
+import BeautifyPanel from '@/components/beautify/BeautifyPanel'
 import AIChatPanel from '@/components/chat/AIChatPanel'
+import { NodeRenderer } from '@/canvas/NodeRenderer'
+import { EFFECT_SPECS } from '@/design/beautify'
+import { loadBaseSnapshot, saveBaseSnapshot, type BaseSnapshot } from '@/lib/baseSnapshot'
 import ExportDialog from '@/components/export/ExportDialog'
 import HistoryPanel from '@/components/history/HistoryPanel'
 import { SaveNameForm } from '@/components/history/SaveNameForm'
@@ -196,6 +200,67 @@ export default function WorkspacePage() {
 
   // AI 生成中：画布锁定（v2.2 §8.8）
   const [generating, setGenerating] = useState(false)
+
+  // ---- 缺陷 3：美化阶段（版面确认 + 效果白名单 + 基础版对照）----
+  const beautifyScope = designParam ?? undefined
+  const [baseSnapshot, setBaseSnapshot] = useState<BaseSnapshot | null>(() => loadBaseSnapshot(beautifyScope))
+  const [layoutLocked, setLayoutLocked] = useState(false)
+  const [effectsPreview, setEffectsPreview] = useState(false)
+  const [beautifying, setBeautifying] = useState(false)
+  const [beautifyError, setBeautifyError] = useState('')
+  const [lockHint, setLockHint] = useState('')
+
+  // 越权写入（拖拽/改文本/改布局）被写入层拒绝时提示；换设计会话时重挂基础版快照
+  useEffect(() => {
+    const unsub = store.subscribeBlocked((reason) => {
+      setLockHint(reason)
+      window.setTimeout(() => setLockHint(''), 4000)
+    })
+    return unsub
+  }, [store])
+
+  useEffect(() => {
+    setBaseSnapshot(loadBaseSnapshot(designParam ?? undefined))
+    setEffectsPreview(false)
+  }, [designParam])
+
+  /** 版面确认：保留基础版快照 + 锁定版面（只放行样式效果） */
+  const handleConfirmLayout = () => {
+    if (!saveBaseSnapshot(beautifyScope, design)) {
+      setBeautifyError('基础版快照保存失败（本地存储不可用或已满），暂不锁定版面。')
+      return
+    }
+    setBaseSnapshot({ design: JSON.parse(JSON.stringify(design)) as DesignNode, at: Date.now() })
+    store.setBeautifyLock(true)
+    setLayoutLocked(true)
+    setBeautifyError('')
+  }
+
+  const handleUnlockLayout = () => {
+    store.setBeautifyLock(false)
+    setLayoutLocked(false)
+  }
+
+  /** 应用高级效果：尺寸类效果先二次确认；写入走服务端白名单铁闸，成功后入快照可撤销 */
+  const handleApplyEffect = async (nodeId: string, key: string, value: string | number | null) => {
+    const spec = EFFECT_SPECS.find((s) => s.key === key)
+    if (value !== null && spec?.changesSize && !window.confirm('该效果可能改变组件尺寸，是否确认应用？')) return
+    setBeautifying(true)
+    setBeautifyError('')
+    try {
+      const resp = await api<{ design: DesignNode; applied: string[]; removed: string[] }>('/api/apply-effects', {
+        method: 'POST',
+        body: JSON.stringify({ design, node_id: nodeId, effects: { [key]: value } }),
+      })
+      store.pushSnapshot()
+      setUndoCount((c) => c + 1)
+      store.resetDesign(resp.design)
+    } catch (err) {
+      setBeautifyError(err instanceof Error ? `效果被拒绝：${err.message}` : '效果应用失败')
+    } finally {
+      setBeautifying(false)
+    }
+  }
 
   // 画布背景网格点（P2-11，localStorage 记忆）
   const [showGrid, setShowGrid] = useState(() => localStorage.getItem('design-grid') !== '0')
@@ -529,6 +594,44 @@ export default function WorkspacePage() {
               <span className="rounded-lg bg-background px-4 py-2 text-sm shadow">AI 生成中，画布已锁定…</span>
             </div>
           )}
+          {/* 缺陷 3：临时关闭全部高级效果 —— 只读渲染基础版快照（结构与样式=基础版） */}
+          {effectsPreview && baseSnapshot && (
+            <div className="absolute inset-0 z-40 flex flex-col bg-background/95" data-testid="base-preview">
+              <div className="flex items-center justify-between border-b px-3 py-1.5 text-xs">
+                <span data-testid="base-preview-banner">
+                  正在查看基础版（高级效果已临时关闭）· 快照于 {new Date(baseSnapshot.at).toLocaleTimeString()}
+                </span>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-6 text-[11px]"
+                  data-testid="base-preview-exit"
+                  onClick={() => setEffectsPreview(false)}
+                >
+                  恢复高级效果
+                </Button>
+              </div>
+              <div className="flex-1 overflow-auto p-4">
+                <div
+                  className="mx-auto bg-white shadow-md"
+                  style={{
+                    width: typeof baseSnapshot.design.style?.width === 'number' ? baseSnapshot.design.style.width : 800,
+                    minHeight: typeof baseSnapshot.design.style?.height === 'number' ? baseSnapshot.design.style.height : 600,
+                  }}
+                >
+                  <NodeRenderer node={baseSnapshot.design} selectedIds={new Set<string>()} decorative />
+                </div>
+              </div>
+            </div>
+          )}
+          {lockHint && (
+            <div
+              className="absolute bottom-24 left-1/2 z-40 -translate-x-1/2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs text-amber-700 shadow"
+              data-testid="beautify-blocked-hint"
+            >
+              {lockHint}
+            </div>
+          )}
           {/* E3-2：优化报告（可一键撤销） */}
           {optimizeReport && (
             <div
@@ -660,6 +763,7 @@ export default function WorkspacePage() {
                     <PropertyPanel
                       node={selectedNode}
                       design={design}
+                      locked={layoutLocked}
                       onUpdate={(updater) => store.updateNode(selectedNode.id, updater)}
                       onDelete={() => {
                         store.removeNode(selectedNode.id)
@@ -699,6 +803,21 @@ export default function WorkspacePage() {
                       store.resetDesign(explored)
                       setSelectedIds(new Set())
                     }}
+                  />
+                )}
+                {activePanel === 'beautify' && (
+                  <BeautifyPanel
+                    design={design}
+                    selectedNode={selectedNode}
+                    baseSnapshot={baseSnapshot}
+                    locked={layoutLocked}
+                    applying={beautifying}
+                    error={beautifyError}
+                    previewing={effectsPreview}
+                    onConfirmLayout={handleConfirmLayout}
+                    onUnlock={handleUnlockLayout}
+                    onApplyEffect={(nodeId, key, value) => void handleApplyEffect(nodeId, key, value)}
+                    onPreviewToggle={setEffectsPreview}
                   />
                 )}
                 {activePanel === 'layers' && (

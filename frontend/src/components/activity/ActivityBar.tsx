@@ -1,10 +1,11 @@
-import { History, Layers, Settings, SlidersHorizontal, Sparkles, type LucideIcon } from 'lucide-react'
+import { History, Layers, Palette, Settings, SlidersHorizontal, Sparkles, type LucideIcon } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
 
 /** 活动栏入口（P1：图标竖排，点击展开面板，再次点击收起） */
 export const ACTIVITY_ITEMS: Array<{ key: string; label: string; icon: LucideIcon }> = [
   { key: 'props', label: '属性编辑', icon: SlidersHorizontal },
+  { key: 'beautify', label: '美化效果', icon: Palette },
   { key: 'ai', label: 'AI 生成', icon: Sparkles },
   { key: 'layers', label: '图层管理', icon: Layers },
   { key: 'history', label: '历史版本', icon: History },

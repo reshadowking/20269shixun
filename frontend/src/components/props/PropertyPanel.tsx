@@ -91,7 +91,12 @@ interface PropertyPanelProps {
   /** E3-3：当前设计树（推荐接口上下文）+ 推荐项落位回调 */
   design?: DesignNode
   onAddRecommend?: (targetId: string, item: RecommendItem) => void
+  /** 缺陷 3：版面已确认（美化阶段）——只放行颜色/背景/圆角等样式类字段，布局/文本/尺寸锁定 */
+  locked?: boolean
 }
+
+/** 锁定（版面已确认）阶段仍可编辑的样式字段：颜色、背景、圆角（样式类属性） */
+const LOCKED_ALLOWED_STYLE_KEYS = ['color', 'background', 'radius']
 
 const STYLE_FIELDS: PropField[] = [
   { key: 'layout', label: '布局', control: 'select', options: ['row', 'column', 'grid', 'free'] },
@@ -107,7 +112,7 @@ const STYLE_FIELDS: PropField[] = [
 
 const THEME = 'default' as const
 
-export default function PropertyPanel({ node, onUpdate, onDelete, onMoveLayer, onSwitchToFree, design, onAddRecommend }: PropertyPanelProps) {
+export default function PropertyPanel({ node, onUpdate, onDelete, onMoveLayer, onSwitchToFree, design, onAddRecommend, locked = false }: PropertyPanelProps) {
   const def = node.componentType ? componentRegistry[node.componentType] : undefined
 
   const canRecommend = design && onAddRecommend && (node.type === 'frame' || node.type === 'group' || node.type === 'component')
@@ -228,8 +233,13 @@ export default function PropertyPanel({ node, onUpdate, onDelete, onMoveLayer, o
         />
       )}
 
-      {/* 组件专属 props */}
-      {def && def.schema.length > 0 && (
+      {/* 组件专属 props（锁定阶段属"文本内容"，禁用） */}
+      {locked && def && def.schema.length > 0 && (
+        <p className="rounded-md bg-muted/60 px-2 py-1 text-[11px] text-muted-foreground" data-testid="prop-locked-note">
+          版面已确认：组件参数（文本内容）已锁定，仅颜色 / 背景 / 圆角等样式可改。
+        </p>
+      )}
+      {!locked && def && def.schema.length > 0 && (
         <div className="flex flex-col gap-3">
           <div className="text-xs text-muted-foreground">组件参数</div>
           {def.schema.map((field) => (
@@ -244,7 +254,7 @@ export default function PropertyPanel({ node, onUpdate, onDelete, onMoveLayer, o
       {/* 通用样式 */}
       <div className="flex flex-col gap-3">
         <div className="text-xs text-muted-foreground">样式（建议使用令牌色）</div>
-        {STYLE_FIELDS.map((field) => (
+        {(locked ? STYLE_FIELDS.filter((f) => LOCKED_ALLOWED_STYLE_KEYS.includes(f.key)) : STYLE_FIELDS).map((field) => (
           <div key={field.key} className="flex flex-col gap-1">
             <Label className="text-xs">{field.label}</Label>
             {renderControl(field, node.style?.[field.key], (v) => setStyle(field.key, v))}
@@ -252,18 +262,18 @@ export default function PropertyPanel({ node, onUpdate, onDelete, onMoveLayer, o
         ))}
       </div>
 
-      {/* 图层层级（解决节点互相覆盖） */}
+      {/* 图层层级（解决节点互相覆盖）：锁定阶段属"模块顺序"，禁用 */}
       <div className="flex flex-col gap-2">
         <div className="text-xs text-muted-foreground">图层层级</div>
         <div className="grid grid-cols-4 gap-1">
-          <Button size="sm" variant="outline" className="h-7 px-1 text-xs" data-testid="layer-top" onClick={() => onMoveLayer('top')}>置顶</Button>
-          <Button size="sm" variant="outline" className="h-7 px-1 text-xs" data-testid="layer-up" onClick={() => onMoveLayer('up')}>上移</Button>
-          <Button size="sm" variant="outline" className="h-7 px-1 text-xs" data-testid="layer-down" onClick={() => onMoveLayer('down')}>下移</Button>
-          <Button size="sm" variant="outline" className="h-7 px-1 text-xs" data-testid="layer-bottom" onClick={() => onMoveLayer('bottom')}>置底</Button>
+          <Button size="sm" variant="outline" className="h-7 px-1 text-xs" data-testid="layer-top" disabled={locked} onClick={() => onMoveLayer('top')}>置顶</Button>
+          <Button size="sm" variant="outline" className="h-7 px-1 text-xs" data-testid="layer-up" disabled={locked} onClick={() => onMoveLayer('up')}>上移</Button>
+          <Button size="sm" variant="outline" className="h-7 px-1 text-xs" data-testid="layer-down" disabled={locked} onClick={() => onMoveLayer('down')}>下移</Button>
+          <Button size="sm" variant="outline" className="h-7 px-1 text-xs" data-testid="layer-bottom" disabled={locked} onClick={() => onMoveLayer('bottom')}>置底</Button>
         </div>
       </div>
 
-      <Button variant="destructive" size="sm" data-testid="prop-delete" onClick={onDelete}>
+      <Button variant="destructive" size="sm" data-testid="prop-delete" disabled={locked} onClick={onDelete}>
         删除节点
       </Button>
     </div>

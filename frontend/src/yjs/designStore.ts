@@ -11,6 +11,7 @@
 import * as Y from 'yjs'
 import { WebsocketProvider } from 'y-websocket'
 
+import { LOCKED_EDITABLE_STYLE_KEYS } from '@/design/beautify'
 import type { DesignNode } from '@/design/types'
 
 const DESIGN_MAP = 'design'
@@ -106,6 +107,9 @@ export class DesignStore {
   private statusCbs = new Set<(status: string) => void>()
   /** 操作级撤销/重做（缺陷 13）：只跟踪本地用户操作（LOCAL_ORIGIN） */
   undoManager: Y.UndoManager
+  /** 缺陷 3：美化阶段版面锁定——只有效果白名单的 style 键允许改动（写入层强制，不靠 UI 禁用） */
+  private beautifyLock = false
+  private blockedCbs = new Set<(reason: string) => void>()
 
   private handleAwareness = (): void => {
     this.presenceCbs.forEach((cb) => cb())
@@ -203,6 +207,54 @@ export class DesignStore {
     return () => this.statusCbs.delete(cb)
   }
 
+  // ---- 缺陷 3：美化阶段版面锁定（数据写入层强制）----
+
+  setBeautifyLock(locked: boolean): void {
+    this.beautifyLock = locked
+  }
+
+  get isBeautifyLocked(): boolean {
+    return this.beautifyLock
+  }
+
+  /** 订阅"越权写入被拒"事件（UI 提示用：拖拽/改文本在锁定阶段会被静默拦下） */
+  subscribeBlocked(cb: (reason: string) => void): () => void {
+    this.blockedCbs.add(cb)
+    return () => this.blockedCbs.delete(cb)
+  }
+
+  private _rejectBlocked(reason: string): void {
+    this.blockedCbs.forEach((cb) => cb(reason))
+  }
+
+  /**
+   * 锁定期的单节点改动白名单：只允许效果白名单 style 键变化。
+   * props（文本/内容）、结构（children/type/id）、位置尺寸（x/y/hidden/width/height/layout 等）一律拒绝。
+   */
+  private _allowedWhileLocked(prev: DesignNode, next: DesignNode): boolean {
+    if (!this.beautifyLock) return true
+    if (prev.id !== next.id || prev.type !== next.type || prev.componentType !== next.componentType) return false
+    if (JSON.stringify(prev.props ?? {}) !== JSON.stringify(next.props ?? {})) return false
+    if (prev.x !== next.x || prev.y !== next.y || prev.hidden !== next.hidden) return false
+    const prevIds = (prev.children ?? []).map((c) => c.id).join(',')
+    const nextIds = (next.children ?? []).map((c) => c.id).join(',')
+    if (prevIds !== nextIds) return false
+    const prevStyle = (prev.style ?? {}) as Record<string, unknown>
+    const nextStyle = (next.style ?? {}) as Record<string, unknown>
+    for (const key of new Set([...Object.keys(prevStyle), ...Object.keys(nextStyle)])) {
+      if (LOCKED_EDITABLE_STYLE_KEYS.includes(key)) continue
+      if (prevStyle[key] !== nextStyle[key]) return false
+    }
+    return true
+  }
+
+  /** 锁定期结构/顺序类操作（新增/删除/复制/移动）一律拒绝 */
+  private _blockStructuralWhileLocked(): boolean {
+    if (!this.beautifyLock) return false
+    this._rejectBlocked('版面已确认：模块新增/删除/排序已锁定，请先解除版面锁定')
+    return true
+  }
+
   getDesign(): DesignNode {
     if (this.cached) return this.cached
     const root = this.designMap.get(ROOT_KEY) as YNode | undefined
@@ -246,7 +298,13 @@ export class DesignStore {
         if (!root) return
         const target = findYNode(root, id)
         if (!target) return
-        this._applyUpdate(target, updater(yToPlain(target)))
+        const prev = yToPlain(target)
+        const next = updater(prev)
+        if (!this._allowedWhileLocked(prev, next)) {
+          this._rejectBlocked('版面已确认：仅允许修改样式效果（布局/文本/结构已锁定）')
+          return
+        }
+        this._applyUpdate(target, next)
       },
       LOCAL_ORIGIN,
     )
@@ -258,11 +316,20 @@ export class DesignStore {
       () => {
         const root = this.designMap.get(ROOT_KEY) as YNode | undefined
         if (!root) return
-        ids.forEach((id, index) => {
-          const target = findYNode(root, id)
-          if (!target) return
-          this._applyUpdate(target, updater(yToPlain(target), index))
-        })
+        // 锁定阶段：任一批次含越权改动则整批拒绝（原子语义，避免半应用）
+        const targets = ids
+          .map((id, index) => {
+            const target = findYNode(root, id)
+            if (!target) return null
+            const prev = yToPlain(target)
+            return { target, prev, next: updater(prev, index) }
+          })
+          .filter((t): t is { target: YNode; prev: DesignNode; next: DesignNode } => t !== null)
+        if (targets.some((t) => !this._allowedWhileLocked(t.prev, t.next))) {
+          this._rejectBlocked('版面已确认：仅允许修改样式效果（布局/文本/结构已锁定）')
+          return
+        }
+        for (const t of targets) this._applyUpdate(t.target, t.next)
       },
       LOCAL_ORIGIN,
     )
@@ -298,6 +365,7 @@ export class DesignStore {
   }
 
   removeNode(id: string) {
+    if (this._blockStructuralWhileLocked()) return
     this.ydoc.transact(
       () => {
         const root = this.designMap.get(ROOT_KEY) as YNode | undefined
@@ -315,6 +383,7 @@ export class DesignStore {
   }
 
   duplicateNode(id: string) {
+    if (this._blockStructuralWhileLocked()) return
     this.ydoc.transact(
       () => {
         const root = this.designMap.get(ROOT_KEY) as YNode | undefined
@@ -360,6 +429,7 @@ export class DesignStore {
 
   /** 在指定父节点 children 末尾插入新节点（组件面板添加）；index 指定插入位置（E3-3 推荐落位） */
   insertChild(parentId: string, node: DesignNode, index?: number) {
+    if (this._blockStructuralWhileLocked()) return
     this.ydoc.transact(
       () => {
         const root = this.designMap.get(ROOT_KEY) as YNode | undefined
@@ -401,6 +471,7 @@ export class DesignStore {
 
   /** 跨父移动（图层管理：拖拽改父级）；目标不能是自己的后代 */
   moveNodeTo(nodeId: string, newParentId: string, index: number) {
+    if (this._blockStructuralWhileLocked()) return
     this.ydoc.transact(
       () => {
         const root = this.designMap.get(ROOT_KEY) as YNode | undefined
@@ -437,6 +508,7 @@ export class DesignStore {
 
   /** flex 布局拖拽重排 */
   moveChild(childId: string, parentId: string, targetIndex: number) {
+    if (this._blockStructuralWhileLocked()) return
     this.ydoc.transact(
       () => {
         const root = this.designMap.get(ROOT_KEY) as YNode | undefined

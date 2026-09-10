@@ -332,3 +332,96 @@ describe('D5 presence（本地模式/无 provider）', () => {
     store.destroy()
   })
 })
+
+describe('缺陷 3 美化锁定（数据写入层强制）', () => {
+  const SHADOW = '0 4px 12px rgba(29,33,41,0.10)'
+
+  function lockedStore(): DesignStore {
+    const store = new DesignStore(undefined, sample())
+    store.setBeautifyLock(true)
+    return store
+  }
+
+  it('锁定后：位置/文本/尺寸/布局/结构改动全部被拒绝（不靠 UI 禁用）', () => {
+    const store = lockedStore()
+    const before = JSON.stringify(store.getDesign())
+
+    store.updateNode('b1', (n) => ({ ...n, x: 10, y: 20 })) // 位置
+    store.updateNode('b1', (n) => ({ ...n, props: { ...(n.props ?? {}), text: '改了文案' } })) // 文本
+    store.updateNode('b1', (n) => ({ ...n, style: { ...(n.style ?? {}), width: 999 } })) // 尺寸
+    store.updateNode('b', (n) => ({ ...n, style: { ...(n.style ?? {}), layout: 'grid' } })) // 布局
+    store.updateNode('b', (n) => ({ ...n, children: [...(n.children ?? []), { id: 'new', type: 'text' }] })) // 结构
+
+    expect(JSON.stringify(store.getDesign())).toBe(before)
+  })
+
+  it('锁定后：新增/删除/复制/排序模块被拒绝', () => {
+    const store = lockedStore()
+    const before = JSON.stringify(store.getDesign())
+    store.insertChild('root', { id: 'x1', type: 'text' })
+    store.removeNode('b1')
+    store.duplicateNode('b')
+    store.moveChild('a', 'root', 1)
+    store.moveNodeTo('b2', 'root', 0)
+    expect(JSON.stringify(store.getDesign())).toBe(before)
+  })
+
+  it('锁定后：白名单效果键允许写入（阴影/渐变/动效/圆角/描边/变换）', () => {
+    const store = lockedStore()
+    store.updateNode('b1', (n) => ({ ...n, style: { ...(n.style ?? {}), shadow: SHADOW } }))
+    store.updateNode('b1', (n) => ({ ...n, style: { ...(n.style ?? {}), radius: 16 } }))
+    store.updateNode('b1', (n) => ({ ...n, style: { ...(n.style ?? {}), animation: 'fade-in' } }))
+    const target = store.getDesign().children!.find((c) => c.id === 'b')!.children!.find((c) => c.id === 'b1')!
+    expect(target.style?.shadow).toBe(SHADOW)
+    expect(target.style?.radius).toBe(16)
+    expect(target.style?.animation).toBe('fade-in')
+    expect(target.style?.width).toBeUndefined() // 别的字段没被动
+  })
+
+  it('批量更新：任一项越权则整批拒绝（原子语义）', () => {
+    const store = lockedStore()
+    const before = JSON.stringify(store.getDesign())
+    store.updateMany(['a', 'b1'], (n) => ({ ...n, props: { ...(n.props ?? {}), text: '批量改' } }))
+    expect(JSON.stringify(store.getDesign())).toBe(before)
+  })
+
+  it('解除锁定后恢复可编辑', () => {
+    const store = lockedStore()
+    store.setBeautifyLock(false)
+    store.updateNode('b1', (n) => ({ ...n, props: { ...(n.props ?? {}), text: '可以改了' } }))
+    const target = store.getDesign().children!.find((c) => c.id === 'b')!.children!.find((c) => c.id === 'b1')!
+    expect(target.props?.text).toBe('可以改了')
+  })
+
+  it('越权写入触发 blocked 回调（UI 据此提示），返回值不抛错', () => {
+    const store = lockedStore()
+    const reasons: string[] = []
+    const unsub = store.subscribeBlocked((r) => reasons.push(r))
+    expect(() => store.updateNode('b1', (n) => ({ ...n, x: 1 }))).not.toThrow()
+    expect(() => store.removeNode('b1')).not.toThrow()
+    expect(reasons).toHaveLength(2)
+    expect(reasons[0]).toContain('版面已确认')
+    unsub()
+  })
+
+  it('锁定不影响整树重置通道（AI 生成/快照恢复走 resetDesign）', () => {
+    const store = lockedStore()
+    const next: DesignNode = { id: 'root', type: 'frame', style: { layout: 'row' }, children: [{ id: 'z', type: 'text' }] }
+    store.resetDesign(next)
+    expect(store.getDesign().children?.[0].id).toBe('z')
+  })
+})
+
+describe('缺陷 3 锁定阶段的可写样式白名单', () => {
+  it('颜色/背景在锁定期仍可改（样式类属性），但布局/文本/尺寸不行', () => {
+    const store = new DesignStore(undefined, sample())
+    store.setBeautifyLock(true)
+    store.updateNode('a', (n) => ({ ...n, style: { ...(n.style ?? {}), color: 'primary', background: '#FFF0F0' } }))
+    const node = store.getDesign().children!.find((c) => c.id === 'a')!
+    expect(node.style?.color).toBe('primary')
+    expect(node.style?.background).toBe('#FFF0F0')
+
+    store.updateNode('a', (n) => ({ ...n, style: { ...(n.style ?? {}), fontSize: 40 } }))
+    expect(store.getDesign().children!.find((c) => c.id === 'a')!.style?.fontSize).toBeUndefined()
+  })
+})

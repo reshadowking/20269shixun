@@ -31,13 +31,29 @@ const CSS_KEY_MAP: Record<string, string> = {
   flex: 'flex',
   border: 'border',
   textDecoration: 'textDecoration',
+  // 缺陷 3 高级效果：阴影与变换
+  shadow: 'boxShadow',
+  transform: 'transform',
 }
+
+/**
+ * 入场动效预置（缺陷 3）：只写 name 会因缺少时长而不生效，这里补全为完整 animation 值。
+ * 关键帧定义见 index.css；非预置名字一律忽略（白名单外的值不渲染）。
+ */
+const ANIMATION_PRESETS: Record<string, string> = {
+  'fade-in': 'fade-in 0.6s ease-out both',
+  'rise-in': 'rise-in 0.6s ease-out both',
+  'pulse-soft': 'pulse-soft 2.4s ease-in-out infinite',
+}
+
+/** 变换/渐变等富样式值的形状校验（拒绝分号/花括号/引号等注入向量） */
+const SAFE_FN_VALUE = /^[a-z][a-z-]*\([^;{}"'<>\\]*\)$/i
 
 /** DesignNode style → React CSSProperties（组件内部透传也用它） */
 export function styleToCss(style: NodeStyle | undefined): CSSProperties {
   const s: CSSProperties = {}
   if (!style) return s
-  const { layout, gap, color, background, radius, width, height, spacing, padding, backgroundImage, ...rest } = style
+  const { layout, gap, color, background, radius, width, height, spacing, padding, backgroundImage, animation, ...rest } = style
 
   if (layout === 'free') {
     // free 容器自身作为子节点绝对定位的上下文
@@ -59,13 +75,25 @@ export function styleToCss(style: NodeStyle | undefined): CSSProperties {
   if (padding !== undefined) s.padding = padding
   else if (spacing !== undefined) s.padding = spacing
   if (backgroundImage) {
-    // 背景图 URL 协议白名单（http/https/data:image），防 CSS 注入
     const url = String(backgroundImage)
     if (/^(https?:|data:image\/)/i.test(url)) {
+      // 背景图 URL 协议白名单（http/https/data:image），防 CSS 注入
       s.backgroundImage = `url("${url.replace(/"/g, '%22')}")`
       s.backgroundSize = 'cover'
       s.backgroundPosition = 'center'
+    } else if (/^(linear|radial|conic)-gradient\(/i.test(url) && SAFE_FN_VALUE.test(url)) {
+      // 缺陷 3：渐变背景（白名单预置值，仍做形状校验）
+      s.backgroundImage = url
+      s.backgroundSize = 'cover'
+      s.backgroundPosition = 'center'
     }
+  }
+  if (animation && ANIMATION_PRESETS[String(animation)]) {
+    s.animation = ANIMATION_PRESETS[String(animation)]
+  }
+  // transform 走 rest 分支的 CSS_KEY_MAP；此处补形状校验，拒绝注入值
+  if (rest.transform !== undefined && !SAFE_FN_VALUE.test(String(rest.transform))) {
+    delete rest.transform
   }
   // 其余已知样式字段透传
   for (const [k, v] of Object.entries(rest)) {

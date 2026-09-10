@@ -49,3 +49,30 @@ describe('既有映射不回归', () => {
     expect(bad.backgroundImage).toBeUndefined()
   })
 })
+
+describe('缺陷 3 高级效果渲染（styleToCss）', () => {
+  it('阴影映射 boxShadow，变换映射 transform', () => {
+    const css = styleToCss({ shadow: '0 4px 12px rgba(29,33,41,0.10)', transform: 'scale(1.04)' })
+    expect(css.boxShadow).toBe('0 4px 12px rgba(29,33,41,0.10)')
+    expect(css.transform).toBe('scale(1.04)')
+  })
+
+  it('动效预置名补全为完整 animation（只写名字不会生效）', () => {
+    expect(styleToCss({ animation: 'fade-in' }).animation).toBe('fade-in 0.6s ease-out both')
+    expect(styleToCss({ animation: 'pulse-soft' }).animation).toBe('pulse-soft 2.4s ease-in-out infinite')
+    expect(styleToCss({ animation: 'unknown-anim' }).animation).toBeUndefined()
+  })
+
+  it('渐变背景可渲染，非渐变/注入值被忽略', () => {
+    expect(styleToCss({ backgroundImage: 'linear-gradient(135deg, #0052D9 0%, #7C4DFF 100%)' }).backgroundImage).toBe(
+      'linear-gradient(135deg, #0052D9 0%, #7C4DFF 100%)',
+    )
+    expect(styleToCss({ backgroundImage: 'url(http://evil/x.png)' }).backgroundImage).toBeUndefined()
+    expect(styleToCss({ backgroundImage: 'linear-gradient(red 0%; background: url(x))' }).backgroundImage).toBeUndefined()
+  })
+
+  it('注入形状的值不渲染（分号/花括号/引号）', () => {
+    expect(styleToCss({ transform: 'scale(1); background: red' }).transform).toBeUndefined()
+    expect(styleToCss({ shadow: '0 0 0 red' }).boxShadow).toBe('0 0 0 red') // shadow 值本身由白名单把关
+  })
+})
