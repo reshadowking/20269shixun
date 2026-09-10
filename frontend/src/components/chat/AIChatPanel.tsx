@@ -148,6 +148,11 @@ const WELCOME_TEXT = '你好！我是 AI 设计助手。输入你的需求，我
 /** 欢迎语：ephemeral（不落库），仅在无真实消息时占位，保持既有消息下标语义不变 */
 const WELCOME_MESSAGE: ChatMessage = { role: 'assistant', text: WELCOME_TEXT, ephemeral: true }
 
+/** 改造前的历史里可能存着欢迎语占位；加载时剔除，避免"面板欢迎语 + 历史占位"两条（兼容已迁移数据） */
+function isWelcomePlaceholder(text: string): boolean {
+  return text.trimStart().startsWith('你好！我是 AI 设计助手')
+}
+
 interface AIChatPanelProps {
   onGenerate: (design: DesignNode) => void
   /** 生成期间通知上层锁定画布（v2.2 §8.8） */
@@ -230,7 +235,9 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
       .messages(sessionKey, MAX_HISTORY)
       .then((r) => {
         if (cancelled) return
-        const incoming: ChatMessage[] = r.messages.map((m) => ({ role: m.role, text: m.text, sessionId: sessionKey }))
+        const incoming: ChatMessage[] = r.messages
+          .filter((m) => !(m.role === 'assistant' && isWelcomePlaceholder(m.text)))
+          .map((m) => ({ role: m.role, text: m.text, sessionId: sessionKey }))
         const { messages: own, dropped } = scope.filter(incoming)
         if (dropped > 0) setSessionError(`已忽略 ${dropped} 条非本会话消息（跨会话读取被拒绝）`)
         // 合并而非覆盖：加载期间用户可能已发出新消息，直接替换会把它们吞掉；

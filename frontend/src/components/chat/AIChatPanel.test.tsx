@@ -285,6 +285,34 @@ describe('会话隔离：消息只来自当前会话（缺陷 4）', () => {
     await waitFor(() => expect(screen.getAllByTestId(/^chat-msg-/)).toHaveLength(1))
   })
 
+  it('历史里存着欢迎语占位（改造前数据）：只显示一条欢迎语', async () => {
+    localStorage.clear()
+    const fetchMock = vi.fn(async (url: string) => {
+      const path = String(url)
+      if (path.includes('/api/sessions') && path.includes('/messages')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            messages: [
+              { id: 1, role: 'assistant', text: '你好！我是 AI 设计助手。输入你的需求，我帮你生成设计稿。' },
+              { id: 2, role: 'user', text: '旧需求' },
+            ],
+          }),
+        }
+      }
+      if (path.includes('/api/sessions')) {
+        return { ok: true, status: 200, json: async () => ({ session_id: 's-legacy', agent_state: {} }) }
+      }
+      throw new Error('unexpected fetch: ' + path)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<AIChatPanel sessionKey="s-legacy" onGenerate={() => {}} />)
+    expect(await screen.findByText('旧需求')).toBeInTheDocument()
+    const welcomes = screen.queryAllByText(/你好！我是 AI 设计助手/)
+    expect(welcomes).toHaveLength(1)
+  })
+
   it('会话接口不可用：降级为仅本地可见并提示（不阻塞对话）', async () => {
     localStorage.clear()
     vi.stubGlobal('fetch', vi.fn(async () => {
