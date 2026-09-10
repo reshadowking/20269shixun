@@ -649,7 +649,7 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
             data-testid="chat-clear-history"
             onClick={() => {
               // 缺陷 4b：清空会话需二次确认；只清当前 sessionId 的消息与 Agent 状态
-              if (!window.confirm('清空当前会话的消息与 Agent 状态？（不影响其他画布会话）')) return
+              if (!window.confirm('清空当前会话的消息与 Agent 状态？画布与快照保留，其他会话不受影响。')) return
               setMessages([WELCOME_MESSAGE])
               setPending(null)
               setFallbackResult(null)

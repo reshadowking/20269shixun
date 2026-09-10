@@ -301,7 +301,7 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
   /** 删除会话（4b：二次确认；连带服务端消息与本地快照） */
   const handleDeleteSession = (key: string) => {
     const target = sessions.find((x) => x.session_id === key)
-    if (!window.confirm(`删除会话「${target?.title ?? key}」？该会话的消息与快照将被删除且不可恢复。`)) return
+    if (!window.confirm(`删除会话「${target?.title ?? key}」？消息与快照将删除且不可恢复，画布内容不受影响。`)) return
     void (async () => {
       try {
         await sessionApi.remove(key)
