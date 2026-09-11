@@ -153,14 +153,25 @@ function isWelcomePlaceholder(text: string): boolean {
   return text.trimStart().startsWith('你好！我是 AI 设计助手')
 }
 
+/** T4 批1：闸门落地结果（上层过 /api/apply-locked-edit 后回传；void 兼容旧调用方） */
+export interface IncrementalEditOutcome {
+  ok: boolean
+  reason?: string
+  dropped?: string[]
+}
+
 interface AIChatPanelProps {
   onGenerate: (design: DesignNode) => void
   /** 生成期间通知上层锁定画布（v2.2 §8.8） */
   onGeneratingChange?: (generating: boolean) => void
   /** P0-1 增量编辑：当前画布树（传入时修改类指令走增量生成） */
   design?: DesignNode
-  /** P0-1 增量编辑成功：应用新树 + 被修改节点 id（上层负责快照/高亮） */
-  onIncrementalEdit?: (newDesign: DesignNode, changedIds: string[]) => void
+  /** P0-1 增量编辑成功：应用新树 + 被修改节点 id（上层负责快照/高亮/闸门）。
+   * T4 批1：返回闸门落地结果——被版面锁拒绝时面板展示拒绝原因而非"已应用"。 */
+  onIncrementalEdit?: (
+    newDesign: DesignNode,
+    changedIds: string[],
+  ) => IncrementalEditOutcome | Promise<IncrementalEditOutcome> | void
   /** P0-1 撤销：回到上一版（快照） */
   onUndo?: () => void
   canUndo?: boolean
@@ -364,12 +375,24 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
       setComplianceReport(resp.violations_detail && resp.violations_detail.length > 0 ? resp.violations_detail : null)
       if (isEdit && editDesign && onIncrementalEdit) {
         const changed = diffDesign(editDesign, resp.design)
-        onIncrementalEdit(resp.design, changed)
+        // T4 批1：上层把 AI 结果送服务端闸门（锁状态由服务端判定）后再落地
+        const outcome = await onIncrementalEdit(resp.design, changed)
+        if (outcome && outcome.ok === false) {
+          setMessages((m) => [
+            ...m,
+            {
+              role: 'assistant',
+              text: `⛔ 该修改已被版面锁拒绝（画布保持原样）\n原因：${outcome.reason ?? '越权修改'}。如需改版面请先解除版面锁定，再重试本次修改。`,
+            },
+          ])
+          return
+        }
+        const droppedNote = outcome?.dropped?.length ? '\n部分效果为非预置值，已忽略。' : ''
         setMessages((m) => [
           ...m,
           {
             role: 'assistant',
-            text: `已应用修改 ✓（仅改动 ${changed.length > 0 ? changed.length : '指定'} 处，其余保持不变）\n被修改的节点已高亮提示；输入「撤销」可回到修改前。`,
+            text: `已应用修改 ✓（仅改动 ${changed.length > 0 ? changed.length : '指定'} 处，其余保持不变）${droppedNote}\n被修改的节点已高亮提示；输入「撤销」可回到修改前。`,
           },
         ])
         return

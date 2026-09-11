@@ -268,7 +268,8 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
     }
   }, [])
 
-  // 进入工作台：先跑一次性老数据迁移（失败下次重试），再确保本会话存在（幂等），最后拉列表
+  // 进入工作台：先跑一次性老数据迁移（失败下次重试），再确保本会话存在（幂等），最后拉列表。
+  // T4 批1：随后读回服务端锁状态（刷新不丢锁——B 决策），并同步写入层锁。
   useEffect(() => {
     let cancelled = false
     const run = async () => {
@@ -283,12 +284,22 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
           setSessionError(`会话同步失败（当前仅本地可见）：${err instanceof Error ? err.message : String(err)}`)
         }
       }
+      try {
+        const lock = await sessionApi.getBeautifyLock(sessionKey)
+        if (!cancelled) {
+          setLayoutLocked(lock.locked)
+          store.setBeautifyLock(lock.locked)
+        }
+      } catch {
+        /* 锁状态读取失败：按未锁定处理（与刷新前旧行为一致），锁定在下次确认时重建 */
+      }
       if (!cancelled) await refreshSessions()
     }
     void run()
     return () => {
       cancelled = true
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionKey, refreshSessions])
 
   /** 切换会话：换 URL 即换会话（重挂载，零状态泄漏） */
@@ -363,7 +374,8 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
     setEffectsPreview(false)
   }, [designParam])
 
-  /** 版面确认：保留基础版快照 + 锁定版面（只放行样式效果） */
+  /** 版面确认：保留基础版快照 + 锁定版面（只放行样式效果）。
+   * T4 批1：锁状态同步到服务端（闸门判定的来源），失败必须可见。 */
   const handleConfirmLayout = () => {
     if (!saveBaseSnapshot(beautifyScope, design)) {
       setBeautifyError('基础版快照保存失败（本地存储不可用或已满），暂不锁定版面。')
@@ -373,11 +385,17 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
     store.setBeautifyLock(true)
     setLayoutLocked(true)
     setBeautifyError('')
+    sessionApi.setBeautifyLock(sessionKey, true).catch(() => {
+      setBeautifyError('锁定状态未同步到服务端，刷新后可能丢失。请检查网络后重试。')
+    })
   }
 
   const handleUnlockLayout = () => {
     store.setBeautifyLock(false)
     setLayoutLocked(false)
+    sessionApi.setBeautifyLock(sessionKey, false).catch(() => {
+      setBeautifyError('解锁状态未同步到服务端，刷新后可能回到锁定态。请检查网络后重试。')
+    })
   }
 
   /** 应用高级效果：尺寸类效果先二次确认；写入走服务端白名单铁闸，成功后入快照可撤销 */
@@ -590,13 +608,47 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
   // ---- P0-1 增量编辑：被修改节点高亮（3 秒后消失）----
   const [highlightIds, setHighlightIds] = useState<Set<string>>(new Set())
 
-  const handleIncrementalEdit = (newDesign: DesignNode, changedIds: string[]) => {
-    store.pushSnapshot()
-    setUndoCount((c) => c + 1)
-    store.resetDesign(newDesign)
-    setSelectedIds(new Set())
-    setHighlightIds(new Set(changedIds))
-    window.setTimeout(() => setHighlightIds(new Set()), 5000)
+  const handleIncrementalEdit = async (
+    newDesign: DesignNode,
+    changedIds: string[],
+  ): Promise<{ ok: boolean; reason?: string; dropped?: string[] }> => {
+    // T4 批1：AI 修改结果必须过服务端闸门（锁状态由服务端按会话判定，前端不声明）。
+    // 始终调用——未锁定时服务端直接放行，行为与改造前一致。
+    try {
+      const resp = await api<{
+        ok: boolean
+        design: DesignNode
+        changed_ids: string[]
+        dropped: string[]
+        reason?: string
+      }>('/api/apply-locked-edit', {
+        method: 'POST',
+        body: JSON.stringify({ session_key: sessionKey, before: design, after: newDesign }),
+      })
+      if (!resp.ok) {
+        const hint = `该修改会改变版面结构，已阻止：${resp.reason ?? '越权修改'}。如需改版面请先解除锁定`
+        setLockHint(hint)
+        window.setTimeout(() => setLockHint(''), 6000)
+        return { ok: false, reason: resp.reason }
+      }
+      if (resp.dropped?.length) {
+        setLockHint('AI 部分效果为非预置值，已忽略')
+        window.setTimeout(() => setLockHint(''), 6000)
+      }
+      store.pushSnapshot()
+      setUndoCount((c) => c + 1)
+      store.resetDesign(resp.design)
+      setSelectedIds(new Set())
+      const changed = resp.changed_ids?.length ? resp.changed_ids : changedIds
+      setHighlightIds(new Set(changed))
+      window.setTimeout(() => setHighlightIds(new Set()), 5000)
+      return { ok: true, dropped: resp.dropped }
+    } catch {
+      // 闸门确认失败（网络等）：无法判定锁状态，保守处理——画布保持原样
+      setLockHint('AI 修改未能确认（网络异常），画布保持原样，请重试')
+      window.setTimeout(() => setLockHint(''), 6000)
+      return { ok: false, reason: '网络异常' }
+    }
   }
 
   // ---- E3-3：组件推荐（右键菜单浮层 + 落位）----

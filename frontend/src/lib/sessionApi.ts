@@ -70,6 +70,17 @@ export const sessionApi = {
   remove(sessionKey: string): Promise<{ ok: boolean }> {
     return api(`/api/sessions/${encodeURIComponent(sessionKey)}`, { method: 'DELETE' })
   },
+  /** 读版面锁定状态（T4 批1）：服务端为锁的权威来源，前端据此初始化 layoutLocked */
+  getBeautifyLock(sessionKey: string): Promise<{ locked: boolean }> {
+    return api(`/api/sessions/${encodeURIComponent(sessionKey)}/beautify-lock`)
+  },
+  /** 写版面锁定状态（T4 批1）：确认版面/解除锁定时同步；闸门判定在服务端 */
+  setBeautifyLock(sessionKey: string, locked: boolean): Promise<{ ok: boolean; locked: boolean }> {
+    return api(`/api/sessions/${encodeURIComponent(sessionKey)}/beautify-lock`, {
+      method: 'POST',
+      body: JSON.stringify({ locked }),
+    })
+  },
   messages(sessionKey: string, limit = 50): Promise<{ messages: SessionMessage[] }> {
     return api(`/api/sessions/${encodeURIComponent(sessionKey)}/messages?limit=${limit}`)
   },
