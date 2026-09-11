@@ -1,20 +1,28 @@
 import type { ExportElement } from '@/components/canvas/types'
 import { escapeHtml } from '@/design/escape'
-import { styleToCss } from '@/design/styleToCss'
+import { resolveColor, styleToCss } from '@/design/styleToCss'
 import type { DesignNode } from '@/design/types'
+
+/**
+ * 趋势色（T3 修复）：画布与导出共用同一令牌（design-system.yaml 唯一规范源）——
+ * 涨 = success、跌 = danger。此前画布用 Tailwind emerald/rose 类、导出硬编码
+ * success 的十六进制值，两侧各自实现导致「↓ 在导出里恒为绿色」的 parity 破洞。
+ */
+function trendColor(trend: string): string | undefined {
+  return resolveColor(trend.startsWith('↑') ? 'success' : 'danger')
+}
 
 /** ① 画布渲染：指标块（label/value/trend，样式参考 shadcn/ui Card + 数字） */
 export function CanvasStatBlock({ props, style }: { props: Record<string, unknown>; style?: React.CSSProperties }) {
   const label = typeof props.label === 'string' ? props.label : '指标'
   const value = typeof props.value === 'string' ? props.value : '0'
   const trend = typeof props.trend === 'string' ? props.trend : ''
-  const up = trend.startsWith('↑')
   return (
     <div className="rounded-lg border bg-card p-4 shadow-sm" style={style as object}>
       <div className="text-sm text-muted-foreground">{label}</div>
       <div className="mt-1 text-2xl font-bold">{value}</div>
       {trend && (
-        <div className={`mt-1 text-xs ${up ? 'text-emerald-500' : 'text-rose-500'}`}>{trend}</div>
+        <div className="mt-1 text-xs" style={{ color: trendColor(trend) }}>{trend}</div>
       )}
     </div>
   )
@@ -65,7 +73,12 @@ export const buildStatBlockExport = (node: DesignNode): ExportElement => {
     },
   ]
   if (typeof props.trend === 'string' && props.trend) {
-    children.push({ tag: 'div', attrs: {}, style: { fontSize: 12, color: '#00A870' }, text: props.trend })
+    children.push({
+      tag: 'div',
+      attrs: {},
+      style: { fontSize: 12, color: trendColor(props.trend) },
+      text: props.trend,
+    })
   }
   return { tag: 'div', attrs: {}, style: styleToCss(node.style), children }
 }

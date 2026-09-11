@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest'
 
 import { componentPalette, componentRegistry } from '@/components/canvas/registry'
 import { COMPONENT_TYPES } from '@/design/types'
+import { resolveColor } from '@/design/styleToCss'
 import { VARIANT_CLASS, buttonSchema } from '@/components/canvas/button'
 
 /** B0 契约：前端组件事实源 vs shared/component-library.json（单一来源护栏）。
@@ -40,6 +41,20 @@ describe('组件画布渲染', () => {
     const def = componentRegistry.tag
     const { container } = render(<def.Canvas props={{ text: '最热', color: 'danger' }} />)
     expect(container.querySelector('[data-testid="canvas-tag"]')?.textContent).toBe('最热')
+  })
+
+  it('stat-block 趋势渲染：涨=success、跌=danger，内联色与导出同源（T3）', () => {
+    // jsdom 不解析 Tailwind 类：趋势色走内联样式，画布/导出才能同源并被测试
+    const def = componentRegistry['stat-block']
+    const rgb = (hex: string): string => {
+      const n = parseInt(hex.slice(1), 16)
+      return `rgb(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255})`
+    }
+    const { unmount } = render(<def.Canvas props={{ label: 'L', value: 'V', trend: '↑ 12.6%' }} />)
+    expect(screen.getByText('↑ 12.6%').style.color).toBe(rgb(resolveColor('success')!))
+    unmount()
+    render(<def.Canvas props={{ label: 'L', value: 'V', trend: '↓ 2.4%' }} />)
+    expect(screen.getByText('↓ 2.4%').style.color).toBe(rgb(resolveColor('danger')!))
   })
 
   it('未注册组件渲染占位并标记警告', () => {

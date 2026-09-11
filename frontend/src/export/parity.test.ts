@@ -9,6 +9,7 @@
 import { describe, expect, it } from 'vitest'
 
 import type { ComponentType, DesignNode } from '@/design/types'
+import { resolveColor } from '@/design/styleToCss'
 import { designToHtml } from './designToHtml'
 import { designToReactApp } from './designToReact'
 
@@ -76,5 +77,35 @@ describe('B0-2 导出语义 parity（React/HTML 双通道）', () => {
     expect(html).toContain('padding: 16px')
     expect(html).toContain('background: #0052D9')
     expect(html).toContain('border-radius: 8px')
+  })
+
+  /**
+   * T3 趋势色 parity（回归破洞：画布条件色「↑涨/否则跌」，导出曾恒为 success 绿，
+   * 后台仪表板模板的 "↓ 2.4%" 导出后仍显示绿色）。锁死口径：趋势色两侧同源，
+   * 涨 = success 令牌、跌 = danger 令牌（值取自 design-system.yaml 生成物，不写死 hex）。
+   */
+  it('stat-block 趋势色 parity：↑=success 令牌、↓=danger 令牌（React/HTML 双通道）', () => {
+    const SUCCESS = resolveColor('success')
+    const DANGER = resolveColor('danger')
+    const treeOfTrend = (trend: string): DesignNode =>
+      treeOf({ componentType: 'stat-block', props: { label: '本月营收', value: '¥1.2万', trend }, text: '本月营收' })
+
+    for (const [trend, expected] of [
+      ['↑12%', SUCCESS],
+      ['↓ 2.4%', DANGER],
+    ] as const) {
+      const react = designToReactApp(treeOfTrend(trend), false)
+      const html = designToHtml(treeOfTrend(trend))
+      // 文本两通道都在（↓ 造数此前完全缺失）
+      expect(react, `↑↓ ${trend}: React 缺趋势文本`).toContain(trend)
+      expect(html, `↑↓ ${trend}: HTML 缺趋势文本`).toContain(trend)
+      // 颜色：React 为 JSON 字面量形式，HTML 为 CSS 文本形式
+      expect(react, `↑↓ ${trend}: React 趋势色非 ${expected}`).toContain(`"color":"${expected}"`)
+      expect(html, `↑↓ ${trend}: HTML 趋势色非 ${expected}`).toContain(`color: ${expected}`)
+      // 防回退：另一支颜色不得出现（fixture 无其他语义色用法，出现即趋势色又写死了）
+      const other = expected === SUCCESS ? DANGER : SUCCESS
+      expect(react, `↑↓ ${trend}: React 混入了对侧颜色`).not.toContain(`"color":"${other}"`)
+      expect(html, `↑↓ ${trend}: HTML 混入了对侧颜色`).not.toContain(`color: ${other}`)
+    }
   })
 })
