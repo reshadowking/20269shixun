@@ -88,6 +88,27 @@ describe('T5-0 #5 导出缺部件：button 变体底色', () => {
   })
 })
 
+describe('T5-0 #4 导出缺部件：sidebar active 态', () => {
+  const SIDEBAR_PROPS = { items: [{ label: '首页' }, { label: '设置' }], active: '首页' }
+
+  it('active 项 = primary 底 + 白字；非 active = text-light；根底色随画布（双通道）', () => {
+    const react = designToReactApp(plainTree('sidebar', SIDEBAR_PROPS), false)
+    const html = designToHtml(plainTree('sidebar', SIDEBAR_PROPS))
+    // active：primary 底 + 白字（此前导出只有 padding，active 态整体丢失）
+    expect(react).toContain(`"background":"${resolveColor('primary')}"`)
+    expect(react).toContain('"color":"#FFFFFF"')
+    expect(html).toContain(`background: ${resolveColor('primary')}`)
+    expect(html).toContain('color: #FFFFFF')
+    // 非 active：text-light 令牌灰（与画布 muted-foreground #86909c 同源）
+    expect(react).toContain(`"color":"${resolveColor('text-light')}"`)
+    expect(html).toContain(`color: ${resolveColor('text-light')}`)
+    // 根底色：bg-foreground/95 → text-primary 令牌 95% 透明度（同文件同缺陷，一并收敛）
+    const expectedRootBg = 'rgba(29,33,41,0.95)'
+    expect(react).toContain(`"backgroundColor":"${expectedRootBg}"`)
+    expect(html).toContain(`background-color: ${expectedRootBg}`)
+  })
+})
+
 describe('B0-2 导出语义 parity（React/HTML 双通道）', () => {
   it('15 组件：React 输出 data-component 标记，双通道保留关键文本与语义标签', () => {
     for (const f of FIXTURES) {

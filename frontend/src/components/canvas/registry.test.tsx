@@ -69,6 +69,18 @@ describe('组件画布渲染', () => {
     expect(el.style.color).toBe('rgb(255, 255, 255)')
   })
 
+  it('sidebar active 态内联渲染（T5-0 #4）：active 白字蓝底，非 active text-light', () => {
+    const def = componentRegistry.sidebar
+    const rgb = (hex: string): string => {
+      const n = parseInt(hex.slice(1), 16)
+      return `rgb(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255})`
+    }
+    render(<def.Canvas props={{ items: [{ label: '首页' }, { label: '设置' }], active: '首页' }} />)
+    expect(screen.getByText('首页').style.backgroundColor).toBe(rgb(resolveColor('primary')!))
+    expect(screen.getByText('首页').style.color).toBe('rgb(255, 255, 255)')
+    expect(screen.getByText('设置').style.color).toBe(rgb(resolveColor('text-light')!))
+  })
+
   it('未注册组件渲染占位并标记警告', () => {
     // registry 直接查不到的类型 → NodeRenderer 层处理；此处验证注册表行为
     expect(componentRegistry['spaghetti']).toBeUndefined()
