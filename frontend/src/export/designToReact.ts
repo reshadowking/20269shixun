@@ -5,6 +5,7 @@
  * - 输出 App.tsx 可编译的 JSX 代码（无运行时数据依赖）
  */
 import { componentRegistry } from '@/components/canvas/registry'
+import type { AssetMap } from '@/export/inlineAssets'
 import type { ExportElement } from '@/components/canvas/types'
 import type { DesignNode } from '@/design/types'
 import { escapeHtml } from '@/design/escape'
@@ -19,15 +20,21 @@ function styleLiteral(style: DesignNode['style']): string {
 
 const VOID_TAGS = new Set(['img', 'input', 'hr', 'br'])
 
+/** 属性值解析：src 命中内联映射时替换为 dataURL（ADR-008 图片导出内联） */
+function resolveAttr(name: string, value: string, assets?: AssetMap): string {
+  if (name === 'src' && assets && assets[value]) return assets[value]
+  return value
+}
+
 /** B1：React 序列化 ExportElement——根元素（componentType 有值）带 data-component；子元素递归不带 */
-function serializeReactElement(el: ExportElement, componentType?: string): string {
+function serializeReactElement(el: ExportElement, componentType?: string, assets?: AssetMap): string {
   const dc = componentType ? ` data-component="${componentType}"` : ''
   const styleStr = Object.keys(el.style).length > 0 ? ` style={{${JSON.stringify(el.style)}}}` : ''
   const attrsStr = Object.entries(el.attrs)
-    .map(([k, v]) => ` ${k}="${escapeHtml(v)}"`)
+    .map(([k, v]) => ` ${k}="${escapeHtml(resolveAttr(k, v, assets))}"`)
     .join('')
   const inner = el.children
-    ? el.children.map((c) => serializeReactElement(c)).join('')
+    ? el.children.map((c) => serializeReactElement(c, undefined, assets)).join('')
     : el.text !== undefined
       ? escapeHtml(el.text)
       : ''
@@ -36,10 +43,10 @@ function serializeReactElement(el: ExportElement, componentType?: string): strin
   return `${open}>${inner}</${el.tag}>`
 }
 
-function componentTag(node: DesignNode): string {
+function componentTag(node: DesignNode, assets?: AssetMap): string {
   // B1 试点：组件注册了 buildExport 时走语义节点序列化（button/image）；其余仍在下方 switch
   const def = componentRegistry[node.componentType ?? '']
-  if (def?.buildExport) return serializeReactElement(def.buildExport(node), node.componentType!)
+  if (def?.buildExport) return serializeReactElement(def.buildExport(node), node.componentType!, assets)
   const props = node.props ?? {}
   const style = styleLiteral(node.style)
   const text = escapeHtml(typeof props.text === 'string' ? props.text : '')
@@ -52,7 +59,7 @@ function componentTag(node: DesignNode): string {
 }
 
 /** 递归生成节点 JSX（frame/text/component） */
-function nodeToJsx(node: DesignNode, depth: number): string {
+function nodeToJsx(node: DesignNode, depth: number, assets?: AssetMap): string {
   const pad = '  '.repeat(depth)
   const style = styleLiteral(node.style)
 
@@ -61,21 +68,29 @@ function nodeToJsx(node: DesignNode, depth: number): string {
     return `${pad}<div style={{${style}}}>${text}</div>`
   }
   if (node.type === 'component') {
-    const tag = componentTag(node)
+    const tag = componentTag(node, assets)
     return tag
       .split('\n')
       .map((line, i) => (i === 0 ? `${pad}${line}` : line))
       .join('\n')
   }
   // frame / group / rect
-  const children = (node.children ?? []).filter((c) => !c.hidden).map((c) => nodeToJsx(c, depth + 1)).join('\n')
+  const children = (node.children ?? [])
+    .filter((c) => !c.hidden)
+    .map((c) => nodeToJsx(c, depth + 1, assets))
+    .join('\n')
   if (!children) return `${pad}<div style={{${style}}}></div>`
   return `${pad}<div style={{${style}}}>\n${children}\n${pad}</div>`
 }
 
-/** DesignNode → App.tsx 文件内容 */
-export function designToReactApp(design: DesignNode, withComments: boolean): string {
-  const body = nodeToJsx(design, 2)
+/**
+ * DesignNode → App.tsx 文件内容。
+ *
+ * @param assets 可选：图片内联映射（`/api/images/{id}` → dataURL，见 ADR-008）。
+ *   不传时行为与改造前完全一致（向后兼容）。
+ */
+export function designToReactApp(design: DesignNode, withComments: boolean, assets?: AssetMap): string {
+  const body = nodeToJsx(design, 2, assets)
   const comment = withComments
     ? `  {/* 由 AI 原生设计工作台 v0.2 导出的 React 页面（内联样式，无 UI 库依赖） */}\n`
     : ''
