@@ -115,3 +115,77 @@ def apply_effects(tree: dict, node_id: str, effects: Any) -> ApplyResult:
         removed=removed,
         changes_size=changes_size(normalized),
     )
+
+
+@dataclass
+class LockedEditResult:
+    """锁定态 AI 结果落地判定（T4 批1）。
+
+    ok=False 时 design 恒为 before 的深拷贝（画布语义：拒绝即原样）；
+    dropped 记 "node_id.key"（非预置效果值被丢弃、保留原值），丢弃 ≠ 拒绝。
+    """
+
+    ok: bool
+    design: dict
+    changed_ids: list[str]
+    dropped: list[str]
+    reason: str = ""
+
+
+def apply_locked_edit(before: dict, after: dict) -> LockedEditResult:
+    """锁定态下的 AI 结果落地校验（服务端闸门，T4 批1）。
+
+    允许：仅效果白名单键（EFFECT_KEYS）变化，且取值命中预置集合（或 None 表示移除）；
+    拒绝：结构（children/id/type/componentType）、文案（props）、布局（x/y/hidden 及
+          非白名单 style 键如 layout/gap/padding/width/height）变化；
+    丢弃：效果键存在但取值非预置 → 保留原值，记入 dropped（"node_id.key"）。
+
+    与 before 逐位置配对比对得出结论（re-parent 在先序遍历下 id 序列可能不变，
+    按位置配对才能唯一确定结构），不信任任何前端/AI 声明的 changed 列表。
+    拒绝时返回 before 深拷贝（画布语义：拒绝即原样）。
+    """
+    design = copy.deepcopy(before)
+    changed_ids: list[str] = []
+    dropped: list[str] = []
+
+    def walk(b: dict, a: dict, out: dict) -> str | None:
+        """按位置配对并应用合法效果；通过返回 None，否则返回可读拒绝原因。"""
+        if b.get("id") != a.get("id"):
+            return "结构变更（节点 id 不一致）"
+        for field in ("type", "componentType", "props", "x", "y", "hidden"):
+            if b.get(field) != a.get(field):
+                return f"文案或布局变更（节点 {b.get('id')} 的 {field}）"
+        bc = b.get("children") or []
+        ac = a.get("children") or []
+        if len(bc) != len(ac):
+            return f"结构变更（节点 {b.get('id')} 的子节点数 {len(bc)} → {len(ac)}）"
+
+        style_b = b.get("style") or {}
+        style_a = a.get("style") or {}
+        out_style = out.setdefault("style", {})
+        node_id = str(b.get("id"))
+        for key in set(style_b) | set(style_a):
+            vb, va = style_b.get(key), style_a.get(key)
+            if vb == va:
+                continue
+            if key not in EFFECT_KEYS:
+                return f"布局字段不可改（节点 {node_id} 的 style.{key}）"
+            if va is None:
+                out_style.pop(key, None)
+                changed_ids.append(node_id)
+            elif va in EFFECT_VALUES[key]:
+                out_style[key] = va
+                changed_ids.append(node_id)
+            else:
+                # 丢弃 ≠ 拒绝：非预置值不落地，保留原值（out 是 before 深拷贝，本就未动）
+                dropped.append(f"{node_id}.{key}")
+        for cb, ca, co in zip(bc, ac, out.get("children") or []):
+            reason = walk(cb, ca, co)
+            if reason:
+                return reason
+        return None
+
+    reason = walk(before, after, design)
+    if reason:
+        return LockedEditResult(ok=False, design=copy.deepcopy(before), changed_ids=[], dropped=[], reason=reason)
+    return LockedEditResult(ok=True, design=design, changed_ids=changed_ids, dropped=dropped, reason="")

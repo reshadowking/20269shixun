@@ -113,3 +113,19 @@ class SessionToolCall(Base):
     source: Mapped[str] = mapped_column(String(16), default="app")  # app / mcp
     ok: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class DesignLock(Base):
+    """版面锁定状态（T4 批1，B2 决策：独立小表）。
+
+    锁是"画布/流程状态"，不借宿 chat_sessions.agent_state（该字段整体覆盖写入且
+    有聊天路径并发写入方，见任务卡 §7.1 否决 B1 的证据）。服务端闸门据此表判定
+    锁状态，不接受请求体声明——前端在确认版面/解除锁定时同步写入。
+    create_all 自动建表，无需启动期修补。
+    """
+
+    __tablename__ = "design_locks"
+
+    session_key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    locked: Mapped[bool] = mapped_column(Boolean, default=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)

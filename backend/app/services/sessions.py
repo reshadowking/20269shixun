@@ -16,7 +16,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session as DbSession
 
-from ..models import ChatMessage, ChatSession, SessionToolCall
+from ..models import ChatMessage, ChatSession, DesignLock, SessionToolCall
 
 SESSION_KEY_RE = re.compile(r"^[A-Za-z0-9_-]{3,64}$")
 MAX_MESSAGES = 200
@@ -206,3 +206,22 @@ def parse_agent_state(raw: str) -> dict:
         return parsed if isinstance(parsed, dict) else {}
     except json.JSONDecodeError:
         return {}
+
+
+# ---- T4 批1：版面锁定状态持久化（B2 决策：独立 design_locks 表）----
+
+
+def get_lock(db: DbSession, session_key: str) -> bool:
+    """读取会话的版面锁定状态；无记录视为未锁定。"""
+    row = db.get(DesignLock, session_key)
+    return bool(row and row.locked)
+
+
+def set_lock(db: DbSession, session_key: str, locked: bool) -> None:
+    """写入会话的版面锁定状态（upsert）。调用方需先完成 owner 校验。"""
+    row = db.get(DesignLock, session_key)
+    if row is None:
+        db.add(DesignLock(session_key=session_key, locked=locked))
+    else:
+        row.locked = locked
+    db.commit()

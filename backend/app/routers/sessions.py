@@ -15,6 +15,7 @@ from ..db import get_db
 from ..models import ChatSession, Design, User
 from ..security import get_current_user
 from ..services import sessions as sessions_service
+from ..services.beautify import apply_locked_edit
 from ..services.sessions import SessionValidationError
 
 logger = logging.getLogger(__name__)
@@ -250,4 +251,55 @@ def get_context(
             {"id": m.id, "session_id": session.session_key, "role": m.role, "text": m.content}
             for m in rows
         ],
+    }
+
+
+class BeautifyLockState(BaseModel):
+    locked: bool
+
+
+@router.get("/api/sessions/{session_key}/beautify-lock")
+def get_beautify_lock(session_key: str, _user: str = Depends(get_current_user), db: DbSession = Depends(get_db)):
+    """读版面锁定状态（T4 批1）：前端据此初始化 layoutLocked（刷新不丢锁）。"""
+    _own_session(db, _user, session_key)
+    return {"locked": sessions_service.get_lock(db, session_key)}
+
+
+@router.post("/api/sessions/{session_key}/beautify-lock")
+def set_beautify_lock(
+    session_key: str, req: BeautifyLockState, _user: str = Depends(get_current_user), db: DbSession = Depends(get_db)
+):
+    """写版面锁定状态（T4 批1）：前端在确认版面/解除锁定时同步；服务端闸门的判定来源。"""
+    _own_session(db, _user, session_key)
+    sessions_service.set_lock(db, session_key, req.locked)
+    return {"ok": True, "locked": req.locked}
+
+
+class ApplyLockedEditRequest(BaseModel):
+    # 锁状态由服务端按 session_key 查（B 决策）：请求体不含（也无法伪造）locked 声明
+    session_key: str = Field(min_length=3, max_length=64)
+    before: dict
+    after: dict
+
+
+@router.post("/api/apply-locked-edit")
+def apply_locked_edit_endpoint(
+    req: ApplyLockedEditRequest, _user: str = Depends(get_current_user), db: DbSession = Depends(get_db)
+):
+    """AI 修改结果落地闸门（T4 批1，缺陷 3 写入门层）。
+
+    未锁定：直接放行 after（与改造前等价，不做校验）；已锁定：逐位置比对
+    before/after——结构/文案/布局变化拒绝（ok=false + reason），合法预置效果
+    落地，非预置值丢弃并记入 dropped。会话不存在/非本人 → 404，不默认放行。
+    """
+    _own_session(db, _user, req.session_key)
+    if not sessions_service.get_lock(db, req.session_key):
+        return {"ok": True, "design": req.after, "changed_ids": [], "dropped": [], "reason": ""}
+    result = apply_locked_edit(req.before, req.after)
+    return {
+        "ok": result.ok,
+        "design": result.design,
+        "changed_ids": result.changed_ids,
+        "dropped": result.dropped,
+        "reason": result.reason,
     }
