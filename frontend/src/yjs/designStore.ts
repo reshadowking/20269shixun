@@ -110,6 +110,11 @@ export class DesignStore {
   /** 缺陷 3：美化阶段版面锁定——只有效果白名单的 style 键允许改动（写入层强制，不靠 UI 禁用） */
   private beautifyLock = false
   private blockedCbs = new Set<(reason: string) => void>()
+  /** T2：连接端点。构造只记忆、不建立连接——provider 的生灭与 React effect 配对 */
+  private wsEndpoint: string | undefined
+  private roomName: string
+  /** T2：最近一次广播的 presence 昵称，provider 重建（重挂/重连）后自动写回 */
+  private presenceName: string | null = null
 
   private handleAwareness = (): void => {
     this.presenceCbs.forEach((cb) => cb())
@@ -130,15 +135,16 @@ export class DesignStore {
   constructor(wsUrl?: string, initialDesign?: DesignNode, room = 'design-room') {
     this.ydoc = new Y.Doc()
     this.designMap = this.ydoc.getMap(DESIGN_MAP)
+    this.wsEndpoint = wsUrl
+    this.roomName = room
     if (initialDesign && this.designMap.size === 0) {
       this.ydoc.transact(() => {
         this.designMap.set(ROOT_KEY, plainToY(initialDesign))
       }, RESET_ORIGIN)
     }
-    if (wsUrl) {
-      this.provider = new WebsocketProvider(wsUrl, room, this.ydoc)
-    }
-    this.bindProviderEvents()
+    // T2 presence 泄漏修复：provider 不再在构造期创建（原实现在渲染期建连、
+    // 组件卸载后从不销毁，socket/awareness 残留导致服务端在线人数虚增）。
+    // 连接改由 useDesignStore 的 effect 调 connectProvider 建立、cleanup 调 disconnectProvider 断开。
     // 操作级撤销：绑定整棵设计树（designMap 及其子树），只记录本地用户操作
     this.undoManager = new Y.UndoManager([this.designMap], {
       trackedOrigins: new Set([LOCAL_ORIGIN]),
@@ -155,25 +161,56 @@ export class DesignStore {
     this.ydoc.destroy()
   }
 
+  /** T2：按端点确保 provider 存在（幂等）。与 disconnectProvider 配对使用：
+   * StrictMode 的 mount→cleanup→mount 语义下经历断开→重连，ydoc/撤销栈不受影响。 */
+  connectProvider(wsUrl?: string, room?: string): void {
+    if (wsUrl !== undefined) this.wsEndpoint = wsUrl
+    if (room !== undefined) this.roomName = room
+    if (!this.wsEndpoint || this.provider) return
+    this.provider = new WebsocketProvider(this.wsEndpoint, this.roomName, this.ydoc)
+    this.bindProviderEvents()
+    this._reapplyPresence()
+  }
+
+  /** T2：仅销毁协作连接（awareness 从服务端移除、socket 关闭），store 本体保持可用 */
+  disconnectProvider(): void {
+    if (this.provider) {
+      this.provider.destroy()
+      this.provider = null
+    }
+  }
+
   /** B3-1：room 重建（新建保存为正式设计后迁移到 design-{id} 协作房间）。
    * destroy 旧 provider 并用同一 ydoc 建新 provider——保留本地编辑、撤销栈与会话状态，
-   * 避免整页导航刷新丢失未保存内容。 */
+   * 避免整页导航刷新丢失未保存内容。T2：换房间后 presence 昵称自动写回新 provider。 */
   reconnectRoom(wsUrl: string | undefined, newRoom: string): void {
     if (this.provider) {
       this.provider.destroy()
       this.provider = null
     }
+    this.wsEndpoint = wsUrl
+    this.roomName = newRoom
     if (wsUrl) {
       this.provider = new WebsocketProvider(wsUrl, newRoom, this.ydoc)
       this.bindProviderEvents()
+      this._reapplyPresence()
     }
   }
 
   // ---- D5：协作在场感（presence：在线用户/连接状态）----
 
-  /** 广播本地在场状态（用户昵称；URL ?user= 可区分多标签演示） */
+  /** 广播本地在场状态（用户昵称；URL ?user= 可区分多标签演示）。
+   * T2：昵称被记忆，provider 重建（StrictMode 重挂/room 迁移）后由 _reapplyPresence 写回 */
   setPresence(userName: string): void {
+    this.presenceName = userName
     this.provider?.awareness.setLocalStateField('user', { name: userName })
+  }
+
+  /** T2：把最近一次 presence 昵称写回当前 provider（无 provider 时跳过） */
+  private _reapplyPresence(): void {
+    if (this.presenceName !== null && this.provider) {
+      this.provider.awareness.setLocalStateField('user', { name: this.presenceName })
+    }
   }
 
   /** 订阅 awareness 变化（他人进出/状态更新）；无 provider（本地模式）时立即回调一次 */
