@@ -138,17 +138,20 @@ export default function HomePage() {
   const hasMore = total > RECENT_DESIGN_LIMIT
 
   return (
-    <div className="min-h-screen bg-muted/40">
-      <header className="flex h-14 items-center justify-between border-b bg-background px-6">
-        <div className="flex items-center gap-2">
-          <span className="text-base font-semibold">AI 原生设计工作台</span>
-          <span className="text-xs text-muted-foreground">v0.2</span>
+    <div className="min-h-screen bg-gradient-to-b from-muted/60 via-background to-background">
+      <header className="sticky top-0 z-20 flex h-14 items-center justify-between border-b bg-background/85 px-6 backdrop-blur">
+        <div className="flex items-center gap-3">
+          <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-primary to-secondary text-sm font-bold text-primary-foreground shadow-sm">
+            A
+          </span>
+          <span className="text-base font-semibold tracking-tight">AI 原生设计工作台</span>
+          <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">v0.2</span>
         </div>
-        <div className="flex items-center gap-3 text-sm text-muted-foreground">
-          <span data-testid="home-user">{username}</span>
-          <Link to="/api-config" className="hover:text-foreground">API 配置</Link>
+        <div className="flex items-center gap-4 text-sm text-muted-foreground">
+          <span data-testid="home-user" className="font-medium text-foreground/80">{username}</span>
+          <Link to="/api-config" className="transition hover:text-foreground">API 配置</Link>
           <button
-            className="flex items-center gap-1 hover:text-foreground"
+            className="flex items-center gap-1 transition hover:text-foreground"
             data-testid="home-logout"
             onClick={() => {
               clearAuth()
@@ -160,23 +163,33 @@ export default function HomePage() {
         </div>
       </header>
 
-      <main className="mx-auto flex max-w-5xl flex-col gap-8 px-6 py-8">
+      <main className="mx-auto flex max-w-5xl flex-col gap-10 px-6 py-10">
+        {/* 首屏主张：一句话说明产品价值（纯视觉层，不承载交互） */}
+        <section className="rounded-2xl border bg-gradient-to-br from-primary/[0.07] via-background to-secondary/[0.07] px-6 py-5">
+          <h1 className="text-xl font-semibold tracking-tight">用一句话，生成可运行的 UI 设计稿</h1>
+          <p className="mt-1.5 max-w-2xl text-sm text-muted-foreground">
+            自然语言 → 高保真设计稿 → 可编辑画布 → React 工程代码。内置 8 套模板、合规检查、多人协作与一键导出。
+          </p>
+        </section>
+
         {/* 继续上次编辑 */}
         {hasDraft && (
           <section>
             <button
-              className="flex w-full items-center gap-3 rounded-xl border bg-background p-5 text-left shadow-sm transition hover:border-primary"
+              className="flex w-full items-center gap-3 rounded-xl border bg-background p-5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-primary/50 hover:shadow-md"
               data-testid="home-resume"
               onClick={() =>
                 openWorkspace(draftSession ? `?session=${draftSession}&from=draft` : '?from=draft')
               }
             >
-              <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
+              <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-gradient-to-br from-primary/15 to-secondary/15 text-primary">
                 <Clock className="h-5 w-5" />
               </span>
               <span>
                 <span className="block text-sm font-medium">继续上次编辑</span>
-                <span className="text-xs text-muted-foreground">从上次的草稿继续，不会丢失</span>
+                <span className="text-xs text-muted-foreground">
+                  {draftSession ? `回到会话 ${draftSession}` : '从上次的草稿继续，不会丢失'}
+                </span>
               </span>
             </button>
           </section>
@@ -184,30 +197,34 @@ export default function HomePage() {
 
         {/* 新建 */}
         <section>
-          <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-muted-foreground">
-            <FilePlus2 className="h-4 w-4" /> 新建
+          <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold">
+            <span className="flex h-6 w-6 items-center justify-center rounded-md bg-primary/10 text-primary">
+              <FilePlus2 className="h-3.5 w-3.5" />
+            </span>
+            新建
+            <span className="text-xs font-normal text-muted-foreground">空白起步，或一键体验完整功能</span>
           </h2>
           <div className="grid grid-cols-3 gap-3">
             <button
-              className="flex flex-col items-center gap-2 rounded-xl border border-dashed bg-background p-6 transition hover:border-primary"
+              className="group flex flex-col items-center gap-2 rounded-xl border border-dashed bg-background p-6 transition hover:-translate-y-0.5 hover:border-primary/60 hover:bg-primary/[0.03] hover:shadow-md"
               data-testid="home-new-blank"
               onClick={() => {
                 // 空白画布（缺陷 4）：新建唯一 sessionId + 全新空会话（不继承任何历史）
                 openWorkspace(`?session=${randomSessionKey()}&from=blank`)
               }}
             >
-              <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-primary/10 text-primary">
+              <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-primary/15 to-secondary/15 text-primary transition group-hover:scale-105">
                 <FilePlus2 className="h-6 w-6" />
               </span>
               <span className="text-sm font-medium">空白画布</span>
               <span className="text-xs text-muted-foreground">自由布局，从零开始</span>
             </button>
             <button
-              className="flex flex-col items-center gap-2 rounded-xl border border-dashed bg-background p-6 transition hover:border-primary"
+              className="group flex flex-col items-center gap-2 rounded-xl border border-dashed bg-background p-6 transition hover:-translate-y-0.5 hover:border-primary/60 hover:bg-primary/[0.03] hover:shadow-md"
               data-testid="home-new-demo"
               onClick={() => openWorkspace(`?from=demo&demo=${DEMO_DESIGNS[0].id}`)}
             >
-              <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-muted text-muted-foreground">
+              <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-muted text-muted-foreground transition group-hover:scale-105">
                 <FolderOpen className="h-6 w-6" />
               </span>
               <span className="text-sm font-medium">示例优惠券页</span>
@@ -218,14 +235,18 @@ export default function HomePage() {
 
         {/* 模板起手 */}
         <section>
-          <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-muted-foreground">
-            <LayoutTemplate className="h-4 w-4" /> 从模板开始（AI 填充内容）
+          <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold">
+            <span className="flex h-6 w-6 items-center justify-center rounded-md bg-secondary/10 text-secondary">
+              <LayoutTemplate className="h-3.5 w-3.5" />
+            </span>
+            从模板开始
+            <span className="text-xs font-normal text-muted-foreground">选骨架，AI 填充内容</span>
           </h2>
           <div className="grid grid-cols-4 gap-3">
             {templates.map((t) => (
               <button
                 key={t.key}
-                className="rounded-xl border bg-background px-3 py-4 text-center text-sm transition hover:border-primary"
+                className="rounded-xl border bg-background px-3 py-4 text-center text-sm font-medium transition hover:-translate-y-0.5 hover:border-primary/50 hover:shadow-md"
                 data-testid={`home-template-${t.key}`}
                 onClick={() => openWorkspace(`?template=${t.key}`)}
               >
@@ -237,8 +258,12 @@ export default function HomePage() {
 
         {/* 最近设计（缺陷 2：默认最多 8 条，更多时按需加载 + 可收起） */}
         <section>
-          <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-muted-foreground">
-            <FolderOpen className="h-4 w-4" /> 最近的设计
+          <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold">
+            <span className="flex h-6 w-6 items-center justify-center rounded-md bg-muted text-muted-foreground">
+              <FolderOpen className="h-3.5 w-3.5" />
+            </span>
+            最近的设计
+            {total > 0 && <span className="text-xs font-normal text-muted-foreground">共 {total} 个</span>}
           </h2>
           {listState === 'loading' && designs.length === 0 ? (
             <p className="rounded-xl border border-dashed bg-background p-8 text-center text-sm text-muted-foreground" data-testid="home-designs-loading">
@@ -259,7 +284,11 @@ export default function HomePage() {
             <div className="flex flex-col gap-3">
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3" data-testid="home-designs">
                 {visibleDesigns.map((d) => (
-                  <div key={d.id} className="group relative rounded-xl border bg-background p-4 shadow-sm transition hover:border-primary">
+                  <div
+                    key={d.id}
+                    className="group relative overflow-hidden rounded-xl border bg-background p-4 shadow-sm transition hover:-translate-y-0.5 hover:border-primary/50 hover:shadow-md"
+                  >
+                    <span className="absolute inset-x-0 top-0 h-0.5 bg-gradient-to-r from-primary/60 to-secondary/60 opacity-0 transition group-hover:opacity-100" />
                     <button
                       className="w-full text-left"
                       data-testid={`home-design-${d.id}`}

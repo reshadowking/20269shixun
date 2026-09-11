@@ -372,6 +372,67 @@ export class DesignStore {
     )
   }
 
+  /**
+   * 转自由画布（P1-13 像素级冻结）：父容器 layout 与全部子节点坐标在**同一事务**内提交，
+   * 保证一次 Ctrl+Z 完整还原（此前的 updateNode + updateMany 两次调用会产生两个撤销步，
+   * 撤销后只剩 layout:'free' 而坐标被回滚，子节点会全部堆到左上角）。
+   *
+   * 锁定期直接拒绝：layout 不在效果白名单内，_allowedWhileLocked 也会拦下（双保险）。
+   */
+  convertToFreeLayout(
+    parentId: string,
+    updates: Array<{ id: string; x: number; y: number; width: number; height: number }>,
+  ): { ok: boolean; reason?: string } {
+    if (this.beautifyLock) {
+      this._rejectBlocked('版面已确认：请先解除版面锁定再转自由画布')
+      return { ok: false, reason: 'locked' }
+    }
+    let ok = false
+    this.ydoc.transact(
+      () => {
+        const root = this.designMap.get(ROOT_KEY) as YNode | undefined
+        if (!root) return
+        const parent = findYNode(root, parentId)
+        if (!parent) return
+
+        const prevParent = yToPlain(parent)
+        const nextParent: DesignNode = {
+          ...prevParent,
+          style: { ...(prevParent.style ?? {}), layout: 'free' as const },
+        }
+        if (!this._allowedWhileLocked(prevParent, nextParent)) {
+          this._rejectBlocked('版面已确认：仅允许修改样式效果（布局/文本/结构已锁定）')
+          return
+        }
+
+        // 先收集全部目标，任一越权则整批不落（原子语义）
+        const targets: Array<{ target: YNode; next: DesignNode }> = []
+        for (const u of updates) {
+          const target = findYNode(root, u.id)
+          if (!target) continue
+          const prev = yToPlain(target)
+          const next: DesignNode = {
+            ...prev,
+            x: Math.round(u.x),
+            y: Math.round(u.y),
+            style: { ...(prev.style ?? {}), width: u.width, height: u.height },
+          }
+          if (!this._allowedWhileLocked(prev, next)) {
+            this._rejectBlocked('版面已确认：仅允许修改样式效果（布局/文本/结构已锁定）')
+            return
+          }
+          targets.push({ target, next })
+        }
+
+        this._applyUpdate(parent, nextParent)
+        for (const t of targets) this._applyUpdate(t.target, t.next)
+        ok = true
+      },
+      LOCAL_ORIGIN,
+    )
+    return ok ? { ok: true } : { ok: false, reason: 'blocked' }
+  }
+
   /** updateNode/updateMany 共用的 Y 节点写回逻辑 */
   private _applyUpdate(target: YNode, next: DesignNode) {
     target.set('id', next.id)

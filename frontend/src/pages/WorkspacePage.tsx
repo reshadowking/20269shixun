@@ -7,6 +7,8 @@ import LayerTree from '@/components/activity/LayerTree'
 import BeautifyPanel from '@/components/beautify/BeautifyPanel'
 import AIChatPanel from '@/components/chat/AIChatPanel'
 import { NodeRenderer } from '@/canvas/NodeRenderer'
+import { freezeToFreeLayout } from '@/canvas/freeze'
+import type { DesignCanvasHandle } from '@/canvas/DesignCanvas'
 import { EFFECT_SPECS } from '@/design/beautify'
 import { loadBaseSnapshot, saveBaseSnapshot, type BaseSnapshot } from '@/lib/baseSnapshot'
 import ExportDialog from '@/components/export/ExportDialog'
@@ -80,6 +82,8 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
   // D5：presence 昵称（?user= 可区分多标签演示；默认与登录账号一致）
   const userName = searchParams.get('user') ?? 'demo'
   const { design, store } = useDesignStore(wsUrl, DEMO_DESIGNS[0], room)
+  /** 转自由画布（P1-13）：测量需要画布的 DOM 与缩放状态，因此由画布暴露能力 */
+  const canvasRef = useRef<DesignCanvasHandle>(null)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
 
   // P1 文件系统（缺陷 5/8/11）：打开保存的设计 / 模板起手 / 草稿 / 空白
@@ -515,15 +519,47 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
   /** P1-13（缺陷 6 替代方案）：flex/网格布局 → 自由画布（子节点铺网格坐标，可拖拽） */
   const handleConvertToFree = () => {
     if (!design.children?.length) return
-    const children = design.children
-    const sheetW = typeof design.style?.width === 'number' ? design.style.width : 800
-    const perRow = Math.max(1, Math.floor(Math.max(240, sheetW) / 230))
-    store.updateNode(design.id, (n) => ({ ...n, style: { ...(n.style ?? {}), layout: 'free' as const } }))
-    store.updateMany(children.map((c) => c.id), (n, index) => ({
-      ...n,
-      x: (index % perRow) * 220 + 24,
-      y: Math.floor(index / perRow) * 180 + 24,
-    }))
+    // 语义（P1-13）：保留当前视觉现状，只把子节点变成可拖拽——**不是重新排布**
+    if (store.isBeautifyLocked) {
+      setErrorMsg('版面已确认：请先解除版面锁定再转自由画布')
+      return
+    }
+    const canvas = canvasRef.current
+    if (!canvas) {
+      setErrorMsg('画布未就绪，请重试')
+      return
+    }
+    const childIds = design.children.filter((c) => !c.hidden).map((c) => c.id)
+    const { measurements, missing } = canvas.measureFreeze(design.id, childIds)
+    if (measurements.length === 0) {
+      setErrorMsg('未能测量到任何节点，已取消转换')
+      return
+    }
+    const updated = freezeToFreeLayout(design.children, measurements)
+    const updates = updated
+      .filter((c) => typeof c.x === 'number' && typeof c.y === 'number')
+      .map((c) => ({
+        id: c.id,
+        x: c.x as number,
+        y: c.y as number,
+        width: Number(c.style?.width ?? 0),
+        height: Number(c.style?.height ?? 0),
+      }))
+    // 先快照（可"还原布局"），再单事务提交（一次 Ctrl+Z 完整还原）
+    store.pushSnapshot()
+    setUndoCount((c) => c + 1)
+    const result = store.convertToFreeLayout(design.id, updates)
+    if (!result.ok) {
+      store.popSnapshot()
+      setUndoCount((c) => Math.max(0, c - 1))
+      setErrorMsg('版面已锁定或存在越权改动，转换已取消')
+      return
+    }
+    setErrorMsg(
+      missing.length
+        ? `已冻结 ${updates.length} 个节点的位置与尺寸，现在可自由拖拽；${missing.length} 个隐藏节点未冻结`
+        : `已冻结 ${updates.length} 个节点的位置与尺寸，现在可自由拖拽`,
+    )
     setSelectedIds(new Set())
   }
 
@@ -587,10 +623,17 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
 
   return (
     <div className="flex h-screen flex-col" data-testid="workspace-page">
-      <header className="flex h-12 items-center justify-between border-b px-4">
-        <div className="flex items-center gap-4">
-          <span className="font-semibold">AI 原生设计工作台 <span className="text-xs font-normal text-muted-foreground">v0.2</span></span>
+      <header className="z-20 flex h-12 items-center justify-between border-b bg-background/85 px-4 shadow-sm backdrop-blur">
+        <div className="flex items-center gap-3">
+          <span className="flex items-center gap-2 font-semibold">
+            <span className="flex h-6 w-6 items-center justify-center rounded-md bg-gradient-to-br from-primary to-secondary text-[11px] font-bold text-primary-foreground">
+              A
+            </span>
+            <span className="hidden text-sm lg:inline">AI 原生设计工作台</span>
+          </span>
+          <span className="h-5 w-px bg-border" />
           <AlignToolbar design={design} selectedIds={selectedIds} store={store} />
+          <span className="h-5 w-px bg-border" />
           <Button
             size="sm"
             variant="outline"
@@ -616,12 +659,18 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
               variant="outline"
               className="h-7 text-xs"
               data-testid="convert-free"
-              title="转为自由画布后子节点可自由拖拽"
+              disabled={layoutLocked}
+              title={
+                layoutLocked
+                  ? '版面已确认：请先解除版面锁定再转自由画布'
+                  : '保留当前布局，把子节点变成可自由拖拽（不改位置与尺寸）'
+              }
               onClick={handleConvertToFree}
             >
               🔓 转自由画布
             </Button>
           )}
+          <span className="h-5 w-px bg-border" />
           <Button
             size="sm"
             variant="ghost"
@@ -725,6 +774,7 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
             showGrid={showGrid}
             onCanvasContextMenu={(nodeId, x, y) => setCtxMenu({ x, y, nodeId })}
             highlightIds={highlightIds}
+            canvasRef={canvasRef}
           />
           {generating && (
             <div className="absolute inset-0 z-50 flex items-center justify-center bg-background/60" data-testid="canvas-lock">
@@ -1066,6 +1116,7 @@ function CanvasWithSelection({
   showGrid,
   onCanvasContextMenu,
   highlightIds,
+  canvasRef,
 }: {
   design: DesignNode
   store: ReturnType<typeof useDesignStore>['store']
@@ -1075,9 +1126,11 @@ function CanvasWithSelection({
   showGrid?: boolean
   onCanvasContextMenu?: (nodeId: string | null, x: number, y: number) => void
   highlightIds?: Set<string>
+  canvasRef?: React.Ref<DesignCanvasHandle>
 }) {
   return (
     <DesignCanvas
+      ref={canvasRef}
       design={design}
       store={store}
       selectedIds={selectedIds}

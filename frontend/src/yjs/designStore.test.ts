@@ -425,3 +425,72 @@ describe('缺陷 3 锁定阶段的可写样式白名单', () => {
     expect(store.getDesign().children!.find((c) => c.id === 'a')!.style?.fontSize).toBeUndefined()
   })
 })
+
+/**
+ * P1-13 转自由画布（像素级冻结）：单事务 + 单撤销步 + 锁定期拒绝。
+ * 回归的是历史缺陷：updateNode + updateMany 两次调用会产生两个撤销步，
+ * 撤销后只剩 layout:'free' 而坐标被回滚，子节点会全部堆到左上角。
+ */
+describe('P1-13 convertToFreeLayout', () => {
+  const updates = [
+    { id: 'a', x: 24, y: 24, width: 300, height: 60 },
+    { id: 'b', x: 24, y: 100, width: 300, height: 200 },
+  ]
+
+  it('父容器转 free 并冻结子节点位置/尺寸', () => {
+    const store = new DesignStore(undefined, sample())
+    const before = JSON.stringify(store.getDesign())
+    const result = store.convertToFreeLayout('root', updates)
+    expect(result.ok).toBe(true)
+
+    const design = store.getDesign()
+    expect(design.style?.layout).toBe('free')
+    const a = design.children!.find((c) => c.id === 'a')!
+    const b = design.children!.find((c) => c.id === 'b')!
+    expect([a.x, a.y, a.style?.width, a.style?.height]).toEqual([24, 24, 300, 60])
+    expect([b.x, b.y, b.style?.width, b.style?.height]).toEqual([24, 100, 300, 200])
+    expect(JSON.stringify(store.getDesign())).not.toBe(before)
+    store.destroy()
+  })
+
+  it('一次 Ctrl+Z 完整还原（不允许出现 layout:free + 坐标被回滚的坏状态）', () => {
+    const store = new DesignStore(undefined, sample())
+    const before = JSON.stringify(store.getDesign())
+    store.convertToFreeLayout('root', updates)
+    expect(store.canUndo).toBe(true)
+
+    expect(store.undo()).toBe(true)
+    const after = store.getDesign()
+    expect(JSON.stringify(after)).toBe(before)
+    expect(after.style?.layout).toBe('column')
+    expect(after.children!.find((c) => c.id === 'a')!.x).toBeUndefined()
+    store.destroy()
+  })
+
+  it('版面锁定时拒绝，且画布不变', () => {
+    const store = new DesignStore(undefined, sample())
+    store.setBeautifyLock(true)
+    const before = JSON.stringify(store.getDesign())
+    const result = store.convertToFreeLayout('root', updates)
+    expect(result).toEqual({ ok: false, reason: 'locked' })
+    expect(JSON.stringify(store.getDesign())).toBe(before)
+    store.destroy()
+  })
+
+  it('子节点 id 不存在时跳过该条，不影响其余节点', () => {
+    const store = new DesignStore(undefined, sample())
+    const result = store.convertToFreeLayout('root', [...updates, { id: 'ghost', x: 1, y: 1, width: 1, height: 1 }])
+    expect(result.ok).toBe(true)
+    expect(store.getDesign().children!.find((c) => c.id === 'a')!.x).toBe(24)
+    store.destroy()
+  })
+
+  it('父节点不存在时返回未成功，不改动设计树', () => {
+    const store = new DesignStore(undefined, sample())
+    const before = JSON.stringify(store.getDesign())
+    const result = store.convertToFreeLayout('no-such-parent', updates)
+    expect(result.ok).toBe(false)
+    expect(JSON.stringify(store.getDesign())).toBe(before)
+    store.destroy()
+  })
+})
