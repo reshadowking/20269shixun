@@ -4,7 +4,12 @@
 """
 import pytest
 
-from app.mcp_tools import apply_design_edit, get_component_library, get_design_tokens, record_mcp_tool_call
+from app.mcp_tools import (
+    apply_design_edit,
+    get_component_library,
+    get_design_tokens,
+    record_mcp_tool_call,
+)
 
 DESIGN = {"id": "root", "type": "frame", "style": {"layout": "column"}, "children": [{"id": "t", "type": "text", "props": {"text": "标题"}}]}
 

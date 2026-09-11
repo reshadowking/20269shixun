@@ -1,6 +1,7 @@
 """MCP 工具测试（E5-1/E5-2 + B2-3）：令牌/组件库数据完整性、写工具 mock 路径、注册冒烟。"""
 
 import asyncio
+from typing import ClassVar
 
 from app.design.validator import validate_design_safe
 from app.mcp_tools import apply_design_edit, get_component_library, get_design_tokens
@@ -70,7 +71,7 @@ class TestMcpServerRegistration:
 
 
 class TestApplyDesignEditTool:
-    SAMPLE = {
+    SAMPLE: ClassVar[dict] = {
         "id": "root",
         "type": "frame",
         "style": {"layout": "column", "gap": 8, "padding": 16, "width": 400},

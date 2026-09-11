@@ -159,8 +159,10 @@ async def explore_options(req: ExploreRequest, _user: str = Depends(get_current_
         ("方案一 · 默认风格", req.prompt),
         (
             "方案二 · 差异化风格",
-            f"{req.prompt}。请使用与默认方案明显不同的配色与布局风格"
-            "（例如深色/高对比主题、不同主色、不同结构组织），内容要点保持一致。",
+            (
+                f"{req.prompt}。请使用与默认方案明显不同的配色与布局风格"
+                "（例如深色/高对比主题、不同主色、不同结构组织），内容要点保持一致。"
+            ),
         ),
     ]
     results = await asyncio.gather(*(asyncio.to_thread(generate_design, prompt) for _, prompt in variants))
