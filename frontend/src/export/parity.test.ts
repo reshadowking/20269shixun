@@ -10,6 +10,7 @@ import { describe, expect, it } from 'vitest'
 
 import type { ComponentType, DesignNode } from '@/design/types'
 import { resolveColor } from '@/design/styleToCss'
+import { CHART_COLORS } from '@/components/canvas/chart'
 import { designToHtml } from './designToHtml'
 import { designToReactApp } from './designToReact'
 
@@ -106,6 +107,44 @@ describe('T5-0 #4 导出缺部件：sidebar active 态', () => {
     const expectedRootBg = 'rgba(29,33,41,0.95)'
     expect(react).toContain(`"backgroundColor":"${expectedRootBg}"`)
     expect(html).toContain(`background-color: ${expectedRootBg}`)
+  })
+})
+
+describe('T5-0 #2 导出缺部件：chart 多系列色', () => {
+  const CHART_DATA_2 = [
+    { day: '一月', value: 30 },
+    { day: '二月', value: 60 },
+  ]
+  const CHART_DATA_5 = ['一', '二', '三', '四', '五'].map((day, i) => ({ day, value: (i + 1) * 10 }))
+
+  it('CHART_COLORS 令牌化且与画布同源（前四色=令牌，第五色为文档化常量）', () => {
+    expect(CHART_COLORS).toEqual([
+      resolveColor('primary'),
+      resolveColor('secondary'),
+      resolveColor('success'),
+      resolveColor('danger'),
+      '#FF6B6B', // 令牌表无第 5 序列语义色，保留原值（画布/导出共用此常量）
+    ])
+  })
+
+  it('bar/line 导出柱色 = 画布 fill（primary 令牌），旧错误色 #3D7FFF 不得回归', () => {
+    for (const chartType of ['bar', 'line'] as const) {
+      const react = designToReactApp(plainTree('chart', { chartType, title: '月度趋势', data: CHART_DATA_2, xKey: 'day', yKey: 'value' }), false)
+      const html = designToHtml(plainTree('chart', { chartType, title: '月度趋势', data: CHART_DATA_2, xKey: 'day', yKey: 'value' }))
+      expect(react, `${chartType}: React 柱色应为画布的 primary`).toContain(`"background":"${resolveColor('primary')}"`)
+      expect(react, `${chartType}: React 混入旧错误色`).not.toContain('#3D7FFF')
+      expect(html, `${chartType}: HTML 柱色应为画布的 primary`).toContain(`background: ${resolveColor('primary')}`)
+      expect(html, `${chartType}: HTML 混入旧错误色`).not.toContain('#3D7FFF')
+    }
+  })
+
+  it('pie 导出按序列循环取色（多系列色不再丢失）', () => {
+    const react = designToReactApp(plainTree('chart', { chartType: 'pie', title: '占比', data: CHART_DATA_5, xKey: 'day', yKey: 'value' }), false)
+    const html = designToHtml(plainTree('chart', { chartType: 'pie', title: '占比', data: CHART_DATA_5, xKey: 'day', yKey: 'value' }))
+    for (const c of CHART_COLORS) {
+      expect(react, `pie: React 缺序列色 ${c}`).toContain(`"background":"${c}"`)
+      expect(html, `pie: HTML 缺序列色 ${c}`).toContain(`background: ${c}`)
+    }
   })
 })
 

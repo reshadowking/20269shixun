@@ -2,10 +2,22 @@ import { Bar, BarChart, CartesianGrid, Cell, Line, LineChart, Pie, PieChart, Res
 
 import type { ExportElement } from '@/components/canvas/types'
 import { escapeHtml } from '@/design/escape'
-import { styleToCss } from '@/design/styleToCss'
+import { resolveColor, styleToCss } from '@/design/styleToCss'
 import type { DesignNode } from '@/design/types'
 
-const CHART_COLORS = ['#0052D9', '#7C4DFF', '#00A870', '#E5352B', '#FF6B6B']
+/**
+ * 图表序列色（T5-0 #2 修复）：画布与导出共用。前四色取 design-system.yaml 令牌
+ * （primary/secondary/success/danger，与原画布硬编码值逐一相等），第五色令牌表
+ * 无语义对应、保留原值。此前导出柱色硬编码 #3D7FFF（恰为 dark 主题 primary，
+ * 与画布 #0052D9 不一致），pie 多系列色在导出侧整体丢失。
+ */
+export const CHART_COLORS: string[] = [
+  resolveColor('primary')!,
+  resolveColor('secondary')!,
+  resolveColor('success')!,
+  resolveColor('danger')!,
+  '#FF6B6B',
+]
 
 interface ChartDatum { [key: string]: unknown }
 
@@ -27,7 +39,7 @@ export function CanvasChart({ props, style }: { props: Record<string, unknown>; 
             <XAxis dataKey={xKey} tick={{ fontSize: 11 }} />
             <YAxis tick={{ fontSize: 11 }} />
             <Tooltip />
-            <Line type="monotone" dataKey={yKey} stroke="#0052D9" strokeWidth={2} />
+            <Line type="monotone" dataKey={yKey} stroke={CHART_COLORS[0]} strokeWidth={2} />
           </LineChart>
         ) : chartType === 'pie' ? (
           <PieChart>
@@ -44,7 +56,7 @@ export function CanvasChart({ props, style }: { props: Record<string, unknown>; 
             <XAxis dataKey={xKey} tick={{ fontSize: 11 }} />
             <YAxis tick={{ fontSize: 11 }} />
             <Tooltip />
-            <Bar dataKey={yKey} fill="#0052D9" radius={[4, 4, 0, 0]} />
+            <Bar dataKey={yKey} fill={CHART_COLORS[0]} radius={[4, 4, 0, 0]} />
           </BarChart>
         )}
       </ResponsiveContainer>
@@ -97,9 +109,12 @@ export const chartSchema = [
   { key: 'data', label: '数据（JSON 数组）', control: 'textarea' as const },
 ]
 
-/** B1：导出语义描述——纯 CSS 柱状示意（与引擎 case 一致；画布为 Recharts 真实渲染） */
+/** B1：导出语义描述——纯 CSS 柱状示意（与引擎 case 一致；画布为 Recharts 真实渲染）。
+ * T5-0 #2：柱/片颜色与画布共用 CHART_COLORS——bar/line 单序列取首色（=画布 fill），
+ * pie 按序列循环取色（与画布 Cell 一致）。 */
 export const buildChartExport = (node: DesignNode): ExportElement => {
   const props = node.props ?? {}
+  const chartType = typeof props.chartType === 'string' ? props.chartType : 'bar'
   const data = (Array.isArray(props.data) ? props.data : []) as ChartDatum[]
   const xKey = typeof props.xKey === 'string' ? props.xKey : 'name'
   const yKey = typeof props.yKey === 'string' ? props.yKey : 'value'
@@ -112,12 +127,14 @@ export const buildChartExport = (node: DesignNode): ExportElement => {
       text: typeof props.title === 'string' ? props.title : '',
     },
   ]
-  const bars: ExportElement[] = data.map((d) => ({
+  const seriesColor = (index: number): string =>
+    chartType === 'pie' ? CHART_COLORS[index % CHART_COLORS.length] : CHART_COLORS[0]
+  const bars: ExportElement[] = data.map((d, i) => ({
     tag: 'div',
     attrs: { title: `${String(d[xKey] ?? '')}: ${String(d[yKey] ?? '')}` },
     style: {
       flex: 1,
-      background: '#3D7FFF',
+      background: seriesColor(i),
       borderRadius: '4px 4px 0 0',
       height: Math.round(((Number(d[yKey]) || 0) / max) * 140),
     },
