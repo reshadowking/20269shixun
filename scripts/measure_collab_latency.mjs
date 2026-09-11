@@ -44,14 +44,35 @@ function percentile(sorted, p) {
   return sorted[Math.max(0, idx)]
 }
 
-async function login(page) {
-  await page.goto(`${BASE}/workspace?room=${ROOM}&session=${SESSION}`)
-  if (await page.getByTestId('login-password').isVisible().catch(() => false)) {
-    await page.getByTestId('login-password').fill('demo123')
-    await page.getByTestId('login-submit').click()
+/** 分步执行 + 失败时标注步骤名（便于定位到底是登录、工作台还是画布的问题） */
+async function step(label, fn) {
+  try {
+    return await fn()
+  } catch (err) {
+    throw new Error(`[步骤失败: ${label}] ${String(err?.message ?? err).split('\n')[0]}`)
   }
-  await page.getByTestId('workspace-page').waitFor({ state: 'visible', timeout: 15000 })
-  await page.getByTestId('canvas-sheet').waitFor({ state: 'visible', timeout: 15000 })
+}
+
+async function login(page, tag) {
+  // 先走登录页，再进工作台（不依赖 redirect 行为，减少环境差异）
+  await step(`${tag} 打开登录页`, async () => {
+    await page.goto(`${BASE}/login`, { waitUntil: 'domcontentloaded' })
+  })
+  await step(`${tag} 提交登录`, async () => {
+    const pwd = page.getByTestId('login-password')
+    if (await pwd.isVisible().catch(() => false)) {
+      await pwd.fill('demo123')
+      await page.getByTestId('login-submit').click()
+    }
+    await page.waitForFunction(() => !location.pathname.startsWith('/login'), null, { timeout: 15000 })
+  })
+  await step(`${tag} 进入工作台`, async () => {
+    await page.goto(`${BASE}/workspace?room=${ROOM}&session=${SESSION}`, { waitUntil: 'domcontentloaded' })
+    await page.getByTestId('workspace-page').waitFor({ state: 'visible', timeout: 20000 })
+  })
+  await step(`${tag} 等待画布渲染`, async () => {
+    await page.getByTestId('canvas-sheet').waitFor({ state: 'visible', timeout: 20000 })
+  })
 }
 
 /** 取画布上第一个非根节点的 id（用 data-node-id 属性，避免依赖具体设计内容） */
@@ -78,6 +99,18 @@ const context = await browser.newContext()
 const pageA = await context.newPage()
 const pageB = await context.newPage()
 
+/** 浏览器侧诊断信息（出错时打印，便于定位是应用问题还是脚本问题） */
+const consoleLogs = []
+for (const [name, p] of [
+  ['A', pageA],
+  ['B', pageB],
+]) {
+  p.on('console', (m) => {
+    if (m.type() === 'error') consoleLogs.push(`[${name}] console.error: ${m.text()}`)
+  })
+  p.on('pageerror', (e) => consoleLogs.push(`[${name}] pageerror: ${String(e?.message ?? e).split('\n')[0]}`))
+}
+
 const samples = []
 let failedReason = null
 
@@ -85,42 +118,77 @@ try {
   await login(pageA)
   await login(pageB)
 
-  const nodeId = await pickNodeId(pageA)
-  if (!nodeId) throw new Error('画布上找不到任何节点（data-node-id 为空）')
+  const nodeId = await step('读取画布节点', async () => {
+    const id = await pickNodeId(pageA)
+    if (!id) throw new Error('画布上找不到任何节点（data-node-id 为空）')
+    return id
+  })
 
-  // 在 A 页选中该节点（点击画布元素）
-  await pageA.locator(`[data-node-id="${nodeId}"]`).first().click()
-  await pageA.getByTestId('prop-width').waitFor({ state: 'visible', timeout: 10000 })
+  console.log(`  目标节点：${nodeId}`)
+  // 在 A 页选中该节点（走图层树：比点画布元素稳——画布元素带 transform、且可能被遮罩覆盖）
+  await step(`选中节点 ${nodeId}`, async () => {
+    await pageA.getByTestId('activity-layers').click()
+    const row = pageA.getByTestId(`layer-${nodeId}`).first()
+    await row.waitFor({ state: 'attached', timeout: 15000 })
+    // 强制点击：跳过"可接收事件"检查（图层行可能被浮层/滚动容器遮挡判定影响），
+    // 我们只需要它触发选中事件即可
+    await row.click({ force: true, timeout: 15000 })
+    await pageA.getByTestId('activity-props').click()
+    await pageA.getByTestId('prop-width').waitFor({ state: 'visible', timeout: 15000 })
+  })
 
   for (let i = 0; i < ITERS; i += 1) {
     const width = 120 + (i % 20) * 7 // 每次换一个值，确保是"新"更新
     const t0 = Date.now()
 
-    await pageA.getByTestId('prop-width').fill(String(width))
-    await pageA.getByTestId('prop-width').blur()
+    await step(`第 ${i + 1} 次：A 页改宽度`, async () => {
+      await pageA.getByTestId('prop-width').fill(String(width))
+      await pageA.getByTestId('prop-width').blur()
+    })
 
     // B 页等待该节点宽度变化（raf 轮询，取得感知延迟上界）
-    await pageB.waitForFunction(
-      ({ id, w }) => {
-        const el = document.querySelector(`[data-node-id="${id}"]`)
-        if (!el) return false
-        const styleW = el.style.width || ''
-        return styleW.startsWith(String(w))
-      },
-      { id: nodeId, w: width },
-      { timeout: 5000, polling: 'raf' },
-    )
+    await step(`第 ${i + 1} 次：B 页等待同步`, async () => {
+      await pageB.waitForFunction(
+        ({ id, w }) => {
+          const el = document.querySelector(`[data-node-id="${id}"]`)
+          if (!el) return false
+          const styleW = el.style.width || ''
+          return styleW.startsWith(String(w))
+        },
+        { id: nodeId, w: width },
+        { timeout: 5000, polling: 'raf' },
+      )
+    })
 
     samples.push(Date.now() - t0)
   }
 } catch (err) {
   failedReason = String(err?.message ?? err).split('\n')[0]
+  // 失败时抓诊断信息（截图 + 浏览器错误日志），便于定位
+  try {
+    mkdirSync(resolve(repoRoot, 'docs/reverse'), { recursive: true })
+    await pageA.screenshot({ path: resolve(repoRoot, 'docs/reverse/_debug-latency-A.png') }).catch(() => {})
+    await pageB.screenshot({ path: resolve(repoRoot, 'docs/reverse/_debug-latency-B.png') }).catch(() => {})
+    // HTML 落盘便于文本排查（截图需人工看，HTML 可直接 grep）
+    writeFileSync(
+      resolve(repoRoot, 'docs/reverse/_debug-latency-A.html'),
+      await pageA.content().catch(() => ''),
+      'utf8',
+    )
+    failedReason += '（已保存诊断：docs/reverse/_debug-latency-A.html + 截图）'
+  } catch {
+    /* 截图失败不覆盖原始错误 */
+  }
 } finally {
   await browser.close()
 }
 
 if (failedReason || samples.length === 0) {
   console.error('\n❌ 测量未完成：', failedReason ?? '无有效样本')
+  if (consoleLogs.length > 0) {
+    console.error('   浏览器侧错误（最多 8 条）：')
+    consoleLogs.slice(0, 8).forEach((l) => console.error('     ' + l))
+  }
   console.error('   排查：后端/前端是否已启动？y-websocket 容器是否在跑？浏览器是否已安装？')
   process.exit(1)
 }
