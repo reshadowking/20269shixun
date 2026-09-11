@@ -1,17 +1,33 @@
 import { escapeHtml } from '@/design/escape'
-import { styleToCss } from '@/design/styleToCss'
+import { resolveColor, styleToCss } from '@/design/styleToCss'
 import type { DesignNode } from '@/design/types'
 import type { ExportElement } from '@/components/canvas/types'
 
+/**
+ * 变体底色（T5-0 #5 修复）：画布与导出共用同一映射——底色/描边取 design-system.yaml
+ * 令牌，填充上的文字统一白（shadcn 主题三处 --*-foreground 均为 #ffffff，令牌表
+ * 无对应项，收敛为常量）。此前导出 builder 只输出 node.style，变体底色整体丢失，
+ * 导出工程里"按钮没颜色"。
+ */
+export const BUTTON_VARIANT_STYLE: Record<string, React.CSSProperties> = {
+  default: { background: resolveColor('primary'), color: '#FFFFFF' },
+  primary: { background: resolveColor('primary'), color: '#FFFFFF' },
+  secondary: { background: resolveColor('secondary'), color: '#FFFFFF' },
+  outline: { background: '#FFFFFF', border: `1px solid ${resolveColor('border')}` },
+  ghost: {},
+  destructive: { background: resolveColor('danger'), color: '#FFFFFF' },
+}
+
 /** ① 画布渲染：按钮（样式参考 shadcn/ui Button，自实现 Canvas 版，支持全部 variant）。
- * 导出仅供 B0 契约测试读取合法集合（与组件库/属性面板三方对齐校验）。 */
+ * 导出仅供 B0 契约测试读取合法集合（与组件库/属性面板三方对齐校验）。
+ * 色彩改内联（T5-0）：jsdom 不解析 Tailwind 类，内联后画布/导出同源且可测。 */
 export const VARIANT_CLASS: Record<string, string> = {
-  default: 'inline-flex items-center justify-center rounded-md bg-primary text-sm font-medium text-primary-foreground shadow-sm',
-  primary: 'inline-flex items-center justify-center rounded-md bg-primary text-sm font-medium text-primary-foreground shadow-sm',
-  secondary: 'inline-flex items-center justify-center rounded-md bg-secondary text-sm font-medium text-secondary-foreground shadow-sm',
-  outline: 'inline-flex items-center justify-center rounded-md border border-input bg-background text-sm font-medium shadow-sm',
+  default: 'inline-flex items-center justify-center rounded-md text-sm font-medium shadow-sm',
+  primary: 'inline-flex items-center justify-center rounded-md text-sm font-medium shadow-sm',
+  secondary: 'inline-flex items-center justify-center rounded-md text-sm font-medium shadow-sm',
+  outline: 'inline-flex items-center justify-center rounded-md text-sm font-medium shadow-sm',
   ghost: 'inline-flex items-center justify-center rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground',
-  destructive: 'inline-flex items-center justify-center rounded-md bg-destructive text-sm font-medium text-destructive-foreground shadow-sm',
+  destructive: 'inline-flex items-center justify-center rounded-md text-sm font-medium shadow-sm',
 }
 
 export function CanvasButton({ props, style }: { props: Record<string, unknown>; style?: React.CSSProperties }) {
@@ -25,7 +41,13 @@ export function CanvasButton({ props, style }: { props: Record<string, unknown>;
   return (
     <div
       className={className}
-      style={{ height, paddingLeft: size === 'lg' ? 28 : 16, paddingRight: size === 'lg' ? 28 : 16, ...(style as object) }}
+      style={{
+        height,
+        paddingLeft: size === 'lg' ? 28 : 16,
+        paddingRight: size === 'lg' ? 28 : 16,
+        ...(BUTTON_VARIANT_STYLE[variant] ?? BUTTON_VARIANT_STYLE.default),
+        ...(style as object),
+      }}
     >
       {text}
     </div>
@@ -53,13 +75,18 @@ export const exportButtonTemplate = (props: Record<string, unknown>): string => 
         </button>`
 }
 
-/** B1 试点：导出语义描述（React/HTML 引擎共用；文本与属性转义由引擎统一负责） */
+/** B1 试点：导出语义描述（React/HTML 引擎共用；文本与属性转义由引擎统一负责）。
+ * T5-0 #5：变体底色/白字/描边与画布共用 BUTTON_VARIANT_STYLE，node.style 仍可覆盖。 */
 export const buildButtonExport = (node: DesignNode): ExportElement => {
   const props = node.props ?? {}
+  const variant = typeof props.variant === 'string' ? props.variant : 'default'
   return {
     tag: 'button',
     attrs: {},
-    style: styleToCss(node.style),
+    style: {
+      ...(BUTTON_VARIANT_STYLE[variant] ?? BUTTON_VARIANT_STYLE.default),
+      ...styleToCss(node.style),
+    },
     text: typeof props.text === 'string' ? props.text : '',
   }
 }

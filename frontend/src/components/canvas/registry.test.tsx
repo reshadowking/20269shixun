@@ -57,6 +57,18 @@ describe('组件画布渲染', () => {
     expect(screen.getByText('↓ 2.4%').style.color).toBe(rgb(resolveColor('danger')!))
   })
 
+  it('button 变体底色内联渲染（T5-0 #5）：画布与导出同源令牌', () => {
+    const def = componentRegistry.button
+    const rgb = (hex: string): string => {
+      const n = parseInt(hex.slice(1), 16)
+      return `rgb(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255})`
+    }
+    render(<def.Canvas props={{ text: '去支付', variant: 'primary' }} />)
+    const el = screen.getByText('去支付')
+    expect(el.style.backgroundColor).toBe(rgb(resolveColor('primary')!))
+    expect(el.style.color).toBe('rgb(255, 255, 255)')
+  })
+
   it('未注册组件渲染占位并标记警告', () => {
     // registry 直接查不到的类型 → NodeRenderer 层处理；此处验证注册表行为
     expect(componentRegistry['spaghetti']).toBeUndefined()

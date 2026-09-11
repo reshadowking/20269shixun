@@ -50,6 +50,44 @@ function treeOf(f: ComponentFixture): DesignNode {
   }
 }
 
+/** T5-0 专用树：无任何样式的纯净 frame（色彩断言不被根节点干扰） */
+function plainTree(componentType: ComponentType, props: Record<string, unknown>): DesignNode {
+  return {
+    id: 'root',
+    type: 'frame',
+    style: { layout: 'column' },
+    children: [{ id: 'c1', type: 'component', componentType, props }],
+  }
+}
+
+describe('T5-0 #5 导出缺部件：button 变体底色', () => {
+  const CASES = [
+    ['primary', 'primary'],
+    ['default', 'primary'],
+    ['secondary', 'secondary'],
+    ['destructive', 'danger'],
+  ] as const
+
+  it('填充类变体导出携带令牌底色与白字（双通道）', () => {
+    for (const [variant, token] of CASES) {
+      const react = designToReactApp(plainTree('button', { text: '去支付', variant }), false)
+      const html = designToHtml(plainTree('button', { text: '去支付', variant }))
+      const bg = resolveColor(token)
+      expect(react, `${variant}: React 缺底色 ${bg}`).toContain(`"background":"${bg}"`)
+      expect(react, `${variant}: React 缺白字`).toContain('"color":"#FFFFFF"')
+      expect(html, `${variant}: HTML 缺底色 ${bg}`).toContain(`background: ${bg}`)
+      expect(html, `${variant}: HTML 缺白字`).toContain('color: #FFFFFF')
+    }
+  })
+
+  it('outline 携带令牌描边；ghost 无底色（防回退）', () => {
+    const reactOutline = designToReactApp(plainTree('button', { text: '取消', variant: 'outline' }), false)
+    expect(reactOutline).toContain(`"border":"1px solid ${resolveColor('border')}"`)
+    const reactGhost = designToReactApp(plainTree('button', { text: '取消', variant: 'ghost' }), false)
+    expect(reactGhost, 'ghost 不应有 background').not.toContain('"background"')
+  })
+})
+
 describe('B0-2 导出语义 parity（React/HTML 双通道）', () => {
   it('15 组件：React 输出 data-component 标记，双通道保留关键文本与语义标签', () => {
     for (const f of FIXTURES) {
