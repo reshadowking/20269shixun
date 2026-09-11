@@ -5,6 +5,7 @@ from typing import ClassVar
 
 from app.design.validator import validate_design_safe
 from app.mcp_tools import apply_design_edit, get_component_library, get_design_tokens
+from app.services.beautify import preset_value
 
 
 class TestDesignTokensTool:
@@ -80,20 +81,24 @@ class TestApplyDesignEditTool:
         ],
     }
 
-    def test_mock_mode_returns_valid_design_unchanged(self):
-        """Mock/无 Key 模式：LLM 不可用 → 返回原树（fallback=True），产物必须仍是合法 DesignNode。
+    def test_mock_mode_returns_deterministic_rewrite(self):
+        """Mock/无 Key 模式（T4 前置起）：增量修改产出**确定性改写树**而非 fallback 原树。
 
-        真实修改路径依赖真实 LLM Key，由本地联调验证；本用例锁定"降级路径不产出非法树"。
+        旧契约是"mock=兜底原树"（本用例曾断言 fallback=True）；T4 前置按任务卡
+        变更 mock 行为：关键词规则改写、仍走 repair→Schema→合规流水线。本用例
+        保留原保护意图——产物必须是合法 DesignNode、不丢用户数据——并把断言
+        更新为新契约（确定性、效果值来自预置集合、无结构变更）。
         """
         result = apply_design_edit(self.SAMPLE, "把按钮改成红色")
         assert result["template"] == "edit"
-        assert result["fallback"] is True  # mock 下 LLM 未生效，走原树兜底
+        assert result["fallback"] is False  # T4 前置：mock 编辑不再兜底
         ok, errors = validate_design_safe(result["design"])
         assert ok, f"返回树不合法: {errors[:3]}"
-        # 兜底返回原树（内容一致），不丢用户数据
+        # 结构与用户数据不变（无 text 节点 → "改成"落空 → 默认施加"极轻"阴影）
         children = result["design"]["children"]
         assert children[0]["id"] == "b1" and children[0]["props"]["text"] == "提交"
         assert result["design"]["style"]["padding"] == 16
+        assert children[0]["style"]["shadow"] == preset_value("shadow", "极轻")
 
     def test_result_fields_match_generate_api(self):
         """返回结构包含 /api/generate 同款字段（Agent 可直接保存/继续处理）。"""

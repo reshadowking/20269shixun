@@ -3,6 +3,7 @@
 30 秒预算：意图解析 2-5s（调用 1）→ 模板匹配 <1s → 参数填充 5-10s（调用 2）→ 合规 <1s。
 调用失败/非 JSON/mock 模式 → 返回模板默认稿（断网兜底，v2.2 §1.4）。
 """
+import copy
 import logging
 import re
 import time
@@ -13,6 +14,7 @@ from opentelemetry import trace
 
 from ..config import get_settings
 from ..design.validator import SchemaError, validate_design
+from .beautify import preset_value
 from .compliance import compliance_rate, enforce_compliance
 from .llm import LLMClient, describe_api_error, to_llm_dict
 from .templates import KEYWORD_MAP, TEMPLATES, free_default_design
@@ -347,6 +349,65 @@ class GenerateResult:
     violations_detail: list = field(default_factory=list)
 
 
+# ---- T4 前置：mock 模式增量修改（确定性关键词规则，无 LLM）----
+
+# mock 文案改写的固定新值（E2E/pytest 断言依赖其确定性）
+MOCK_EDIT_TEXT = "已按你的要求修改文案（演示模式）"
+
+# prompt 关键词 → (效果 key, 预置值 label)。值经 preset_value 运行时取自
+# shared/beautify-effects.json 单一来源，禁止在此写死效果值（防第二份真相漂移）。
+_MOCK_EDIT_EFFECTS: list[tuple[tuple[str, ...], str, str]] = [
+    (("阴影", "投影"), "shadow", "轻"),
+    (("渐变", "背景"), "backgroundImage", "品牌渐变"),
+    (("圆角",), "radius", "大圆角"),
+    (("动效", "动画"), "animation", "淡入"),
+]
+_MOCK_EDIT_TEXT_KEYWORDS = ("文案", "文字", "标题", "改成")
+
+
+def _mock_first_node(tree: dict, pred) -> dict | None:
+    """前序遍历找第一个满足条件的节点。"""
+    if pred(tree):
+        return tree
+    for child in tree.get("children") or []:
+        hit = _mock_first_node(child, pred)
+        if hit is not None:
+            return hit
+    return None
+
+
+def _mock_apply_style(tree: dict, key: str, value: Any) -> dict:
+    """把效果写到第一个 component 节点（无则根节点）；不增删/重排/改父级。"""
+    node = _mock_first_node(tree, lambda n: n.get("type") == "component") or tree
+    node.setdefault("style", {})[key] = value
+    return tree
+
+
+def mock_edited_design(prompt: str, tree: dict[str, Any]) -> dict[str, Any]:
+    """mock 模式增量修改：按关键词规则产出确定性改写树（纯规则、无 LLM）。
+
+    规则顺序（命中即返回）：效果关键词（阴影/渐变/圆角/动效）→ 文案改写
+    （改第一个 type=text 节点的 props.text）→ 默认施加"极轻"阴影（无害效果）。
+    硬约束：绝不产生结构变更（不增删/重排/改父级）；效果值一律经
+    preset_value 取自 beautify-effects.json（运行时单一来源）。
+    """
+    new_tree = copy.deepcopy(tree)
+    for keywords, key, label in _MOCK_EDIT_EFFECTS:
+        if any(k in prompt for k in keywords):
+            value = preset_value(key, label)
+            if value is not None:
+                return _mock_apply_style(new_tree, key, value)
+    if any(k in prompt for k in _MOCK_EDIT_TEXT_KEYWORDS):
+        node = _mock_first_node(new_tree, lambda n: n.get("type") == "text")
+        if node is not None:
+            node.setdefault("props", {})["text"] = MOCK_EDIT_TEXT
+            return new_tree
+    gentle = preset_value("shadow", "极轻")
+    if gentle is not None:
+        return _mock_apply_style(new_tree, "shadow", gentle)
+    return new_tree
+
+
 def generate_design(prompt: str, client: LLMClient | None = None, current_design: dict[str, Any] | None = None) -> GenerateResult:
     """生成设计稿。current_design 非空时走【增量修改】模式（P0-1）：
     基于当前树只改用户指定部分，其他节点保持不变；失败兜底返回原树。
@@ -408,11 +469,19 @@ def generate_design(prompt: str, client: LLMClient | None = None, current_design
             if not is_free:
                 user_payload["template_skeleton"] = default
             fill_system = FREE_SYSTEM if is_free else FILL_SYSTEM
-        try:
-            filled = client.chat_json(fill_system, to_llm_dict(user_payload), settings.llm_temperature_fill)
-        except Exception as exc:  # noqa: BLE001
-            error = f"参数填充调用失败：{describe_api_error(exc)}"
-            filled = None
+        if is_edit and client.is_mock and client.mock_responder is None:
+            # T4 前置：mock 模式增量修改产出确定性改写树（关键词规则、无 LLM），
+            # 与下方真实链路共用 repair → validate → compliance 流水线；
+            # 与 :443 附近非编辑路径的 mock 特判对称——否则「AI 修改 → 落地闸门」
+            # 在无 Key 环境永远走 fallback，E2E/CI 无法覆盖闸门。
+            # 注入 mock_responder 的调用方（测试模拟真实 LLM）不走本分支。
+            filled = mock_edited_design(prompt, current_design or {})
+        else:
+            try:
+                filled = client.chat_json(fill_system, to_llm_dict(user_payload), settings.llm_temperature_fill)
+            except Exception as exc:  # noqa: BLE001
+                error = f"参数填充调用失败：{describe_api_error(exc)}"
+                filled = None
         if filled is None or not isinstance(filled, dict):
             fallback = True
             if not error:

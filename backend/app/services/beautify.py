@@ -25,6 +25,28 @@ EFFECT_VALUES: dict[str, set] = {
 }
 EFFECT_CHANGES_SIZE: dict[str, bool] = {k["key"]: bool(k["changesSize"]) for k in WHITELIST["keys"]}
 
+
+def preset_value(key: str, label: str | None = None) -> Any | None:
+    """按 label 从预置集合取值（精确匹配；无提示取第一个）——运行时单一来源。
+
+    供 mock 编辑等规则化写入方使用：值只能来自 shared/beautify-effects.json，
+    禁止在调用方写死 hex/字符串（否则扩充效果库必然漂移）。key 或 label 不存在
+    返回 None，由调用方决定降级行为。
+    """
+    for spec in WHITELIST["keys"]:
+        if spec["key"] != key:
+            continue
+        values = spec.get("values") or []
+        if not values:
+            return None
+        if label is None:
+            return values[0]["value"]
+        for item in values:
+            if item.get("label") == label:
+                return item["value"]
+        return None
+    return None
+
 # 明确拒绝的非样式字段（构造请求时最常被夹带的字段，给前端可读的报错）
 FORBIDDEN_FIELDS = {
     "layout", "gap", "padding", "spacing", "width", "height", "x", "y",
