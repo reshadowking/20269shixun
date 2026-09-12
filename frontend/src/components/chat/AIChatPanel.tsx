@@ -172,6 +172,9 @@ interface AIChatPanelProps {
     newDesign: DesignNode,
     changedIds: string[],
   ) => IncrementalEditOutcome | Promise<IncrementalEditOutcome> | void
+  /** T4 批2：当前是否处于版面锁定阶段（WorkspacePage 从服务端读回的锁状态）。
+   * 仅随增量编辑请求告知后端以调整提示词措辞——不是安全开关，闸门仍由服务端判定。 */
+  locked?: boolean
   /** P0-1 撤销：回到上一版（快照） */
   onUndo?: () => void
   canUndo?: boolean
@@ -183,7 +186,7 @@ interface AIChatPanelProps {
   onUseExploreDesign?: (design: DesignNode) => void
 }
 
-export default function AIChatPanel({ onGenerate, onGeneratingChange, design, onIncrementalEdit, onUndo, canUndo, sessionKey, onComplianceRestore, onUseExploreDesign }: AIChatPanelProps) {
+export default function AIChatPanel({ onGenerate, onGeneratingChange, design, onIncrementalEdit, onUndo, canUndo, sessionKey, onComplianceRestore, onUseExploreDesign, locked }: AIChatPanelProps) {
   const [input, setInput] = useState('')
   /** 会话作用域：本项目会话数据的唯一读写入口（盖章写入 + 过滤读取，跨会话访问抛错） */
   const scope = useMemo(() => createSessionScope(sessionKey), [sessionKey])
@@ -342,7 +345,12 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
     const isEdit = editDesign !== undefined
     try {
       const body: Record<string, unknown> = { prompt }
-      if (isEdit) body.design = editDesign
+      if (isEdit) {
+        body.design = editDesign
+        // T4 批2：告知后端当前处于版面锁定阶段（仅影响提示词措辞）。安全判定不在
+        // 客户端——闸门按服务端 design_locks 查表，谎报 locked 只会得到被拒结果。
+        body.locked = locked === true
+      }
       const resp = await api<GenerateResponse>('/api/generate', {
         method: 'POST',
         body: JSON.stringify(body),

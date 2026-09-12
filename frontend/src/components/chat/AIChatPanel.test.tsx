@@ -476,3 +476,34 @@ describe('D3 方案探索', () => {
     expect(extractPreviewTexts(tree)).toBe('你好世界 · 立即购买')
   })
 })
+
+describe('T4 批2：增量编辑请求携带 locked（仅提示词措辞，非安全开关）', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    localStorage.clear()
+  })
+
+  async function sendEditAndCapture(locked?: boolean) {
+    const fetchMock = mockFetch({ questions: [] })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<AIChatPanel sessionKey="s-test" onGenerate={() => {}} design={DESIGN as DesignNode} locked={locked} />)
+    // 「把…」是修改类指令：画布有设计 → 增量编辑（携带当前树）
+    typeAndSend('把标题改成红色')
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some((c) => String(c[0]) === '/api/generate')).toBe(true)
+    })
+    const gen = fetchMock.mock.calls.find((c) => String(c[0]) === '/api/generate')
+    return JSON.parse(String(gen![1]?.body))
+  }
+
+  it('locked=true：增量编辑请求体携带 locked=true', async () => {
+    const body = await sendEditAndCapture(true)
+    expect(body.design).toEqual(DESIGN)
+    expect(body.locked).toBe(true)
+  })
+
+  it('locked 未传（默认未锁定）：请求体 locked=false，行为向后兼容', async () => {
+    const body = await sendEditAndCapture(undefined)
+    expect(body.locked).toBe(false)
+  })
+})

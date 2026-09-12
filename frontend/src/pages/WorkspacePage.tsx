@@ -1041,6 +1041,7 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
                     }}
                     design={design}
                     onIncrementalEdit={handleIncrementalEdit}
+                    locked={layoutLocked}
                     onUndo={handleUndo}
                     canUndo={undoCount > 0}
                     onComplianceRestore={(fix) => {
