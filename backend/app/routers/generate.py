@@ -20,6 +20,11 @@ class GenerateRequest(BaseModel):
     design_system: str = Field(default="brand-design-token-23v1", max_length=100)
     # P0-1 增量编辑：传入当前画布树时，走"只改指定部分"的增量修改模式
     design: dict | None = None
+    # T4 批2：仅用于增量提示词措辞（锁定阶段追加更严约束段），向后兼容（旧调用方不传即未锁定）。
+    # ⚠️ 不是安全开关：锁定与否的权威判定在服务端闸门（/api/apply-locked-edit 按
+    # design_locks 查表），不读本字段——客户端谎报 locked=false 只会让模型更可能
+    # 产出被闸门拒绝的改动（体验变差），不构成绕过锁的安全漏洞。
+    locked: bool = False
 
 
 class GenerateResponse(BaseModel):
@@ -43,7 +48,7 @@ def generate(req: GenerateRequest, _user: str = Depends(get_current_user)):
     if not is_design_request(req.prompt):
         raise HTTPException(status_code=422, detail=GUARD_REPLY)
     try:
-        result = generate_design(req.prompt, current_design=req.design)
+        result = generate_design(req.prompt, current_design=req.design, locked=req.locked)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"AI 生成失败：{exc}") from exc
     return GenerateResponse(

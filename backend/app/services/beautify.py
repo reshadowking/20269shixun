@@ -47,6 +47,22 @@ def preset_value(key: str, label: str | None = None) -> Any | None:
         return None
     return None
 
+
+def vocabulary_text() -> str:
+    """按 shared/beautify-effects.json 运行时生成效果词典文本（T4 批2）。
+
+    供提示词注入使用：扩充效果库后词典自动同步，禁止调用方手写效果名/值。
+    每组输出：key、中文 label、全部预置值的 label 与 value、changesSize 标记。
+    每次调用都从 WHITELIST 现算（不加缓存、不做模块级常量）——改 JSON（或测试中
+    改 WHITELIST）后重新生成必然生效，防漂移测试因此可以观测到变化。
+    """
+    lines: list[str] = []
+    for spec in WHITELIST["keys"]:
+        size_note = "【可能改变尺寸，应用前需用户确认】" if spec.get("changesSize") else ""
+        pairs = "；".join(f"{v['label']}={v['value']}" for v in spec.get("values") or [])
+        lines.append(f"- {spec['key']}（{spec['label']}）{size_note}：{pairs}")
+    return "\n".join(lines)
+
 # 明确拒绝的非样式字段（构造请求时最常被夹带的字段，给前端可读的报错）
 FORBIDDEN_FIELDS = {
     "layout", "gap", "padding", "spacing", "width", "height", "x", "y",

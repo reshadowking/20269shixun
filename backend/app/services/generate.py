@@ -14,7 +14,7 @@ from opentelemetry import trace
 
 from ..config import get_settings
 from ..design.validator import SchemaError, validate_design
-from .beautify import preset_value
+from .beautify import preset_value, vocabulary_text
 from .compliance import compliance_rate, enforce_compliance
 from .llm import LLMClient, describe_api_error, to_llm_dict
 from .templates import KEYWORD_MAP, TEMPLATES, free_default_design
@@ -287,6 +287,35 @@ INCREMENTAL_SYSTEM = """你是 AI 设计修改器。基于给定的 DesignNode �
 5. 字号 fontSize 用数字（8-96）；间距 gap/圆角 radius 用数字。
 6. 输出必须是合法 JSON（完整 DesignNode 树），不要输出任何其他内容；JSON 语法必须正确（属性间逗号、对象闭合）。"""
 
+# T4 批2：锁定阶段的额外约束段（仅 locked=True 时追加到增量提示词末尾）
+LOCKED_STAGE_SECTION = """
+
+## 版面锁定阶段（locked=true 时生效）
+1. 只允许施加/移除上列预置效果，禁止改动布局、模块顺序、结构、文案与尺寸；
+2. 效果值必须与预置值逐字一致；
+3. 用户说"整个页面/所有卡片/全部模块"时，对全部符合语义的节点施加效果。"""
+
+
+def incremental_system(locked: bool = False) -> str:
+    """组装增量修改 system 提示词（T4 批2）：既有约束 + 效果词典 +（locked 时）锁定约束段。
+
+    - INCREMENTAL_SYSTEM 既有约束文本逐字保留（多处测试断言依赖），词典为追加式拼装；
+    - 词典由 shared/beautify-effects.json 运行时生成（beautify.vocabulary_text），
+      未锁定时也注入——让模型始终优先用预置值，降低自由 CSS 进树的概率；
+    - ⚠️ locked 不是安全开关，只影响提示词措辞：安全判定由服务端闸门
+      （apply_locked_edit / design_locks，按会话查表）负责。客户端谎报
+      locked=false 的后果只是提示词缺少锁定约束段，模型可能产出越权改动，
+      闸门仍会拒绝（画布原样）——体验变差，但没有安全漏洞。
+    """
+    text = (
+        INCREMENTAL_SYSTEM
+        + "\n\n## 可用美化效果（只能从中选，禁止自创 CSS 值）\n"
+        + vocabulary_text()
+    )
+    if locked:
+        text += LOCKED_STAGE_SECTION
+    return text
+
 SUMMARY_SYSTEM = """你是需求摘要器。把用户的长篇设计需求压缩为简洁的结构化需求描述（200 字以内），供下游生成设计稿。
 硬约束：
 1. 用户明确指定的【原文案】必须逐字保留：标题、价格、按钮文字、品牌名、评价内容、导航/页脚链接文字等，禁止改写、缩写、翻译。
@@ -408,9 +437,17 @@ def mock_edited_design(prompt: str, tree: dict[str, Any]) -> dict[str, Any]:
     return new_tree
 
 
-def generate_design(prompt: str, client: LLMClient | None = None, current_design: dict[str, Any] | None = None) -> GenerateResult:
+def generate_design(
+    prompt: str,
+    client: LLMClient | None = None,
+    current_design: dict[str, Any] | None = None,
+    locked: bool = False,
+) -> GenerateResult:
     """生成设计稿。current_design 非空时走【增量修改】模式（P0-1）：
     基于当前树只改用户指定部分，其他节点保持不变；失败兜底返回原树。
+
+    locked（T4 批2）只影响增量提示词措辞（是否注入锁定约束段），不参与任何
+    安全判定——锁定与否的权威是服务端闸门按 design_locks 查表的结果。
     """
     settings = get_settings()
     client = client or LLMClient()
@@ -461,7 +498,7 @@ def generate_design(prompt: str, client: LLMClient | None = None, current_design
         if is_edit:
             default = current_design  # 增量失败兜底：返回原树（画布不变，不丢用户调整）
             user_payload = {"user_request": fill_prompt, "current_design": current_design}
-            fill_system = INCREMENTAL_SYSTEM
+            fill_system = incremental_system(locked)
         else:
             is_free = template_name == "free"
             default = free_default_design(prompt) if is_free else TEMPLATES.get(template_name, TEMPLATES["landing"])
