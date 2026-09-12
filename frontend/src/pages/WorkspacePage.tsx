@@ -421,6 +421,39 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
     }
   }
 
+  /** T4 批3：批量应用高级效果（同类节点 / 选中多个）。
+   * 后端原子生效（任一 target 非法整批 422），成功后单次快照 + 整树替换 = 一步撤销。 */
+  const handleApplyEffectBatch = async (nodeIds: string[], key: string, value: string | number | null) => {
+    if (nodeIds.length === 0) return
+    setBeautifying(true)
+    setBeautifyError('')
+    try {
+      const resp = await api<{
+        design: DesignNode
+        applied: string[]
+        removed: string[]
+        changes_size: boolean
+        failed: Array<{ node_id: string; reason: string }>
+      }>('/api/apply-effects/batch', {
+        method: 'POST',
+        body: JSON.stringify({ design, targets: nodeIds.map((id) => ({ node_id: id, effects: { [key]: value } })) }),
+      })
+      store.pushSnapshot()
+      setUndoCount((c) => c + 1)
+      store.resetDesign(resp.design)
+      // 部分失败可读反馈（原子语义下服务端整批拒绝走 catch；此处防未来部分语义静默吞掉）
+      if (resp.failed?.length) {
+        setBeautifyError(`以下节点未能应用效果：${resp.failed.map((f) => f.node_id).join('、')}`)
+      }
+      sessionApi.recordToolCall(sessionKey, `apply-effects-batch:${key}:${nodeIds.length}`, true).catch(() => {})
+    } catch (err) {
+      sessionApi.recordToolCall(sessionKey, `apply-effects-batch:${key}:${nodeIds.length}`, false).catch(() => {})
+      setBeautifyError(err instanceof Error ? `批量应用被拒绝：${err.message}` : '批量应用失败')
+    } finally {
+      setBeautifying(false)
+    }
+  }
+
   // 画布背景网格点（P2-11，localStorage 记忆）
   const [showGrid, setShowGrid] = useState(() => localStorage.getItem('design-grid') !== '0')
 
@@ -1074,6 +1107,8 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
                     onConfirmLayout={handleConfirmLayout}
                     onUnlock={handleUnlockLayout}
                     onApplyEffect={(nodeId, key, value) => void handleApplyEffect(nodeId, key, value)}
+                    selectedIds={selectedIds}
+                    onApplyEffectBatch={(nodeIds, key, value) => void handleApplyEffectBatch(nodeIds, key, value)}
                     onPreviewToggle={setEffectsPreview}
                   />
                 )}

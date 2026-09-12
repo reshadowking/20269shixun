@@ -109,3 +109,82 @@ describe('BeautifyPanel（缺陷 3）', () => {
     expect(screen.getByTestId('beautify-error')).toHaveTextContent('只允许样式白名单字段')
   })
 })
+
+describe('BeautifyPanel 批量美化（T4 批3）', () => {
+  const MULTI_DESIGN: DesignNode = {
+    id: 'root',
+    type: 'frame',
+    style: { layout: 'column' },
+    children: [
+      { id: 'card-1', type: 'component', componentType: 'card', style: { width: 320 } },
+      { id: 'card-2', type: 'component', componentType: 'card', style: { width: 320 } },
+      { id: 'card-3', type: 'component', componentType: 'card', style: { width: 320 }, hidden: true },
+      { id: 'btn-1', type: 'component', componentType: 'button', style: {} },
+    ],
+  }
+
+  function renderBatchPanel(overrides: Partial<React.ComponentProps<typeof BeautifyPanel>> = {}) {
+    const props = {
+      design: MULTI_DESIGN,
+      selectedNode: MULTI_DESIGN.children![0],
+      baseSnapshot: null,
+      locked: true,
+      applying: false,
+      error: '',
+      previewing: false,
+      selectedIds: new Set<string>(['card-1', 'btn-1']),
+      onConfirmLayout: vi.fn(),
+      onUnlock: vi.fn(),
+      onApplyEffect: vi.fn(),
+      onApplyEffectBatch: vi.fn(),
+      onPreviewToggle: vi.fn(),
+      ...overrides,
+    }
+    render(<BeautifyPanel {...props} />)
+    return props
+  }
+
+  it('同类节点影响范围：同 componentType 计数且排除隐藏（将应用到 N 个节点）', async () => {
+    renderBatchPanel()
+    await userEvent.click(screen.getByTestId('beautify-scope-same-type'))
+    // card-1/2/3 同为 card，但 card-3 隐藏 → 影响范围 2
+    expect(screen.getByTestId('beautify-batch-note')).toHaveTextContent('将应用到 2 个节点')
+  })
+
+  it('多选影响范围：选中集合计算（将应用到 N 个节点）', async () => {
+    renderBatchPanel()
+    await userEvent.click(screen.getByTestId('beautify-scope-multi'))
+    expect(screen.getByTestId('beautify-batch-note')).toHaveTextContent('将应用到 2 个节点')
+  })
+
+  it('批量应用：点预设触发批量回调，携带全部目标 id 与效果值', async () => {
+    const props = renderBatchPanel()
+    await userEvent.click(screen.getByTestId('beautify-scope-same-type'))
+    await userEvent.click(screen.getByTestId('beautify-shadow-1'))
+    expect(props.onApplyEffectBatch).toHaveBeenCalledWith(
+      ['card-1', 'card-2'],
+      'shadow',
+      '0 4px 12px rgba(29,33,41,0.10)',
+    )
+    expect(props.onApplyEffect).not.toHaveBeenCalled()
+  })
+
+  it('changesSize 效果批量应用前二次确认；取消则不调用（含影响范围提示）', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    const props = renderBatchPanel()
+    await userEvent.click(screen.getByTestId('beautify-scope-same-type'))
+    await userEvent.click(screen.getByTestId('beautify-transform-0'))
+    expect(confirmSpy).toHaveBeenCalledTimes(1)
+    expect(confirmSpy.mock.calls[0][0]).toContain('2 个节点')
+    expect(props.onApplyEffectBatch).not.toHaveBeenCalled()
+    confirmSpy.mockRestore()
+  })
+
+  it('单节点路径不受批量入口影响：默认范围仍是当前节点、回调不变', async () => {
+    const props = renderBatchPanel()
+    await userEvent.click(screen.getByTestId('beautify-shadow-2'))
+    expect(props.onApplyEffect).toHaveBeenCalledWith('card-1', 'shadow', '0 10px 30px rgba(29,33,41,0.16)')
+    expect(props.onApplyEffectBatch).not.toHaveBeenCalled()
+    expect(screen.queryByTestId('beautify-batch-note')).not.toBeInTheDocument()
+  })
+})

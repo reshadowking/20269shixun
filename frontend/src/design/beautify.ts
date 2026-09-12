@@ -2,6 +2,8 @@
  * 美化效果白名单（缺陷 3）：与 shared/beautify-effects.json 单一来源（契约测试保证一致）。
  * 用途：① 美化面板的预设按钮；② DesignStore 锁定期的写入层校验；③ 尺寸变更提示判定。
  */
+import type { DesignNode } from '@/design/types'
+
 export interface EffectPreset {
   value: string | number
   label: string
@@ -127,4 +129,19 @@ export function countBeautifiedNodes(tree: { style?: Record<string, unknown>; ch
     count += countBeautifiedNodes(child)
   }
   return count
+}
+
+/**
+ * T4 批3：「应用到同类节点」的目标集合——与选中节点同类型的全部可见节点（含选中节点自身）。
+ * 同类判定：type 相同，且 componentType 相同（text/frame 等无 componentType 的节点按 type 归类）；
+ * 隐藏节点排除（不给看不见的节点加效果）。
+ */
+export function collectSameTypeNodes(tree: DesignNode, selected: DesignNode): DesignNode[] {
+  const out: DesignNode[] = []
+  const walk = (n: DesignNode) => {
+    if (!n.hidden && n.type === selected.type && n.componentType === selected.componentType) out.push(n)
+    for (const c of n.children ?? []) walk(c)
+  }
+  walk(tree)
+  return out
 }

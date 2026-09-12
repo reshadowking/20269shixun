@@ -11,6 +11,7 @@ import {
   EFFECT_SPECS,
   SIZE_CHANGING_KEYS,
   collectAppliedEffects,
+  collectSameTypeNodes,
   countBeautifiedNodes,
   effectValueLabel,
   findInvalidEffectKeys,
@@ -79,5 +80,40 @@ describe('白名单校验', () => {
     expect(collectAppliedEffects(tree.children![0])).toEqual([{ key: 'shadow', value: '0 1px 2px rgba(29,33,41,0.06)' }])
     expect(collectAppliedEffects(tree.children![1])).toEqual([])
     expect(countBeautifiedNodes(tree)).toBe(2)
+  })
+})
+
+describe('collectSameTypeNodes（T4 批3：应用到同类节点）', () => {
+  const TREE: DesignNode = {
+    id: 'root',
+    type: 'frame',
+    style: { layout: 'column' },
+    children: [
+      { id: 'card-1', type: 'component', componentType: 'card', style: {} },
+      { id: 'card-2', type: 'component', componentType: 'card', style: {}, hidden: true },
+      {
+        id: 'row',
+        type: 'frame',
+        style: { layout: 'row' },
+        children: [
+          { id: 'card-3', type: 'component', componentType: 'card', style: {} },
+          { id: 'btn-1', type: 'component', componentType: 'button', style: {} },
+          { id: 't-1', type: 'text', props: { text: 'A' }, style: {} },
+          { id: 't-2', type: 'text', props: { text: 'B' }, style: {}, hidden: true },
+        ],
+      },
+    ],
+  }
+
+  it('同类 = 同 componentType 的全部可见节点（含选中节点自身，跨层级）', () => {
+    const selected = TREE.children![0] as DesignNode
+    const ids = collectSameTypeNodes(TREE, selected).map((n) => n.id)
+    expect(ids).toEqual(['card-1', 'card-3']) // card-2 隐藏被排除；btn/text 不算同类
+  })
+
+  it('text 节点无 componentType：按 type 归类，隐藏排除', () => {
+    const selected = { id: 't-1', type: 'text', props: { text: 'A' }, style: {} } as DesignNode
+    const ids = collectSameTypeNodes(TREE, selected).map((n) => n.id)
+    expect(ids).toEqual(['t-1'])
   })
 })

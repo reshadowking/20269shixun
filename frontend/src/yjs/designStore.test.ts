@@ -494,3 +494,27 @@ describe('P1-13 convertToFreeLayout', () => {
     store.destroy()
   })
 })
+
+describe('批量美化一步撤销（T4 批3：pushSnapshot + resetDesign 语义）', () => {
+  it('批量替换整树后一次 popSnapshot 完整回退（不残留半应用）', () => {
+    const store = new DesignStore(undefined, sample())
+    const before = store.getDesign()
+    // 模拟批量应用的落库模式：单次快照 + 整树替换（WorkspacePage handleApplyEffectBatch 同款）
+    const batched = JSON.parse(JSON.stringify(before)) as DesignNode
+    const applyShadow = (n: DesignNode) => {
+      if (n.componentType === 'button') n.style = { ...n.style, shadow: '0 4px 12px rgba(29,33,41,0.10)' }
+      for (const c of n.children ?? []) applyShadow(c)
+    }
+    applyShadow(batched)
+    store.pushSnapshot()
+    store.resetDesign(batched)
+    expect(store.getDesign().children?.[0].style?.['shadow']).toBeUndefined()
+    const b1 = store.getDesign().children?.[1].children?.[0]
+    expect(b1?.style?.['shadow']).toBe('0 4px 12px rgba(29,33,41,0.10)')
+    // 一步撤销：全部回退
+    expect(store.popSnapshot()).toBe(true)
+    expect(store.getDesign()).toEqual(before)
+    expect(store.getDesign().children?.[1].children?.[0].style?.['shadow']).toBeUndefined()
+    store.destroy()
+  })
+})
