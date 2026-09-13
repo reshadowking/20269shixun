@@ -776,6 +776,11 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
                 {optionPositioning(opt)}
               </div>
               <div className="mt-0.5 line-clamp-2 text-muted-foreground">{extractPreviewTexts(opt.design)}</div>
+              {opt.degraded_kinds?.length ? (
+                <div className="mt-0.5 text-[11px] text-amber-600" data-testid={`explore-degraded-${i}`}>
+                  ⚠️ 有 {opt.degraded_kinds.length} 项能力暂不支持，已用近似组件表达。
+                </div>
+              ) : null}
               <Button
                 size="sm"
                 className="mt-1.5 h-6 w-full text-[11px]"

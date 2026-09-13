@@ -571,3 +571,60 @@ describe('T10：守卫分级（增量路径放行，缺口清单 §4.9）', () =
     expect(fetchMock.mock.calls.some((c) => String(c[0]).includes('/api/generate'))).toBe(false)
   })
 })
+
+describe('T10 批2：方案探索降级可见（缺口清单 §4.8 #16）', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    localStorage.clear()
+  })
+
+  it('方案含 degraded_kinds：方案卡显示「有 N 项能力暂不支持，已用近似组件表达」', async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      const path = String(url)
+      if (path.includes('/api/sessions')) {
+        if (path.includes('/messages')) return { ok: true, status: 200, json: async () => ({ messages: [], pruned: 0 }) }
+        return { ok: true, status: 200, json: async () => ({ session_id: 's-test', title: 't', design_id: null, created_at: null, updated_at: null, agent_state: {} }) }
+      }
+      if (path.includes('/api/generate/explore')) {
+        return {
+          ok: true, status: 200,
+          json: async () => ({
+            options: [
+              { label: '方案一 · 默认风格', design: { id: 'r1', type: 'frame', style: { layout: 'column' } }, template: 'landing', compliance: 100, violations: 0, degraded_kinds: ['icon@ic1'] },
+              { label: '方案二 · 差异化风格', design: { id: 'r2', type: 'frame', style: { layout: 'column' } }, template: 'landing', compliance: 95, violations: 1 },
+            ],
+            degraded: false,
+          }),
+        }
+      }
+      throw new Error(`unexpected fetch: ${path}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<AIChatPanel sessionKey="s-test" onGenerate={() => {}} />)
+    typeAndSend('设计一个页面')
+    fireEvent.click(await screen.findByTestId('explore-options'))
+    await waitFor(() => expect(screen.getByTestId('explore-result')).toBeInTheDocument())
+    expect(screen.getByTestId('explore-degraded-0')).toHaveTextContent(/1 项能力暂不支持，已用近似组件表达/)
+    expect(screen.queryByTestId('explore-degraded-1')).not.toBeInTheDocument()
+  })
+})
+
+describe('T10 批2：增量路径降级提示（缺口清单 §4.8 #15 补测）', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    localStorage.clear()
+  })
+
+  it('增量编辑响应带 degraded：成功消息提示「有 N 项能力暂不支持」', async () => {
+    const fetchMock = mockFetch(
+      { questions: [] },
+      { design: { ...DESIGN, style: { layout: 'column' } }, template: 'edit', compliance: 100, violations: 0, fallback: false, degraded: ['icon@ic'] },
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const onIncrementalEdit = vi.fn(async () => ({ ok: true }))
+    render(<AIChatPanel sessionKey="s-test" onGenerate={() => {}} design={DESIGN as DesignNode} onIncrementalEdit={onIncrementalEdit} />)
+    typeAndSend('把标题改成新文案')
+    await waitFor(() => expect(screen.getByText(/已应用修改 ✓/)).toBeInTheDocument())
+    expect(screen.getByText(/1 项能力暂不支持，已用近似组件表达/)).toBeInTheDocument()
+  })
+})

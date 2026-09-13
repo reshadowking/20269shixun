@@ -225,6 +225,16 @@ class TestGenerateAPI:
             ok, errors = validate_design_safe(opt["design"])
             assert ok, f"方案不合法: {errors[:3]}"
 
+    def test_explore_options_carry_degraded_kinds(self, client, auth_headers):
+        """T10 批2（缺口清单 §4.8 #16）：每个方案带 degraded_kinds（组件能力降级明细），
+        命名刻意区别于响应顶层的 degraded: bool（#17 同名不同义，不得加剧）。"""
+        resp = client.post("/api/generate/explore", json={"prompt": "设计一个电商优惠券页"}, headers=auth_headers)
+        assert resp.status_code == 200
+        body = resp.json()
+        for opt in body["options"]:
+            assert "degraded_kinds" in opt, "方案缺 degraded_kinds 字段"
+            assert isinstance(opt["degraded_kinds"], list)
+
     def test_explore_rejects_non_design_prompt(self, client, auth_headers):
         resp = client.post("/api/generate/explore", json={"prompt": "帮我写一首诗"}, headers=auth_headers)
         assert resp.status_code == 422

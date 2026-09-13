@@ -190,6 +190,8 @@ async def explore_options(req: ExploreRequest, _user: str = Depends(get_current_
                 # 缺陷 1：逐方案来源标记——降级（fallback）与演示模板稿（mock）都必须能与模型产物区分
                 "fallback": result.fallback,
                 "mock": result.mock,
+                # T10 批2（缺口清单 §4.8 #16）：组件能力降级明细随方案透传（命名避开顶层 degraded: bool）
+                "degraded_kinds": result.degraded,
             }
         )
     return {"options": options, "degraded": degraded}

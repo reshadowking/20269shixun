@@ -22,6 +22,8 @@ export interface ExploreOption {
   fallback?: boolean
   /** 是否演示模式产出（未配置模型 Key 的模板稿，须与模型产物显式区分） */
   mock?: boolean
+  /** T10 批2（§4.8 #16）：组件能力降级明细（["icon@id"]，命名避开顶层 degraded: bool） */
+  degraded_kinds?: string[]
 }
 
 export interface ExploreOptionLists {
