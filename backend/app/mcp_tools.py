@@ -35,7 +35,7 @@ def load_design_tokens() -> dict:
 
 @lru_cache(maxsize=1)
 def load_component_library() -> dict:
-    """读取 component-library.json，返回 17 个组件定义数组。"""
+    """读取 component-library.json，返回 18 个组件定义数组。"""
     with open(LIBRARY_JSON, encoding="utf-8") as f:
         return json.load(f)
 
@@ -70,7 +70,7 @@ def get_design_tokens(session_id: str | None = None) -> dict:
 
 
 def get_component_library(session_id: str | None = None) -> dict:
-    """MCP 工具：输出 17 个组件定义数组（type/name/props 定义/default_style）。"""
+    """MCP 工具：输出 18 个组件定义数组（type/name/props 定义/default_style）。"""
     return _with_session(session_id, "mcp:get_component_library", load_component_library)
 
 

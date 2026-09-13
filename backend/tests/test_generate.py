@@ -387,3 +387,49 @@ class TestIconPromptInjection:
         generate_design("设计一个登录页", LLMClient(mock_responder=spy))
         assert "可用图标" in spy.system_text
         assert "star" in spy.system_text
+
+
+class TestT9ComponentsNotDegraded:
+    """T9 验收：icon/switch/tabs 进白名单后不再被 T8 降级——degraded 为空、节点保持 component。"""
+
+    def test_three_new_components_not_degraded(self):
+        from app.services.generate import repair_design
+
+        cases = [
+            ("icon", {"name": "star"}),
+            ("switch", {"checked": True}),
+            ("tabs", {"items": [{"label": "标签一"}], "active": 0}),
+        ]
+        for ctype, props in cases:
+            degraded: list[str] = []
+            fixed = repair_design({"id": "n1", "type": "component", "componentType": ctype, "props": props}, degraded)
+            assert fixed["type"] == "component", f"{ctype} 被降级"
+            assert fixed["componentType"] == ctype
+            assert fixed["props"] == props, f"{ctype} props 被改动"
+            assert degraded == [], f"{ctype} 产生降级明细"
+
+    def test_generate_tabs_tree_end_to_end(self):
+        """端到端：模型返回含 tabs 的树 → 不整树回退、节点保持 component、degraded 为空。"""
+        import json as _json
+
+        from app.services.generate import generate_design
+        from app.services.llm import LLMClient
+
+        fill = {
+            "id": "gen-root", "type": "frame", "style": {"layout": "column"},
+            "children": [
+                {"id": "t", "type": "text", "props": {"text": "标题"}},
+                {"id": "tb", "type": "component", "componentType": "tabs",
+                 "props": {"items": [{"label": "详情"}, {"label": "评价"}], "active": 1}},
+            ],
+        }
+
+        class Responder:
+            def __call__(self, system: str, user: str) -> str:
+                return _json.dumps(fill, ensure_ascii=False) if "设计生成器" in system else ""
+
+        result = generate_design("登录页", LLMClient(mock_responder=Responder()))
+        assert result.fallback is False, result.error
+        assert result.design["children"][1]["componentType"] == "tabs"
+        assert result.design["children"][1]["props"]["active"] == 1
+        assert result.degraded == []

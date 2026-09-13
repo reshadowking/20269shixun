@@ -28,11 +28,11 @@ class TestDesignTokensTool:
 
 
 class TestComponentLibraryTool:
-    def test_returns_17_components(self):
-        """E5-2 验收 + T9：返回 17 个组件完整定义。"""
+    def test_returns_18_components(self):
+        """E5-2 验收 + T9：返回 18 个组件完整定义。"""
         library = get_component_library()
         comps = library["components"]
-        assert len(comps) == 17
+        assert len(comps) == 18
         assert all(c["type"] and c["name"] for c in comps)
         assert all("props" in c and "default_style" in c for c in comps)
 
@@ -40,7 +40,7 @@ class TestComponentLibraryTool:
         whitelist = {
             "button", "card", "input", "select", "table", "chart", "stat-block",
             "navbar", "sidebar", "avatar", "tag", "divider", "title-text", "hero", "image",
-            "icon", "switch",
+            "icon", "switch", "tabs",
         }
         types = {c["type"] for c in get_component_library()["components"]}
         assert types == whitelist

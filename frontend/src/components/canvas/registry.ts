@@ -17,6 +17,7 @@ import { CanvasSidebar, buildSidebarExport, sidebarSchema } from '@/components/c
 import { CanvasStatBlock, buildStatBlockExport, statBlockSchema } from '@/components/canvas/stat-block'
 import { CanvasSwitch, buildSwitchExport, switchSchema } from '@/components/canvas/switch'
 import { CanvasTable, buildTableExport, tableSchema } from '@/components/canvas/table'
+import { CanvasTabs, buildTabsExport, tabsSchema } from '@/components/canvas/tabs'
 import { CanvasTag, buildTagExport, tagSchema } from '@/components/canvas/tag'
 import { CanvasTitleText, buildTitleTextExport, titleTextSchema } from '@/components/canvas/title-text'
 
@@ -42,6 +43,7 @@ export const componentRegistry: Record<string, ComponentDefinition> = {
   image: { type: 'image', label: '图片', Canvas: CanvasImage, buildExport: buildImageExport, schema: imageSchema },
   icon: { type: 'icon', label: '图标', Canvas: CanvasIcon, buildExport: buildIconExport, schema: iconSchema },
   switch: { type: 'switch', label: '开关', Canvas: CanvasSwitch, buildExport: buildSwitchExport, schema: switchSchema },
+  tabs: { type: 'tabs', label: '标签页', Canvas: CanvasTabs, buildExport: buildTabsExport, schema: tabsSchema },
 }
 
 /** 组件面板列表（按注册顺序） */

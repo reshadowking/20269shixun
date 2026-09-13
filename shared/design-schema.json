@@ -20,8 +20,8 @@
     },
     "componentType": {
       "type": "string",
-      "enum": ["button", "card", "input", "select", "table", "chart", "stat-block", "navbar", "sidebar", "avatar", "tag", "divider", "title-text", "hero", "image", "icon", "switch"],
-      "description": "type=component 时的组件类型（17 个：v2.2 §5.2 的 15 个 + T9 扩充）"
+      "enum": ["button", "card", "input", "select", "table", "chart", "stat-block", "navbar", "sidebar", "avatar", "tag", "divider", "title-text", "hero", "image", "icon", "switch", "tabs"],
+      "description": "type=component 时的组件类型（18 个：v2.2 §5.2 的 15 个 + T9 扩充）"
     },
     "props": {
       "type": "object",

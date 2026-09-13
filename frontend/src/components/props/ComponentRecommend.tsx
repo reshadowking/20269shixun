@@ -24,7 +24,7 @@ export interface RecommendItem {
 const TYPE_ICONS: Record<string, string> = {
   button: '🔘', card: '🃏', input: '⌨️', select: '🔽', table: '📊', chart: '📈',
   'stat-block': '🔢', navbar: '🧭', sidebar: '📑', avatar: '👤', tag: '🏷️',
-  divider: '➖', 'title-text': '🔤', hero: '🖼️', image: '🖼️', icon: '⭐', switch: '🎚️',
+  divider: '➖', 'title-text': '🔤', hero: '🖼️', image: '🖼️', icon: '⭐', switch: '🎚️', tabs: '🗂️',
 }
 
 function typeLabel(type: string): string {

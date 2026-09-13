@@ -160,3 +160,20 @@ test('T9：switch 组件添加 → 点击切换状态进树（轨道变色）→
   await switchNode.click({ position: { x: 150, y: 11 } })
   await expect(page.getByTestId('prop-checked')).toBeVisible()
 })
+
+test('T9：tabs 组件添加 → 空态占位 → 可选中（面板 items/active 字段现形）', async ({ page }) => {
+  ROOM = 'e2e-' + Math.random().toString(36).slice(2, 10)
+  await login(page)
+  await resetDesign(page)
+
+  // 面板新增节点无 items → 渲染占位文本「标签页」（不整块空白）
+  await page.getByTestId('palette-tabs').click()
+  const tabsNode = page.locator('[data-node-id^="tabs-"]').last()
+  await expect(tabsNode).toBeVisible()
+  await expect(tabsNode.getByText('标签页')).toBeVisible()
+
+  // 选中（点节点右侧空白区；标签热区 stopPropagation）→ 属性面板出现 items/active
+  await tabsNode.click({ position: { x: 160, y: 18 } })
+  await expect(page.getByTestId('prop-items')).toBeVisible()
+  await expect(page.getByTestId('prop-active')).toBeVisible()
+})

@@ -109,11 +109,12 @@ def recommend_components(design: dict[str, Any], container_id: str) -> list[dict
             rec("stat-block", "指标块强调关键数字", {"label": "指标", "value": "0"}),
         ]
     if "image" in types and "button" in types:
-        # 商品/卡片容器：补一张卡片
+        # 商品/卡片容器：补一张卡片 + 标签页分组（T9）
         return [
             rec("card", "卡片承接图文内容，结构完整", {"title": "卡片标题", "content": "卡片描述内容"}),
             rec("title-text", "区块标题统一内容分组", {"text": "商品精选", "level": 3}),
             rec("button", "次级按钮补充行动点", {"text": "查看详情"}),
+            rec("tabs", "标签页分组详情/列表内容", {"items": [{"label": "详情"}, {"label": "评价"}], "active": 0}),
         ]
     # 兜底：通用内容增强
     return [

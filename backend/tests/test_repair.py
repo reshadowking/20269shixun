@@ -38,8 +38,8 @@ class TestRepairDesign:
 
     def test_unknown_bare_type_degraded_to_frame(self):
         """T8（spec 变更，取代旧 test_unknown_type_stays_unchanged）：裸未知 type 降级 frame——
-        坏节点不再拖垮整棵树；保留 id，降级后过 Schema。"""
-        fixed = repair_design({"id": "x", "type": "tabs"})
+        坏节点不再拖垮整棵树；保留 id，降级后过 Schema。（T9 起示例用 pagination：tabs 已合法）"""
+        fixed = repair_design({"id": "x", "type": "pagination"})
         assert fixed["type"] == "frame"
         assert fixed["id"] == "x"
         validate_design(fixed)

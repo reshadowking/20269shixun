@@ -42,7 +42,8 @@ const FIXTURES: ComponentFixture[] = [
   { componentType: 'hero', props: { title: '主视觉标题', subtitle: '副标题文案', cta: { text: '立即开始' } }, text: '主视觉标题', htmlTag: 'section' },
   { componentType: 'image', props: { src: 'https://cdn.example.com/a.png', alt: '示例图' }, text: '示例图', htmlTag: 'img' },
   { componentType: 'icon', props: { name: 'star', color: 'primary', size: 'default' }, text: '', htmlTag: 'span' },
-  { componentType: 'switch', props: { label: '接收通知', checked: true }, text: '接收通知' },
+  { componentType: 'switch', props: { label: '接收通知', checked: true }, text: '接收通知', htmlTag: 'div' },
+  { componentType: 'tabs', props: { items: [{ label: '标签一' }, { label: '标签二' }], active: 1 }, text: '标签一', htmlTag: 'div' },
 ]
 
 /** 每个组件挂在一个带样式的 frame 下（同时覆盖 frame 样式键 parity） */
@@ -491,5 +492,33 @@ describe('T9 switch parity（双形态导出 §5.12：只测一种等于没测�
     expect(html).toContain('left: 2px')
     expect(react, '未选中态不得出现 primary 底').not.toContain(`"background":"${resolveColor('primary')}"`)
     expect(html, '未选中态不得出现 primary 底').not.toContain(`background: ${resolveColor('primary')}`)
+  })
+})
+
+describe('T9 tabs parity（active 双形态导出 §5.12；复用 items/active 零新增字段）', () => {
+  const TABS_PROPS = { items: [{ label: '标签一' }, { label: '标签二' }] }
+
+  it('active:1：第 2 项主色 + 2px 主色下划线，第 1 项 text-light（双通道）', () => {
+    const react = designToReactApp(plainTree('tabs', { ...TABS_PROPS, active: 1 }), false)
+    const html = designToHtml(plainTree('tabs', { ...TABS_PROPS, active: 1 }))
+    const PRIMARY = resolveColor('primary')
+    const LIGHT = resolveColor('text-light')
+    expect(react).toContain(`"color":"${PRIMARY}"`)
+    expect(react).toContain(`"borderBottom":"2px solid ${PRIMARY}"`)
+    expect(react).toContain(`"color":"${LIGHT}"`)
+    expect(html).toContain(`color: ${PRIMARY}`)
+    expect(html).toContain(`border-bottom: 2px solid ${PRIMARY}`)
+    expect(html).toContain(`color: ${LIGHT}`)
+  })
+
+  it('active:0：第 1 项主色/下划线；反断言：未选中项不得带主色下划线（transparent 占位）', () => {
+    const react = designToReactApp(plainTree('tabs', { ...TABS_PROPS, active: 0 }), false)
+    const html = designToHtml(plainTree('tabs', { ...TABS_PROPS, active: 0 }))
+    const PRIMARY = resolveColor('primary')
+    expect(react).toContain(`"borderBottom":"2px solid ${PRIMARY}"`)
+    expect(html).toContain(`border-bottom: 2px solid ${PRIMARY}`)
+    // 反断言：transparent 下划线恰好 1 处（另一项），且不出现第二个主色下划线
+    expect(react.match(new RegExp(`"borderBottom":"2px solid ${PRIMARY}"`, 'g'))).toHaveLength(1)
+    expect(html.match(new RegExp(`border-bottom: 2px solid ${PRIMARY}`, 'g'))).toHaveLength(1)
   })
 })

@@ -133,6 +133,21 @@ class TestRecommender:
         recs = recommend_components(design, "f")
         assert any(r["component_type"] == "switch" for r in recs)
 
+    def test_product_container_recommends_tabs(self):
+        """T9：详情/商品容器追加 tabs 推荐（详情/评价分组）。"""
+        design = {
+            "id": "root", "type": "frame",
+            "children": [
+                {"id": "p", "type": "frame",
+                 "children": [
+                     {"id": "img", "type": "component", "componentType": "image", "props": {}},
+                     {"id": "btn", "type": "component", "componentType": "button", "props": {"text": "购买"}},
+                 ]},
+            ],
+        }
+        recs = recommend_components(design, "p")
+        assert any(r["component_type"] == "tabs" for r in recs)
+
     def test_stat_container_recommends_chart(self):
         design = {
             "id": "root", "type": "frame",

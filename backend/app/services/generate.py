@@ -40,8 +40,8 @@ INTENT_SYSTEM = """你是设计意图解析器。把用户的自然语言设计�
 登录/注册 → login；个人/主页/中心 → profile；其余 → landing。"""
 
 FILL_SYSTEM = """你是 AI 设计生成器。基于给定的模板骨架 JSON 与设计令牌，输出一张完整可渲染的 DesignNode 树。
-组件白名单（只能使用这 17 种 componentType，禁止新增其他类型）：
-button, card, input, select, table, chart, stat-block, navbar, sidebar, avatar, tag, divider, title-text, hero, image, icon, switch
+组件白名单（只能使用这 18 种 componentType，禁止新增其他类型）：
+button, card, input, select, table, chart, stat-block, navbar, sidebar, avatar, tag, divider, title-text, hero, image, icon, switch, tabs
 硬约束：
 1. 保持模板的节点结构与布局（layout/组件类型），只填充和优化 props 与 style；不要发明新组件类型。
 2. 颜色：用户明确指定的品牌色 hex 必须原样使用（如 #FF6B35）；未指定时使用令牌名（primary/secondary/danger/success/background/text-primary/text-secondary/text-light/border）。
@@ -63,18 +63,18 @@ button, card, input, select, table, chart, stat-block, navbar, sidebar, avatar, 
 11. 输出体积（严格遵守）：使用紧凑 JSON——嵌套层级之间允许必要换行，但不要为空行、
     不要大段缩进（如每行 16 空格）、不要重复冗余字段；输出越长越容易在尾部出错。
     目标是整棵树的输出 token 越少越好。
-12. 需求里出现标签页、分页、弹窗等组件白名单外的元素：禁止自创 componentType
-    （如 tabs/pagination/dialog，会导致整稿被拒）；用最接近的合法组件表达——
-    标签页/分页→一排 button、弹窗→frame + 按钮。"""
+12. 需求里出现分页、弹窗等组件白名单外的元素：禁止自创 componentType
+    （如 pagination/dialog，会导致整稿被拒）；用最接近的合法组件表达——
+    分页→一排 button、弹窗→frame + 按钮。"""
 
 # 用户指定色提取：prompt 中的 hex（品牌色不被合规检查器拉回，v2.2 §4.5）
 HEX_RE = re.compile(r"#[0-9a-fA-F]{3,8}\b")
 
-# 17 种组件类型（与 FILL_SYSTEM/FREE_SYSTEM 白名单一致）
+# 18 种组件类型（与 FILL_SYSTEM/FREE_SYSTEM 白名单一致）
 COMPONENT_TYPE_NAMES = {
     "button", "card", "input", "select", "table", "chart", "stat-block",
     "navbar", "sidebar", "avatar", "tag", "divider", "title-text", "hero", "image",
-    "icon", "switch",
+    "icon", "switch", "tabs",
 }
 
 # ---- T9：图标库单一来源（shared/icon-library.json，照 beautify-effects.json 的加载方式）----
@@ -335,8 +335,8 @@ def repair_design(node: dict, degraded: list[str] | None = None) -> dict:
 FREE_TRIGGER_KEYWORDS = ("自由生成", "不用模板", "不要模板", "自由发挥", "随意发挥")
 
 FREE_SYSTEM = """你是 AI 设计生成器。直接根据用户需求生成一张完整可渲染的 DesignNode 树（不使用任何预置模板）。
-组件白名单（只能使用这 17 种 componentType，禁止新增其他类型）：
-button, card, input, select, table, chart, stat-block, navbar, sidebar, avatar, tag, divider, title-text, hero, image, icon, switch
+组件白名单（只能使用这 18 种 componentType，禁止新增其他类型）：
+button, card, input, select, table, chart, stat-block, navbar, sidebar, avatar, tag, divider, title-text, hero, image, icon, switch, tabs
 硬约束：
 1. 页面结构合理：用 frame 组织层级（layout 用 row/column/grid；需要自由摆放时用 free + x/y 坐标），
    典型结构：顶部导航 → 内容区 → 行动点；不要只输出一个扁平容器。
@@ -351,9 +351,9 @@ button, card, input, select, table, chart, stat-block, navbar, sidebar, avatar, 
    禁止把组件名直接写在 type 字段（例如 {"type":"divider"} 或 {"type":"button"} 都是错的）。
 9. 输出体积（严格遵守）：使用紧凑 JSON——嵌套层级之间允许必要换行，不要空行、不要大段缩进；
    输出越长越容易在尾部出错，整棵树输出 token 越少越好。
-10. 需求里出现标签页、分页、弹窗等组件白名单外的元素：禁止自创 componentType
-    （如 tabs/pagination/dialog，会导致整稿被拒）；用最接近的合法组件表达——
-    标签页/分页→一排 button、弹窗→frame + 按钮。"""
+10. 需求里出现分页、弹窗等组件白名单外的元素：禁止自创 componentType
+    （如 pagination/dialog，会导致整稿被拒）；用最接近的合法组件表达——
+    分页→一排 button、弹窗→frame + 按钮。"""
 
 
 def extract_user_colors(prompt: str) -> list[str]:

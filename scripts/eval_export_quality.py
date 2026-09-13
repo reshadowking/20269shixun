@@ -42,6 +42,7 @@ COMPONENT_TAG = {
     "image": "img",
     "icon": "span",  # T9：icon 导出为 span > svg > path（与 tag 同为 span，按出现次数计数）
     "switch": "div",  # T9：开关导出为 div > span(轨道) > span(滑块) + label
+    "tabs": "div",  # T9：标签页导出为 div[role=tablist] > button(每项)
 }
 
 TAG_RE = re.compile(r"<(/?)([a-zA-Z][a-zA-Z0-9-]*)[^>]*>")
