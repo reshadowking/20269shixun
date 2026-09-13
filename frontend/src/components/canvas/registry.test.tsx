@@ -2,12 +2,48 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
 import { render, screen } from '@testing-library/react'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import { componentPalette, componentRegistry } from '@/components/canvas/registry'
 import { COMPONENT_TYPES } from '@/design/types'
 import { resolveColor } from '@/design/styleToCss'
 import { VARIANT_CLASS, buttonSchema } from '@/components/canvas/button'
+import { CanvasChart } from '@/components/canvas/chart'
+
+/** T5 批A #3：jsdom 渲染不出 ResponsiveContainer 内容（0 SVG，实测），改用
+ * mock Recharts 捕获渲染 props——断言的就是画布真实传给 Recharts 的渲染契约。 */
+const { captured } = vi.hoisted(() => ({
+  captured: {
+    XAxis: [] as Array<Record<string, unknown>>,
+    YAxis: [] as Array<Record<string, unknown>>,
+    CartesianGrid: [] as Array<Record<string, unknown>>,
+  },
+}))
+vi.mock('recharts', async (importOriginal) => {
+  const mod = await importOriginal<typeof import('recharts')>()
+  const capture = (name: 'XAxis' | 'YAxis' | 'CartesianGrid') => (props: Record<string, unknown>) => {
+    captured[name].push(props)
+    return null
+  }
+  // 图表容器透传（真实 BarChart 在无宽高时渲染为空、轴子元素不渲染），声明的轴 props 直达捕获器
+  const passthrough = ({ children }: { children: React.ReactNode }) => children as React.ReactElement
+  return {
+    ...mod,
+    ResponsiveContainer: passthrough,
+    BarChart: passthrough,
+    LineChart: passthrough,
+    PieChart: passthrough,
+    XAxis: capture('XAxis'),
+    YAxis: capture('YAxis'),
+    CartesianGrid: capture('CartesianGrid'),
+  }
+})
+
+/** 令牌 hex → jsdom 内联样式表示（rgb(...)） */
+function rgb(hex: string): string {
+  const n = parseInt(hex.slice(1), 16)
+  return `rgb(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255})`
+}
 
 /** B0 契约：前端组件事实源 vs shared/component-library.json（单一来源护栏）。
  * vitest cwd 为 frontend/，shared 在其上一级。 */
@@ -106,5 +142,56 @@ describe('B0 组件事实源契约', () => {
   it('渲染层 VARIANT_CLASS 与组件库 enum 一致（P14 决策卡：已删 link，四方收敛到 6）', () => {
     const libVariant = LIB_BUTTON.props.variant.enum as string[]
     expect(Object.keys(VARIANT_CLASS).sort()).toEqual([...libVariant].sort())
+  })
+})
+
+/** T5 批A：§4.5 残项画布侧内联色（jsdom 读不到 Tailwind 类——这正是这些破洞当年无测试的结构性原因） */
+describe('T5 批A 画布内联色收敛', () => {
+  it('#6 input label 内联 text-primary（口径：以画布为准）', () => {
+    const def = componentRegistry.input
+    render(<def.Canvas props={{ label: '邮箱', placeholder: '请输入邮箱' }} />)
+    expect(screen.getByText('邮箱').style.color).toBe(rgb(resolveColor('text-primary')!))
+  })
+
+  it('#7 stat-block label 内联 text-light（原 text-muted-foreground 类 → 内联令牌）', () => {
+    const def = componentRegistry['stat-block']
+    render(<def.Canvas props={{ label: '本月营收', value: '¥1.2万' }} />)
+    expect(screen.getByText('本月营收').style.color).toBe(rgb(resolveColor('text-light')!))
+  })
+
+  it('#8 navbar 链接内联 text-light（hover 仍是交互态，导出不实现）', () => {
+    const def = componentRegistry.navbar
+    render(<def.Canvas props={{ title: '优选商城', links: [{ label: '首页', href: '#' }] }} />)
+    expect(screen.getByText('首页').style.color).toBe(rgb(resolveColor('text-light')!))
+  })
+
+  it('#9 table 表头文字内联 text-light、行边框内联 border 令牌（末行保留无线语义）', () => {
+    const def = componentRegistry.table
+    render(<def.Canvas props={{ columns: [{ key: 'a', title: '列A' }], rows: [{ a: '第一行' }, { a: '单元格值' }] }} />)
+    const th = screen.getByText('列A')
+    expect(th.style.color).toBe(rgb(resolveColor('text-light')!))
+    expect(th.closest('tr')?.style.background).toBe('rgba(245, 245, 245, 0.5)')
+    const tr = th.closest('tr')
+    // jsdom 读取 borderBottom 时把色值规范化为 rgb(...) 形式
+    expect(tr?.style.borderBottom).toBe(`1px solid ${rgb(resolveColor('border')!)}`)
+    const firstBodyRow = screen.getByText('第一行').closest('tr')
+    expect(firstBodyRow?.style.borderBottom).toBe(`1px solid ${rgb(resolveColor('border')!)}`)
+    // 末行无线：与原 last:border-0 语义一致
+    const lastRow = screen.getByText('单元格值').closest('tr')
+    expect(lastRow?.style.borderBottom).toBe('')
+  })
+
+  it('#3 chart tick fill = text-light、grid stroke = border（经渲染 props 捕获）', () => {
+    render(
+      <CanvasChart
+        props={{ chartType: 'bar', title: '月度趋势', data: [{ day: '一月', value: 30 }], xKey: 'day', yKey: 'value' }}
+      />,
+    )
+    const xAxis = captured.XAxis.at(-1) as { tick?: { fill?: string } } | undefined
+    const yAxis = captured.YAxis.at(-1) as { tick?: { fill?: string } } | undefined
+    const grid = captured.CartesianGrid.at(-1) as { stroke?: string } | undefined
+    expect(xAxis?.tick?.fill, 'XAxis tick fill 应为 text-light').toBe(resolveColor('text-light'))
+    expect(yAxis?.tick?.fill, 'YAxis tick fill 应为 text-light').toBe(resolveColor('text-light'))
+    expect(grid?.stroke, '网格线应为 border 令牌').toBe(resolveColor('border'))
   })
 })

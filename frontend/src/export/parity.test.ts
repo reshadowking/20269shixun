@@ -148,8 +148,7 @@ describe('T5-0 #2 导出缺部件：chart 多系列色', () => {
   })
 })
 
-describe('B0-2 导出语义 parity（React/HTML 双通道）', () => {
-  it('15 组件：React 输出 data-component 标记，双通道保留关键文本与语义标签', () => {
+describe('B0-2 导出语义 parity（React/HTML 双通道）', () => {  it('15 组件：React 输出 data-component 标记，双通道保留关键文本与语义标签', () => {
     for (const f of FIXTURES) {
       const react = designToReactApp(treeOf(f), false)
       const html = designToHtml(treeOf(f))
@@ -205,5 +204,84 @@ describe('B0-2 导出语义 parity（React/HTML 双通道）', () => {
       expect(react, `↑↓ ${trend}: React 混入了对侧颜色`).not.toContain(`"color":"${other}"`)
       expect(html, `↑↓ ${trend}: HTML 混入了对侧颜色`).not.toContain(`color: ${other}`)
     }
+  })
+})
+
+/** 令牌 hex → rgb 通道（rgba 拼装用，与 styleTokens 的派生方式一致） */
+function rgbaChannels(hex: string): string {
+  const n = parseInt(hex.slice(1), 16)
+  return `${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}`
+}
+
+describe('T5 批A #6 input 标签色（口径：以画布为准 → text-primary）', () => {
+  const INPUT_PROPS = { label: '邮箱', placeholder: '请输入邮箱' }
+
+  it('label 色双通道 = text-primary 令牌', () => {
+    const react = designToReactApp(plainTree('input', INPUT_PROPS), false)
+    const html = designToHtml(plainTree('input', INPUT_PROPS))
+    const PRIMARY = resolveColor('text-primary')!
+    expect(react, 'React label 应为主文本色').toContain(`"color":"${PRIMARY}"`)
+    expect(html, 'HTML label 应为主文本色').toContain(`color: ${PRIMARY}`)
+  })
+
+  it('防回退：旧导出次级灰 #4E5969 不得作为 label 色回归', () => {
+    const react = designToReactApp(plainTree('input', INPUT_PROPS), false)
+    const html = designToHtml(plainTree('input', INPUT_PROPS))
+    expect(react, 'React 旧 label 色 #4E5969 不得回归').not.toContain('#4E5969')
+    expect(html, 'HTML 旧 label 色 #4E5969 不得回归').not.toContain('#4E5969')
+  })
+})
+
+describe('T5 批A #8 navbar 链接色（导出补 text-light；hover 为交互态不导出）', () => {
+  const NAV_PROPS = { title: '优选商城', links: [{ label: '首页', href: '#' }] }
+
+  it('链接色双通道 = text-light 令牌（此前导出无 color 继承黑）', () => {
+    const react = designToReactApp(plainTree('navbar', NAV_PROPS), false)
+    const html = designToHtml(plainTree('navbar', NAV_PROPS))
+    const LIGHT = resolveColor('text-light')!
+    expect(react, 'React 链接应有 text-light 色').toContain(`"color":"${LIGHT}"`)
+    expect(html, 'HTML 链接应有 text-light 色').toContain(`color: ${LIGHT}`)
+  })
+})
+
+describe('T5 批A #9 table（border 令牌 + 表头底色/表头文字收敛）', () => {
+  const TABLE_PROPS = { columns: [{ key: 'a', title: '列A' }], rows: [{ a: '单元格值' }] }
+
+  it('单元格边框双通道 = border 令牌（值与旧硬编码相等，来源收敛）', () => {
+    const react = designToReactApp(plainTree('table', TABLE_PROPS), false)
+    const html = designToHtml(plainTree('table', TABLE_PROPS))
+    const BORDER = `1px solid ${resolveColor('border')!}`
+    expect(react, 'React 单元格边框应为 border 令牌').toContain(`"border":"${BORDER}"`)
+    expect(html, 'HTML 单元格边框应为 border 令牌').toContain(`border: ${BORDER}`)
+  })
+
+  it('表头底色（background 令牌 50% 透明）与表头文字（text-light）双通道——此前导出整体缺失', () => {
+    const react = designToReactApp(plainTree('table', TABLE_PROPS), false)
+    const html = designToHtml(plainTree('table', TABLE_PROPS))
+    const HEAD_BG = `rgba(${rgbaChannels(resolveColor('background')!)}, 0.5)`
+    const LIGHT = resolveColor('text-light')!
+    expect(react, 'React 表头应有底色').toContain(`"background":"${HEAD_BG}"`)
+    expect(html, 'HTML 表头应有底色').toContain(`background: ${HEAD_BG}`)
+    expect(react, 'React 表头文字应为 text-light').toContain(`"color":"${LIGHT}"`)
+    expect(html, 'HTML 表头文字应为 text-light').toContain(`color: ${LIGHT}`)
+  })
+})
+
+describe('T5 批A #3/#7 值等来源分叉项（导出侧与令牌同值的 green-lock）', () => {
+  it('#3 chart 导出轴标签 = text-light（画布 tick 同步收敛由 registry 断言）', () => {
+    const CHART_PROPS = { chartType: 'bar', title: '月度趋势', data: [{ day: '一月', value: 30 }], xKey: 'day', yKey: 'value' }
+    const react = designToReactApp(plainTree('chart', CHART_PROPS), false)
+    const html = designToHtml(plainTree('chart', CHART_PROPS))
+    const LIGHT = resolveColor('text-light')!
+    expect(react, 'React 轴标签应为 text-light').toContain(`"color":"${LIGHT}"`)
+    expect(html, 'HTML 轴标签应为 text-light').toContain(`color: ${LIGHT}`)
+  })
+
+  it('#7 stat-block 导出 label = text-light', () => {
+    const react = designToReactApp(plainTree('stat-block', { label: '本月营收', value: '¥1.2万' }), false)
+    const html = designToHtml(plainTree('stat-block', { label: '本月营收', value: '¥1.2万' }))
+    const LIGHT = resolveColor('text-light')!
+    expect(react, 'React stat label 应为 text-light').toContain(`"color":"${LIGHT}"`)
+    expect(html, 'HTML stat label 应为 text-light').toContain(`color: ${LIGHT}`)
   })
 })

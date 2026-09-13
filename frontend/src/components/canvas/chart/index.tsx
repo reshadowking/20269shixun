@@ -3,6 +3,7 @@ import { Bar, BarChart, CartesianGrid, Cell, Line, LineChart, Pie, PieChart, Res
 import type { ExportElement } from '@/components/canvas/types'
 import { escapeHtml } from '@/design/escape'
 import { resolveColor, styleToCss } from '@/design/styleToCss'
+import { CHART_AXIS_COLOR, CHART_GRID_COLOR } from '@/components/canvas/styleTokens'
 import type { DesignNode } from '@/design/types'
 
 /**
@@ -35,9 +36,9 @@ export function CanvasChart({ props, style }: { props: Record<string, unknown>; 
       <ResponsiveContainer width="100%" height={180}>
         {chartType === 'line' ? (
           <LineChart data={data}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#E5E8EF" />
-            <XAxis dataKey={xKey} tick={{ fontSize: 11 }} />
-            <YAxis tick={{ fontSize: 11 }} />
+            <CartesianGrid strokeDasharray="3 3" stroke={CHART_GRID_COLOR} />
+            <XAxis dataKey={xKey} tick={{ fontSize: 11, fill: CHART_AXIS_COLOR }} />
+            <YAxis tick={{ fontSize: 11, fill: CHART_AXIS_COLOR }} />
             <Tooltip />
             <Line type="monotone" dataKey={yKey} stroke={CHART_COLORS[0]} strokeWidth={2} />
           </LineChart>
@@ -52,9 +53,9 @@ export function CanvasChart({ props, style }: { props: Record<string, unknown>; 
           </PieChart>
         ) : (
           <BarChart data={data}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#E5E8EF" />
-            <XAxis dataKey={xKey} tick={{ fontSize: 11 }} />
-            <YAxis tick={{ fontSize: 11 }} />
+            <CartesianGrid strokeDasharray="3 3" stroke={CHART_GRID_COLOR} />
+            <XAxis dataKey={xKey} tick={{ fontSize: 11, fill: CHART_AXIS_COLOR }} />
+            <YAxis tick={{ fontSize: 11, fill: CHART_AXIS_COLOR }} />
             <Tooltip />
             <Bar dataKey={yKey} fill={CHART_COLORS[0]} radius={[4, 4, 0, 0]} />
           </BarChart>
@@ -152,7 +153,7 @@ export const buildChartExport = (node: DesignNode): ExportElement => {
     children: data.map((d) => ({
       tag: 'span',
       attrs: {},
-      style: { flex: 1, textAlign: 'center', fontSize: 11, color: '#86909C' },
+      style: { flex: 1, textAlign: 'center', fontSize: 11, color: CHART_AXIS_COLOR },
       text: String(d[xKey] ?? ''),
     })),
   })

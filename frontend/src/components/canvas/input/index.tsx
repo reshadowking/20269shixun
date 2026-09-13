@@ -1,6 +1,7 @@
 import type { ExportElement } from '@/components/canvas/types'
 import { escapeHtml } from '@/design/escape'
 import { styleToCss } from '@/design/styleToCss'
+import { INPUT_LABEL_COLOR } from '@/components/canvas/styleTokens'
 import type { DesignNode } from '@/design/types'
 
 /** ① 画布渲染：输入框（样式参考 shadcn/ui Input） */
@@ -10,7 +11,7 @@ export function CanvasInput({ props, style }: { props: Record<string, unknown>; 
   const type = typeof props.type_ === 'string' ? props.type_ : 'text'
   return (
     <div className="flex flex-col gap-1.5" style={style as object}>
-      {label && <label className="text-sm font-medium">{label}</label>}
+      {label && <label className="text-sm font-medium" style={{ color: INPUT_LABEL_COLOR }}>{label}</label>}
       <input
         type={type}
         placeholder={placeholder}
@@ -58,7 +59,7 @@ export const buildInputExport = (node: DesignNode): ExportElement => {
     children.push({
       tag: 'label',
       attrs: {},
-      style: { display: 'block', fontSize: 13, color: '#4E5969', marginBottom: 6 },
+      style: { display: 'block', fontSize: 13, color: INPUT_LABEL_COLOR, marginBottom: 6 },
       text: props.label,
     })
   }

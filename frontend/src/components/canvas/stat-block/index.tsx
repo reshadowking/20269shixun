@@ -1,6 +1,7 @@
 import type { ExportElement } from '@/components/canvas/types'
 import { escapeHtml } from '@/design/escape'
 import { resolveColor, styleToCss } from '@/design/styleToCss'
+import { STAT_LABEL_COLOR } from '@/components/canvas/styleTokens'
 import type { DesignNode } from '@/design/types'
 
 /**
@@ -19,7 +20,7 @@ export function CanvasStatBlock({ props, style }: { props: Record<string, unknow
   const trend = typeof props.trend === 'string' ? props.trend : ''
   return (
     <div className="rounded-lg border bg-card p-4 shadow-sm" style={style as object}>
-      <div className="text-sm text-muted-foreground">{label}</div>
+      <div className="text-sm" style={{ color: STAT_LABEL_COLOR }}>{label}</div>
       <div className="mt-1 text-2xl font-bold">{value}</div>
       {trend && (
         <div className="mt-1 text-xs" style={{ color: trendColor(trend) }}>{trend}</div>
@@ -62,7 +63,7 @@ export const buildStatBlockExport = (node: DesignNode): ExportElement => {
     {
       tag: 'div',
       attrs: {},
-      style: { fontSize: 13, color: '#86909C' },
+      style: { fontSize: 13, color: STAT_LABEL_COLOR },
       text: typeof props.label === 'string' ? props.label : '',
     },
     {

@@ -3,6 +3,11 @@ import type { CSSProperties } from 'react'
 import type { ExportElement } from '@/components/canvas/types'
 import { escapeHtml } from '@/design/escape'
 import { styleToCss } from '@/design/styleToCss'
+import {
+  TABLE_CELL_BORDER,
+  TABLE_HEAD_BACKGROUND,
+  TABLE_HEAD_TEXT_COLOR,
+} from '@/components/canvas/styleTokens'
 import type { DesignNode } from '@/design/types'
 
 interface TableColumn { key?: string; title?: string }
@@ -16,9 +21,9 @@ export function CanvasTable({ props, style }: { props: Record<string, unknown>; 
     <div className="w-full rounded-lg border bg-card" style={style as object}>
       <table className="w-full text-sm">
         <thead>
-          <tr className="border-b bg-muted/50">
+          <tr className="border-b" style={{ borderBottom: TABLE_CELL_BORDER, background: TABLE_HEAD_BACKGROUND }}>
             {columns.map((col, i) => (
-              <th key={i} className="px-4 py-3 text-left font-medium text-muted-foreground">
+              <th key={i} className="px-4 py-3 text-left font-medium" style={{ color: TABLE_HEAD_TEXT_COLOR }}>
                 {escapeHtml(col.title ?? col.key ?? '')}
               </th>
             ))}
@@ -26,7 +31,7 @@ export function CanvasTable({ props, style }: { props: Record<string, unknown>; 
         </thead>
         <tbody>
           {rows.map((row, i) => (
-            <tr key={i} className="border-b last:border-0">
+            <tr key={i} className="last:border-0" style={{ borderBottom: i < rows.length - 1 ? TABLE_CELL_BORDER : undefined }}>
               {columns.map((col, j) => {
                 const key = col.key ?? ''
                 const value = key ? row[key] : ''
@@ -80,7 +85,7 @@ export const buildTableExport = (node: DesignNode): ExportElement => {
   const props = node.props ?? {}
   const columns = Array.isArray(props.columns) ? (props.columns as TableColumn[]) : []
   const rows = Array.isArray(props.rows) ? (props.rows as TableRow[]) : []
-  const cellStyle: CSSProperties = { border: '1px solid #E5E8EF', padding: 8 }
+  const cellStyle: CSSProperties = { border: TABLE_CELL_BORDER, padding: 8 }
   const headRow: ExportElement = {
     tag: 'tr',
     attrs: {},
@@ -88,7 +93,7 @@ export const buildTableExport = (node: DesignNode): ExportElement => {
     children: columns.map((c) => ({
       tag: 'th',
       attrs: {},
-      style: cellStyle,
+      style: { ...cellStyle, background: TABLE_HEAD_BACKGROUND, color: TABLE_HEAD_TEXT_COLOR },
       text: typeof c.title === 'string' ? c.title : '',
     })),
   }

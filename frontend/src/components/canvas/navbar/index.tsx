@@ -1,6 +1,7 @@
 import type { ExportElement } from '@/components/canvas/types'
 import { escapeHtml, safeHref } from '@/design/escape'
 import { styleToCss } from '@/design/styleToCss'
+import { NAV_LINK_COLOR } from '@/components/canvas/styleTokens'
 import type { DesignNode } from '@/design/types'
 
 interface NavLink { label?: string; href?: string }
@@ -14,7 +15,7 @@ export function CanvasNavbar({ props, style }: { props: Record<string, unknown>;
       <div className="text-lg font-semibold">{title}</div>
       <div className="flex items-center gap-6">
         {links.map((link, i) => (
-          <a key={i} href={safeHref(link.href)} className="text-sm text-muted-foreground hover:text-foreground">
+          <a key={i} href={safeHref(link.href)} className="text-sm hover:text-foreground" style={{ color: NAV_LINK_COLOR }}>
             {escapeHtml(link.label ?? '链接')}
           </a>
         ))}
@@ -58,10 +59,12 @@ export const buildNavbarExport = (node: DesignNode): ExportElement => {
     style: styleToCss(node.style),
     children: [
       { tag: 'strong', attrs: {}, style: {}, text: typeof props.title === 'string' ? props.title : '' },
+      // 链接色 = NAV_LINK_COLOR（text-light，与画布同源）。hover:text-foreground 是交互态，
+      // 静态导出产物不实现 hover——有意为之，非遗漏（任务卡 §4.1 口径 8）。
       ...links.map((l) => ({
         tag: 'a' as const,
         attrs: { href: safeHref(l.href) },
-        style: { marginLeft: 12 },
+        style: { marginLeft: 12, color: NAV_LINK_COLOR },
         text: typeof l.label === 'string' ? l.label : '',
       })),
     ],
