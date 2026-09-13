@@ -31,6 +31,20 @@ def test_component_sources_agree():
     assert SCHEMA_COMPONENTS == LIB_COMPONENTS
 
 
+def test_explore_response_documented_in_openapi():
+    """缺口清单 §4.10 #19：/api/generate/explore 必须有 response_model——
+    此前 200 响应 schema 为空 {}，degraded_kinds 在机器可读契约里不可见。"""
+    from app.main import app
+
+    spec = app.openapi()
+    gen = spec["paths"]["/api/generate/explore"]["post"]
+    resp = gen["responses"]["200"]["content"]["application/json"]["schema"]
+    assert resp.get("$ref") == "#/components/schemas/ExploreResponse", f"explore 200 响应未文档化: {resp}"
+    option = spec["components"]["schemas"]["ExploreResponse"]["properties"]["options"]["items"]
+    assert option.get("$ref") == "#/components/schemas/ExploreOptionModel"
+    assert "degraded_kinds" in spec["components"]["schemas"]["ExploreOptionModel"]["properties"]
+
+
 def test_generate_node_keys_match_schema():
     """T8 收尾（缺口清单 §4.8）：repair_design 的键裁剪白名单必须与 Schema 节点键集合逐一相等——
     白名单缺键会裁掉合法字段（静默丢数据），多键则裁剪失效（Additional properties 报错复发）。"""

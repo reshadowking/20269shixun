@@ -152,7 +152,26 @@ class ExploreRequest(BaseModel):
     design_system: str = Field(default="brand-design-token-23v1", max_length=100)
 
 
-@router.post("/api/generate/explore")
+class ExploreOptionModel(BaseModel):
+    """单个探索方案（T10/§4.10 #19：此前 explore 响应无 schema，机器可读契约盲区）。"""
+
+    label: str
+    design: dict
+    template: str
+    compliance: float
+    violations: int
+    fallback: bool
+    mock: bool
+    # T10 批2（缺口清单 §4.8 #16）：组件能力降级明细（命名避开顶层 degraded: bool）
+    degraded_kinds: list[str] = []
+
+
+class ExploreResponse(BaseModel):
+    options: list[ExploreOptionModel]
+    degraded: bool
+
+
+@router.post("/api/generate/explore", response_model=ExploreResponse)
 async def explore_options(req: ExploreRequest, _user: str = Depends(get_current_user)):
     """D3 最小版：并行生成 2 份不同风格方案（复用 /api/generate 单段生成链路，不构成两段式）。
 
