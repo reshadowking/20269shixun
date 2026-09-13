@@ -507,3 +507,31 @@ describe('T4 批2：增量编辑请求携带 locked（仅提示词措辞，非�
     expect(body.locked).toBe(false)
   })
 })
+
+describe('T8 收尾：degraded 降级提示（缺口清单 §4.8）', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    localStorage.clear()
+  })
+
+  it('生成结果带 degraded：聊天消息提示「有 N 项能力暂不支持，已用近似组件表达」', async () => {
+    const fetchMock = mockFetch(
+      { questions: [] },
+      { design: DESIGN, template: 'login', compliance: 100, violations: 0, fallback: false, degraded: ['icon@ic', 'tabs@t2'] },
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    render(<AIChatPanel sessionKey="s-test" onGenerate={() => {}} />)
+    typeAndSend('设计一个页面')
+    await waitFor(() => expect(screen.getByText(/已生成设计稿/)).toBeInTheDocument())
+    expect(screen.getByText(/2 项能力暂不支持，已用近似组件表达/)).toBeInTheDocument()
+  })
+
+  it('无 degraded：不出现该提示（不加空话）', async () => {
+    const fetchMock = mockFetch({ questions: [] })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<AIChatPanel sessionKey="s-test" onGenerate={() => {}} />)
+    typeAndSend('设计一个页面')
+    await waitFor(() => expect(screen.getByText(/已生成设计稿/)).toBeInTheDocument())
+    expect(screen.queryByText(/项能力暂不支持/)).not.toBeInTheDocument()
+  })
+})

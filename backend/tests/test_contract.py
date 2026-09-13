@@ -31,6 +31,14 @@ def test_component_sources_agree():
     assert SCHEMA_COMPONENTS == LIB_COMPONENTS
 
 
+def test_generate_node_keys_match_schema():
+    """T8 收尾（缺口清单 §4.8）：repair_design 的键裁剪白名单必须与 Schema 节点键集合逐一相等——
+    白名单缺键会裁掉合法字段（静默丢数据），多键则裁剪失效（Additional properties 报错复发）。"""
+    from app.services.generate import NODE_KEYS
+
+    assert set(NODE_KEYS) == set(SCHEMA["properties"].keys())
+
+
 def test_generate_component_type_names_in_sync():
     """T8 §4.4：generate.py 手写的 COMPONENT_TYPE_NAMES 必须与 schema/lib 一致——
     否则 §8 真扩充组件库时（如加 icon），repair 会把刚合法的新组件降级成 frame（静默消失）。"""

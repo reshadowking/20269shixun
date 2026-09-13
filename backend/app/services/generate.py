@@ -436,7 +436,7 @@ class GenerateResult:
     error: str = ""  # LLM 失败原因（限流/超时等），供前端展示与排查
     # B2-2：逐项合规拉回明细（node_id/field/original/corrected），供逐项报告 UI
     violations_detail: list = field(default_factory=list)
-    # T8：本轮降级明细（["icon@节点id"]，无降级为空）——前端暂未消费（已知静默行为，见 T8 报告）
+    # T8：本轮降级明细（["icon@节点id"]，无降级为空）——前端聊天面板消费（T8 收尾）
     degraded: list[str] = field(default_factory=list)
 
 

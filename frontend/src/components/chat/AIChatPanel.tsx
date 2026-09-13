@@ -105,6 +105,8 @@ interface GenerateResponse {
   mock?: boolean
   error?: string
   violations_detail?: ComplianceFixItem[]
+  /** T8 收尾：本轮降级明细（["icon@节点id"]）——用于向用户明示"近似组件表达" */
+  degraded?: string[]
 }
 
 /** D3：从设计树抽取少量可见文本作方案摘要（最多 4 段，截断 40 字） */
@@ -396,11 +398,15 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
           return
         }
         const droppedNote = outcome?.dropped?.length ? '\n部分效果为非预置值，已忽略。' : ''
+        // T8 收尾（缺口清单 §4.8）：降级不再静默——明示"近似组件表达"
+        const degradedNote = resp.degraded?.length
+          ? `\n⚠️ 有 ${resp.degraded.length} 项能力暂不支持，已用近似组件表达。`
+          : ''
         setMessages((m) => [
           ...m,
           {
             role: 'assistant',
-            text: `已应用修改 ✓（仅改动 ${changed.length > 0 ? changed.length : '指定'} 处，其余保持不变）${droppedNote}\n被修改的节点已高亮提示；输入「撤销」可回到修改前。`,
+            text: `已应用修改 ✓（仅改动 ${changed.length > 0 ? changed.length : '指定'} 处，其余保持不变）${droppedNote}${degradedNote}\n被修改的节点已高亮提示；输入「撤销」可回到修改前。`,
           },
         ])
         return
@@ -414,11 +420,14 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
       const sourceNote = resp.mock
         ? '\n⚠️ 演示模式：未配置模型 Key，本稿为预置模板（非模型生成）。到「API 配置」填入 Key 后可调用模型。'
         : ''
+      const degradedNote = resp.degraded?.length
+        ? `\n⚠️ 有 ${resp.degraded.length} 项能力暂不支持，已用近似组件表达。`
+        : ''
       setMessages((m) => [
         ...m,
         {
           role: 'assistant',
-          text: `已生成设计稿（模板：${resp.template === 'free' ? '自由生成' : resp.template}）✓ 规范兼容率 ${resp.compliance}%${sourceNote}${freeNote}\n可在右侧属性面板继续编辑，或输入新需求重新生成。`,
+          text: `已生成设计稿（模板：${resp.template === 'free' ? '自由生成' : resp.template}）✓ 规范兼容率 ${resp.compliance}%${sourceNote}${freeNote}${degradedNote}\n可在右侧属性面板继续编辑，或输入新需求重新生成。`,
         },
       ])
     } catch (err) {
