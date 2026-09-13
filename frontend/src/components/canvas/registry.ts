@@ -8,6 +8,7 @@ import { CanvasCard, buildCardExport, cardSchema } from '@/components/canvas/car
 import { CanvasChart, buildChartExport, chartSchema } from '@/components/canvas/chart'
 import { CanvasDivider, buildDividerExport, dividerSchema } from '@/components/canvas/divider'
 import { CanvasHero, buildHeroExport, heroSchema } from '@/components/canvas/hero'
+import { CanvasIcon, buildIconExport, iconSchema } from '@/components/canvas/icon'
 import { CanvasImage, buildImageExport, imageSchema } from '@/components/canvas/image'
 import { CanvasInput, buildInputExport, inputSchema } from '@/components/canvas/input'
 import { CanvasNavbar, buildNavbarExport, navbarSchema } from '@/components/canvas/navbar'
@@ -22,7 +23,7 @@ import type { ComponentDefinition } from '@/components/canvas/types'
 
 export const componentRegistry: Record<string, ComponentDefinition> = {
   // B1：已挂 buildExport 的组件由 React/HTML 引擎经语义节点序列化；其余仍在引擎 switch 内
-  // B1-2 全量：15 个组件全部挂 buildExport——React/HTML 引擎统一经语义节点序列化，引擎 switch 已移除
+  // B1-2 全量：15+1（T9 icon）个组件全部挂 buildExport——React/HTML 引擎统一经语义节点序列化，引擎 switch 已移除
   button: { type: 'button', label: '按钮', Canvas: CanvasButton, buildExport: buildButtonExport, schema: buttonSchema },
   card: { type: 'card', label: '卡片', Canvas: CanvasCard, buildExport: buildCardExport, schema: cardSchema },
   input: { type: 'input', label: '输入框', Canvas: CanvasInput, buildExport: buildInputExport, schema: inputSchema },
@@ -38,6 +39,7 @@ export const componentRegistry: Record<string, ComponentDefinition> = {
   'title-text': { type: 'title-text', label: '标题', Canvas: CanvasTitleText, buildExport: buildTitleTextExport, schema: titleTextSchema },
   hero: { type: 'hero', label: 'Hero 大图', Canvas: CanvasHero, buildExport: buildHeroExport, schema: heroSchema },
   image: { type: 'image', label: '图片', Canvas: CanvasImage, buildExport: buildImageExport, schema: imageSchema },
+  icon: { type: 'icon', label: '图标', Canvas: CanvasIcon, buildExport: buildIconExport, schema: iconSchema },
 }
 
 /** 组件面板列表（按注册顺序） */

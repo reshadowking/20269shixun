@@ -4,10 +4,12 @@
 调用失败/非 JSON/mock 模式 → 返回模板默认稿（断网兜底，v2.2 §1.4）。
 """
 import copy
+import json
 import logging
 import re
 import time
 from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from typing import Any
 
 from opentelemetry import trace
@@ -38,8 +40,8 @@ INTENT_SYSTEM = """你是设计意图解析器。把用户的自然语言设计�
 登录/注册 → login；个人/主页/中心 → profile；其余 → landing。"""
 
 FILL_SYSTEM = """你是 AI 设计生成器。基于给定的模板骨架 JSON 与设计令牌，输出一张完整可渲染的 DesignNode 树。
-组件白名单（只能使用这 15 种 componentType，禁止新增其他类型）：
-button, card, input, select, table, chart, stat-block, navbar, sidebar, avatar, tag, divider, title-text, hero, image
+组件白名单（只能使用这 16 种 componentType，禁止新增其他类型）：
+button, card, input, select, table, chart, stat-block, navbar, sidebar, avatar, tag, divider, title-text, hero, image, icon
 硬约束：
 1. 保持模板的节点结构与布局（layout/组件类型），只填充和优化 props 与 style；不要发明新组件类型。
 2. 颜色：用户明确指定的品牌色 hex 必须原样使用（如 #FF6B35）；未指定时使用令牌名（primary/secondary/danger/success/background/text-primary/text-secondary/text-light/border）。
@@ -61,18 +63,46 @@ button, card, input, select, table, chart, stat-block, navbar, sidebar, avatar, 
 11. 输出体积（严格遵守）：使用紧凑 JSON——嵌套层级之间允许必要换行，但不要为空行、
     不要大段缩进（如每行 16 空格）、不要重复冗余字段；输出越长越容易在尾部出错。
     目标是整棵树的输出 token 越少越好。
-12. 需求里出现图标、开关、标签页、分页、弹窗等组件白名单外的元素：禁止自创 componentType
-    （如 icon/switch/tabs/pagination/dialog，会导致整稿被拒）；用最接近的合法组件表达——
-    图标→text 或 tag（放符号字符）、开关→button、标签页/分页→一排 button、弹窗→frame + 按钮。"""
+12. 需求里出现开关、标签页、分页、弹窗等组件白名单外的元素：禁止自创 componentType
+    （如 switch/tabs/pagination/dialog，会导致整稿被拒）；用最接近的合法组件表达——
+    开关→button、标签页/分页→一排 button、弹窗→frame + 按钮。"""
 
 # 用户指定色提取：prompt 中的 hex（品牌色不被合规检查器拉回，v2.2 §4.5）
 HEX_RE = re.compile(r"#[0-9a-fA-F]{3,8}\b")
 
-# 15 种组件类型（与 FILL_SYSTEM/FREE_SYSTEM 白名单一致）
+# 16 种组件类型（与 FILL_SYSTEM/FREE_SYSTEM 白名单一致）
 COMPONENT_TYPE_NAMES = {
     "button", "card", "input", "select", "table", "chart", "stat-block",
     "navbar", "sidebar", "avatar", "tag", "divider", "title-text", "hero", "image",
+    "icon",
 }
+
+# ---- T9：图标库单一来源（shared/icon-library.json，照 beautify-effects.json 的加载方式）----
+# 消费方：① 提示词运行期注入（icon_prompt_section，禁止手抄进 FILL/FREE/INCREMENTAL 正文）；
+# ② repair_design 对 icon 未知名记 gen_logger（渲染层兜底，不降级）。前端从同一 JSON import。
+ROOT = Path(__file__).resolve().parent.parent.parent.parent
+ICON_LIBRARY_FILE = ROOT / "shared" / "icon-library.json"
+with ICON_LIBRARY_FILE.open(encoding="utf-8") as _f:
+    ICON_LIBRARY: dict[str, Any] = json.load(_f)
+
+
+def icon_names() -> frozenset[str]:
+    """可用图标名集合（每次从 ICON_LIBRARY 现算——单一来源防漂移测试依赖可观测变化）。"""
+    return frozenset(i["name"] for i in ICON_LIBRARY["icons"])
+
+
+def icon_names_text() -> str:
+    """运行期从 shared/icon-library.json 现算可用图标名清单（照 beautify.vocabulary_text 模式）。"""
+    return "、".join(i["name"] for i in ICON_LIBRARY["icons"])
+
+
+def icon_prompt_section() -> str:
+    """三段 system 共用的 icon 提示词段：注入可用图标名（模型逐字取用，清单外渲染兜底）。"""
+    return (
+        "\n\n## 可用图标（icon 组件的 props.name 只能从中逐字选）\n"
+        + icon_names_text()
+        + "\n不在上列的名字会被渲染为兜底占位（不会导致整稿被拒），所以禁止编造图标名。"
+    )
 
 # 样式数值边界（与 shared/design-schema.json 一致；超界自动 clamp，不整树回退）
 STYLE_BOUNDS = {
@@ -267,6 +297,12 @@ def repair_design(node: dict, degraded: list[str] | None = None) -> dict:
         _degrade_to_frame(node, node["componentType"], degraded)
     elif node.get("type") not in KNOWN_NODE_TYPES:
         _degrade_to_frame(node, str(node.get("type")), degraded)
+    # T9：icon 合法化后不再降级；未知名 Schema 不拒（渲染层兜底占位），这里只记日志便于排查
+    if node.get("type") == "component" and node.get("componentType") == "icon":
+        props = node.get("props")
+        name = props.get("name") if isinstance(props, dict) else None
+        if isinstance(name, str) and name and name not in icon_names():
+            gen_logger.warning("icon 组件未知图标名 %r（id=%s）→ 渲染层将兜底为 help-circle", name, node.get("id"))
     # T8：节点级未知键裁剪（"Additional properties are not allowed" 历史报错的来源）
     for key in [k for k in node if k not in NODE_KEYS]:
         node.pop(key)
@@ -299,8 +335,8 @@ def repair_design(node: dict, degraded: list[str] | None = None) -> dict:
 FREE_TRIGGER_KEYWORDS = ("自由生成", "不用模板", "不要模板", "自由发挥", "随意发挥")
 
 FREE_SYSTEM = """你是 AI 设计生成器。直接根据用户需求生成一张完整可渲染的 DesignNode 树（不使用任何预置模板）。
-组件白名单（只能使用这 15 种 componentType，禁止新增其他类型）：
-button, card, input, select, table, chart, stat-block, navbar, sidebar, avatar, tag, divider, title-text, hero, image
+组件白名单（只能使用这 16 种 componentType，禁止新增其他类型）：
+button, card, input, select, table, chart, stat-block, navbar, sidebar, avatar, tag, divider, title-text, hero, image, icon
 硬约束：
 1. 页面结构合理：用 frame 组织层级（layout 用 row/column/grid；需要自由摆放时用 free + x/y 坐标），
    典型结构：顶部导航 → 内容区 → 行动点；不要只输出一个扁平容器。
@@ -315,9 +351,9 @@ button, card, input, select, table, chart, stat-block, navbar, sidebar, avatar, 
    禁止把组件名直接写在 type 字段（例如 {"type":"divider"} 或 {"type":"button"} 都是错的）。
 9. 输出体积（严格遵守）：使用紧凑 JSON——嵌套层级之间允许必要换行，不要空行、不要大段缩进；
    输出越长越容易在尾部出错，整棵树输出 token 越少越好。
-10. 需求里出现图标、开关、标签页、分页、弹窗等组件白名单外的元素：禁止自创 componentType
-    （如 icon/switch/tabs/pagination/dialog，会导致整稿被拒）；用最接近的合法组件表达——
-    图标→text 或 tag（放符号字符）、开关→button、标签页/分页→一排 button、弹窗→frame + 按钮。"""
+10. 需求里出现开关、标签页、分页、弹窗等组件白名单外的元素：禁止自创 componentType
+    （如 switch/tabs/pagination/dialog，会导致整稿被拒）；用最接近的合法组件表达——
+    开关→button、标签页/分页→一排 button、弹窗→frame + 按钮。"""
 
 
 def extract_user_colors(prompt: str) -> list[str]:
@@ -343,9 +379,9 @@ INCREMENTAL_SYSTEM = """你是 AI 设计修改器。基于给定的 DesignNode �
    （primary/secondary/danger/success/background/text-primary/text-secondary/text-light/border），用户指定 hex 原样。
 5. 字号 fontSize 用数字（8-96）；间距 gap/圆角 radius 用数字。
 6. 输出必须是合法 JSON（完整 DesignNode 树），不要输出任何其他内容；JSON 语法必须正确（属性间逗号、对象闭合）。
-7. 需求里出现图标、开关、标签页、分页、弹窗等组件白名单外的元素：禁止自创 componentType
-   （如 icon/switch/tabs/pagination/dialog，会导致整稿被拒）；用最接近的合法组件表达——
-   图标→text 或 tag（放符号字符）、开关→button、标签页/分页→一排 button、弹窗→frame + 按钮。
+7. 需求里出现分页、弹窗等组件白名单外的元素：禁止自创 componentType
+   （如 pagination/dialog，会导致整稿被拒）；用最接近的合法组件表达——
+   分页→一排 button、弹窗→frame + 按钮。
 8. 若用户要求与界面设计无关（例如写诗、算术、闲聊），保持 current_design 原样不变，不要为了
    "完成指令"去改动任何节点。"""
 
@@ -359,11 +395,12 @@ LOCKED_STAGE_SECTION = """
 
 
 def incremental_system(locked: bool = False) -> str:
-    """组装增量修改 system 提示词（T4 批2）：既有约束 + 效果词典 +（locked 时）锁定约束段。
+    """组装增量修改 system 提示词（T4 批2）：既有约束 + 效果词典 + 图标清单 +（locked 时）锁定约束段。
 
     - INCREMENTAL_SYSTEM 既有约束文本逐字保留（多处测试断言依赖），词典为追加式拼装；
     - 词典由 shared/beautify-effects.json 运行时生成（beautify.vocabulary_text），
       未锁定时也注入——让模型始终优先用预置值，降低自由 CSS 进树的概率；
+    - 图标清单由 shared/icon-library.json 运行时注入（T9，icon_prompt_section）；
     - ⚠️ locked 不是安全开关，只影响提示词措辞：安全判定由服务端闸门
       （apply_locked_edit / design_locks，按会话查表）负责。客户端谎报
       locked=false 的后果只是提示词缺少锁定约束段，模型可能产出越权改动，
@@ -373,10 +410,21 @@ def incremental_system(locked: bool = False) -> str:
         INCREMENTAL_SYSTEM
         + "\n\n## 可用美化效果（只能从中选，禁止自创 CSS 值）\n"
         + vocabulary_text()
+        + icon_prompt_section()
     )
     if locked:
         text += LOCKED_STAGE_SECTION
     return text
+
+
+def fill_system_text() -> str:
+    """FILL_SYSTEM + 运行期注入段（图标清单，T9）。generate_design 实际发送的文本。"""
+    return FILL_SYSTEM + icon_prompt_section()
+
+
+def free_system_text() -> str:
+    """FREE_SYSTEM + 运行期注入段（图标清单，T9）。generate_design 实际发送的文本。"""
+    return FREE_SYSTEM + icon_prompt_section()
 
 SUMMARY_SYSTEM = """你是需求摘要器。把用户的长篇设计需求压缩为简洁的结构化需求描述（200 字以内），供下游生成设计稿。
 硬约束：
@@ -570,7 +618,7 @@ def generate_design(
             user_payload = {"user_request": fill_prompt, "intent": intent}
             if not is_free:
                 user_payload["template_skeleton"] = default
-            fill_system = FREE_SYSTEM if is_free else FILL_SYSTEM
+            fill_system = free_system_text() if is_free else fill_system_text()
         if is_edit and client.is_mock and client.mock_responder is None:
             # T4 前置：mock 模式增量修改产出确定性改写树（关键词规则、无 LLM），
             # 与下方真实链路共用 repair → validate → compliance 流水线；

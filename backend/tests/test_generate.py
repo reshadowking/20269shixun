@@ -325,3 +325,65 @@ class TestApiErrorDescription:
         from app.services.llm import describe_api_error
 
         assert "超时" in describe_api_error(APITimeoutError("slow"))
+
+
+
+class TestIconPromptInjection:
+    """T9 触点 16：三段 system 确实含图标清单，且清单来自 shared/icon-library.json——
+    用"追加假图标 → 提示词同步变化"证明是运行期注入而非手抄（照 beautify 词典测试口径）。"""
+
+    @staticmethod
+    def _three_prompts() -> list[tuple[str, str]]:
+        from app.services.generate import fill_system_text, free_system_text, incremental_system
+
+        return [
+            ("FILL", fill_system_text()),
+            ("FREE", free_system_text()),
+            ("INCREMENTAL", incremental_system(False)),
+        ]
+
+    def test_three_systems_contain_icon_list(self):
+        from app.services.generate import icon_names_text
+
+        prompts = self._three_prompts()
+        for name, text in prompts:
+            assert "可用图标" in text, f"{name} 缺图标清单段"
+            for icon_name in icon_names_text().split("、"):
+                assert icon_name in text, f"{name} 缺图标名 {icon_name}"
+
+    def test_fake_icon_reaches_all_three_prompts(self):
+        """追加假图标 → 三段提示词同步出现；移除后同步消失（读取非抄写）。"""
+        from app.services import generate
+
+        generate.ICON_LIBRARY["icons"].append({"name": "测试假图标", "label": "假", "path": "M0 0"})
+        try:
+            for name, text in self._three_prompts():
+                assert "测试假图标" in text, f"{name} 未随 JSON 同步"
+        finally:
+            generate.ICON_LIBRARY["icons"].pop()
+        for name, text in self._three_prompts():
+            assert "测试假图标" not in text, f"{name} 移除假图标后仍残留"
+
+    def test_generate_design_actually_sends_icon_section(self):
+        """端到端：generate_design 发给模型的 system 含图标段（FILL 路径，SpyResponder 捕获）。"""
+        import json as _json
+
+        from app.services.generate import generate_design
+        from app.services.llm import LLMClient
+
+        fill = {"id": "root", "type": "frame", "style": {"layout": "column"}, "children": []}
+
+        class SpyResponder:
+            def __init__(self):
+                self.system_text = ""
+
+            def __call__(self, system: str, user: str) -> str:
+                if "设计生成器" in system:
+                    self.system_text = system
+                    return _json.dumps(fill, ensure_ascii=False)
+                return ""
+
+        spy = SpyResponder()
+        generate_design("设计一个登录页", LLMClient(mock_responder=spy))
+        assert "可用图标" in spy.system_text
+        assert "star" in spy.system_text

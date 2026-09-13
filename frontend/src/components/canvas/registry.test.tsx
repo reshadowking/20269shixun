@@ -54,9 +54,9 @@ const LIB_BUTTON = LIB.components.find((c) => c.type === 'button')!
 
 /** 画布渲染：React 默认转义（渲染通道 XSS 防线，v2.2 §11.2） */
 describe('组件画布渲染', () => {
-  it('15 个组件全部注册（四件套齐备）', () => {
+  it('全部组件注册（四件套齐备；数量由 component-library.json 派生，加组件不再手改数字）', () => {
     expect(Object.keys(componentRegistry).sort()).toEqual([...COMPONENT_TYPES].sort())
-    expect(componentPalette.length).toBe(15)
+    expect(componentPalette.length).toBe(LIB.components.length)
     for (const [type, def] of Object.entries(componentRegistry)) {
       expect(typeof def.Canvas).toBe('function'), `${type} 缺画布渲染`
       expect(typeof def.buildExport).toBe('function'), `${type} 缺导出语义描述 buildExport`

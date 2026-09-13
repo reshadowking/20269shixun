@@ -114,3 +114,25 @@ test('T6：常驻「代码」面板展示当前设计的 src/App.tsx', async ({ 
   expect(code).toContain('export default function App')
   expect(code).toContain('满减优惠券，先到先得，每人限领 3 张')
 })
+
+test('T9：icon 组件面板添加 → 画布渲染 svg 图标 → 可选中改属性', async ({ page }) => {
+  ROOM = 'e2e-' + Math.random().toString(36).slice(2, 10)
+  await login(page)
+  await resetDesign(page)
+
+  // 1) 组件面板添加 icon（palette-icon-* testid 与组件类型一致）
+  await page.getByTestId('palette-icon').click()
+  const iconNode = page.locator('[data-node-id^="icon-"]').last()
+  await expect(iconNode).toBeVisible()
+
+  // 2) lucide 图标数据内联渲染：span > svg > path
+  await expect(iconNode.locator('svg')).toBeVisible()
+  await expect(iconNode.locator('path')).toBeVisible()
+
+  // 3) 选中 → 属性面板出现图标字段（下拉选项来自 shared/icon-library.json 白名单）
+  await iconNode.click()
+  const nameSelect = page.getByTestId('prop-name')
+  await expect(nameSelect).toBeVisible()
+  await nameSelect.selectOption('heart')
+  await expect(iconNode.locator('path')).toHaveAttribute('d', /.+/)
+})

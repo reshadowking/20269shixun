@@ -45,9 +45,10 @@ class TestRepairDesign:
         validate_design(fixed)
 
     def test_unknown_component_type_degraded_to_frame(self):
-        """T8 核心用例：模型自创 componentType:"icon" → 降级 frame，保留 id/style/children。"""
+        """T8 核心用例：模型自创白名单外 componentType（T9 起 icon 已合法，示例改用
+        仍处白名单外的 pagination）→ 降级 frame，保留 id/style/children。"""
         node = {
-            "id": "ic", "type": "component", "componentType": "icon",
+            "id": "ic", "type": "component", "componentType": "pagination",
             "style": {"width": 24, "color": "text-light"},
             "children": [{"id": "c", "type": "text", "props": {"text": "✓"}}],
         }
@@ -61,7 +62,7 @@ class TestRepairDesign:
 
     def test_degrade_salvages_visible_text(self):
         """T8 §4.2：降级时 props.text 有可见内容 → 抢救为 text 子节点（追加末尾），其余 props 删除。"""
-        node = {"id": "ic", "type": "component", "componentType": "icon", "props": {"text": "★"}}
+        node = {"id": "ic", "type": "component", "componentType": "pagination", "props": {"text": "★"}}
         fixed = repair_design(node)
         assert fixed["type"] == "frame"
         assert "props" not in fixed
@@ -86,7 +87,7 @@ class TestRepairDesign:
             "id": "root", "type": "frame",
             "children": [
                 {"id": "b1", "type": "component", "componentType": "button", "props": {"text": "x"}},
-                {"id": "u", "type": "component", "componentType": "icon", "props": {"text": "★"}},
+                {"id": "u", "type": "component", "componentType": "pagination", "props": {"text": "★"}},
             ],
         }
         fixed = repair_design(node)
@@ -197,14 +198,14 @@ class TestGenerateWithRepair:
 
 class TestUnknownComponentEndToEnd:
     def test_icon_in_tree_no_longer_falls_back(self):
-        """T8 端到端：模型输出含自创 icon → 降级落地（fallback=False、icon 位变 frame、
-        可见文本抢救为 text 子节点、degraded 清单外显）。"""
+        """T9 端到端（取代 T8 同名降级用例）：icon 进白名单后，模型返回含 icon 的树
+        → 不降级（节点保持 component、degraded 为空）、不整树回退。"""
 
         fill = {
             "id": "gen-root", "type": "frame", "style": {"layout": "column"},
             "children": [
                 {"id": "t", "type": "text", "props": {"text": "标题"}},
-                {"id": "ic", "type": "component", "componentType": "icon", "props": {"text": "★"}},
+                {"id": "ic", "type": "component", "componentType": "icon", "props": {"name": "star"}},
             ],
         }
 
@@ -214,11 +215,11 @@ class TestUnknownComponentEndToEnd:
 
         result = generate_design("登录页", LLMClient(mock_responder=Responder()))
         assert result.fallback is False, result.error
-        assert result.design["id"] == "gen-root"  # 红：现状整树回退 → login-root
+        assert result.design["id"] == "gen-root"  # T8 前整树回退 → login-root
         assert result.design["children"][0]["props"]["text"] == "标题"
-        assert result.design["children"][1]["type"] == "frame"  # icon 位降级
-        assert result.design["children"][1]["children"][0]["props"]["text"] == "★"  # 文本抢救
-        assert result.degraded == ["icon@ic"]  # 降级清单外显
+        assert result.design["children"][1]["type"] == "component"  # icon 不再降级（T9）
+        assert result.design["children"][1]["componentType"] == "icon"
+        assert result.degraded == []  # 降级清单为空——本轮最直接的端到端证据
 
 
 class TestLongPromptEndpoint:

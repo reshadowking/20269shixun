@@ -1,5 +1,5 @@
 {
-  "_comment": "组件库唯一规范源（E5-2：MCP get_component_library 数据源）。15 个组件，与前端组件注册表、AI 生成白名单一致。新增/修改组件：改这里 → 同步前端 registry 与 AI Prompt 白名单。",
+  "_comment": "组件库唯一规范源（E5-2：MCP get_component_library 数据源）。16 个组件，与前端组件注册表、AI 生成白名单一致。新增/修改组件：改这里 → 同步前端 registry 与 AI Prompt 白名单。",
   "components": [
     {
       "type": "button",
@@ -459,6 +459,37 @@
         "width": 200,
         "height": 150,
         "radius": 8
+      }
+    },
+    {
+      "type": "icon",
+      "name": "图标",
+      "description": "线性图标（lucide 图标数据内联，name 从 shared/icon-library.json 白名单选）",
+      "props": {
+        "name": {
+          "type": "string",
+          "default": "star",
+          "description": "图标名（shared/icon-library.json 白名单，未知名渲染兜底占位）"
+        },
+        "color": {
+          "type": "string",
+          "default": "text-primary",
+          "description": "颜色（令牌名或 hex）"
+        },
+        "size": {
+          "type": "string",
+          "enum": [
+            "sm",
+            "default",
+            "lg"
+          ],
+          "default": "default",
+          "description": "尺寸（sm=16 / default=20 / lg=24 px）"
+        }
+      },
+      "default_style": {
+        "width": 20,
+        "height": 20
       }
     }
   ]

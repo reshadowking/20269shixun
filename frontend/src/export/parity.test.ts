@@ -7,6 +7,8 @@
  * （ExportElement 统一序列化时两通道同源输出，届时把 HTML 侧断言升级为 data-component）。
  */
 import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 
 import type { ComponentType, DesignNode } from '@/design/types'
 import { resolveColor } from '@/design/styleToCss'
@@ -39,6 +41,7 @@ const FIXTURES: ComponentFixture[] = [
   { componentType: 'title-text', props: { text: '页面大标题', level: 2 }, text: '页面大标题', htmlTag: 'h2' },
   { componentType: 'hero', props: { title: '主视觉标题', subtitle: '副标题文案', cta: { text: '立即开始' } }, text: '主视觉标题', htmlTag: 'section' },
   { componentType: 'image', props: { src: 'https://cdn.example.com/a.png', alt: '示例图' }, text: '示例图', htmlTag: 'img' },
+  { componentType: 'icon', props: { name: 'star', color: 'primary', size: 'default' }, text: '', htmlTag: 'span' },
 ]
 
 /** 每个组件挂在一个带样式的 frame 下（同时覆盖 frame 样式键 parity） */
@@ -407,5 +410,56 @@ describe('T5.6 ghost 变体阴影（导出侧）', () => {
     expect(reactGhost, 'ghost 导出不应有 boxShadow').not.toContain('"boxShadow"')
     const reactPrimary = designToReactApp(plainTree('button', { text: '去支付', variant: 'primary' }), false)
     expect(reactPrimary).toContain('"boxShadow":"0 1px 2px rgba(29,33,41,0.06)"')
+  })
+})
+
+describe('T9 icon parity（lucide 数据内联，span > svg > path 双通道同构）', () => {
+  const STAR_PATH = (JSON.parse(readFileSync(resolve(process.cwd(), '../shared/icon-library.json'), 'utf-8')) as { icons: Array<{ name: string; path: string }> })
+    .icons.find((i) => i.name === 'star')!.path
+
+  it('span/svg/path 同构：viewBox 与 d 走 attrs（双通道拼写一致），关键文本断言用无文本组件兜底', () => {
+    const react = designToReactApp(plainTree('icon', { name: 'star', color: 'primary', size: 'default' }), false)
+    const html = designToHtml(plainTree('icon', { name: 'star', color: 'primary', size: 'default' }))
+    expect(react).toContain('data-component="icon"')
+    // 序列化器 style 在 attrs 前，svg 标签与 viewBox 分开断言（两通道同序）
+    expect(react).toContain('<svg')
+    expect(react).toContain('viewBox="0 0 24 24"')
+    expect(react).toContain(`d="${STAR_PATH}"`)
+    expect(html).toContain('<svg')
+    expect(html).toContain('viewBox="0 0 24 24"')
+    expect(html).toContain(`d="${STAR_PATH}"`)
+  })
+
+  it('SVG 属性分通道：strokeWidth 是数字——React 通道 2（无单位）、HTML 通道 2px（等价断言，差异有意保留）', () => {
+    const react = designToReactApp(plainTree('icon', { name: 'star' }), false)
+    const html = designToHtml(plainTree('icon', { name: 'star' }))
+    expect(react, 'React 缺 strokeWidth').toContain('"strokeWidth":2')
+    expect(react, 'React strokeWidth 不得序列化为字符串 px 值').not.toContain('"strokeWidth":"2px"')
+    expect(html, 'HTML 缺 stroke-width').toContain('stroke-width: 2px')
+    // 反断言（T5.5 §4.7 教训）：数值属性不得以无单位形态出现在 HTML 通道
+    expect(html, 'HTML stroke-width 不得丢 px').not.toContain('stroke-width: 2;')
+    expect(react).toContain('"stroke":"currentColor"')
+    expect(html).toContain('stroke: currentColor')
+    expect(react).toContain('"fill":"none"')
+    expect(html).toContain('fill: none')
+  })
+
+  it('color 令牌经 span 通道解析（currentColor 驱动描边）；尺寸 default=20px（双通道）', () => {
+    const react = designToReactApp(plainTree('icon', { name: 'star', color: 'primary', size: 'default' }), false)
+    const html = designToHtml(plainTree('icon', { name: 'star', color: 'primary', size: 'default' }))
+    expect(react).toContain(`"color":"${resolveColor('primary')}"`)
+    expect(html).toContain(`color: ${resolveColor('primary')}`)
+    expect(react).toContain('"width":20')
+    expect(html).toContain('width: 20px')
+    expect(html).toContain('height: 20px')
+  })
+
+  it('未知名兜底：buildIconExport 对未知 name 渲染 help-circle 路径（不抛错不空渲染）', () => {
+    const react = designToReactApp(plainTree('icon', { name: '不存在的图标' }), false)
+    const html = designToHtml(plainTree('icon', { name: '不存在的图标' }))
+    const fallbackPath = (JSON.parse(readFileSync(resolve(process.cwd(), '../shared/icon-library.json'), 'utf-8')) as { icons: Array<{ name: string; path: string }> })
+      .icons.find((i) => i.name === 'help-circle')!.path
+    expect(react).toContain(`d="${fallbackPath}"`)
+    expect(html).toContain(`d="${fallbackPath}"`)
   })
 })
