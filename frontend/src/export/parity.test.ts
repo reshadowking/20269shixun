@@ -285,3 +285,62 @@ describe('T5 批A #3/#7 值等来源分叉项（导出侧与令牌同值的 gree
     expect(html, 'HTML stat label 应为 text-light').toContain(`color: ${LIGHT}`)
   })
 })
+
+describe('T5 批B 四件套状态与默认观感（导出侧双通道）', () => {
+  it('button disabled：attrs disabled + opacity 0.5（§4.2.5 决策 a：补齐）', () => {
+    const react = designToReactApp(plainTree('button', { text: '去支付', disabled: true }), false)
+    const html = designToHtml(plainTree('button', { text: '去支付', disabled: true }))
+    expect(react, 'React 缺 disabled 属性').toContain('disabled="disabled"')
+    expect(react, 'React 缺 disabled opacity').toContain('"opacity":0.5')
+    expect(html, 'HTML 缺 disabled 属性').toContain('disabled="disabled"')
+    expect(html, 'HTML 缺 disabled opacity').toContain('opacity: 0.5')
+    // 未禁用：不输出 disabled 与 opacity
+    const reactOn = designToReactApp(plainTree('button', { text: '去支付' }), false)
+    expect(reactOn).not.toContain('disabled=')
+    expect(reactOn).not.toContain('"opacity"')
+  })
+
+  it('input 默认观感：控件边框/圆角/高度内联（此前导出裸 input），disabled 带 opacity', () => {
+    const react = designToReactApp(plainTree('input', { label: '邮箱', placeholder: '请输入邮箱' }), false)
+    const html = designToHtml(plainTree('input', { label: '邮箱', placeholder: '请输入邮箱' }))
+    const BORDER = `1px solid ${resolveColor('border')!}`
+    expect(react, 'React 缺控件边框').toContain(`"border":"${BORDER}"`)
+    expect(react, 'React 缺控件高度').toContain('"height":40')
+    expect(html, 'HTML 缺控件边框').toContain(`border: ${BORDER}`)
+    const reactDis = designToReactApp(plainTree('input', { placeholder: 'x', disabled: true }), false)
+    expect(reactDis, 'React 缺 disabled opacity').toContain('"opacity":0.5')
+    expect(reactDis, 'React 缺 disabled 属性').toContain('disabled="disabled"')
+  })
+
+  it('select 默认观感：与 input 同一套控件边框/圆角/高度', () => {
+    const react = designToReactApp(plainTree('select', { options: ['北京'] }), false)
+    const html = designToHtml(plainTree('select', { options: ['北京'] }))
+    const BORDER = `1px solid ${resolveColor('border')!}`
+    expect(react, 'React 缺控件边框').toContain(`"border":"${BORDER}"`)
+    expect(html, 'HTML 缺控件边框').toContain(`border: ${BORDER}`)
+  })
+
+  it('card 默认观感：padding/border/圆角/阴影双通道（此前导出裸 div），title/content 字号与画布一致', () => {
+    const react = designToReactApp(plainTree('card', { title: '卡片标题', content: '卡片内容' }), false)
+    const html = designToHtml(plainTree('card', { title: '卡片标题', content: '卡片内容' }))
+    const BORDER = `1px solid ${resolveColor('border')!}`
+    expect(react, 'React 缺卡片 padding').toContain('"padding":24')
+    expect(react, 'React 缺卡片边框').toContain(`"border":"${BORDER}"`)
+    expect(react, 'React 缺卡片圆角').toContain('"borderRadius":8')
+    expect(react, 'React 缺卡片阴影').toContain('"boxShadow":"0 1px 2px rgba(29,33,41,0.06)"')
+    expect(html, 'HTML 缺卡片 padding').toContain('padding: 24px')
+    expect(html, 'HTML 缺卡片阴影').toContain('box-shadow: 0 1px 2px rgba(29,33,41,0.06)')
+    // title/content 与画布 text-lg font-semibold / text-sm muted 对齐
+    expect(react, 'React 卡片标题应为 18/600').toContain('"fontSize":18')
+    expect(react, 'React 卡片内容应为 text-light 色').toContain(`"color":"${resolveColor('text-light')!}"`)
+    expect(html, 'HTML 卡片标题应为 18px').toContain('font-size: 18px')
+  })
+
+  it('hover/active/focus 为交互态：静态 HTML 导出不实现（有注释说明，非遗漏）——此断言锁「不静默缺失」', () => {
+    // navbar 批A 已示范：交互态在导出侧注释写明。这里断言 HTML 产物不含伪 hover 实现
+    // （若未来有人往 style 里塞 hover 相关声明，此处会红，提示改走注释说明路径）。
+    const html = designToHtml(plainTree('button', { text: '去支付' }))
+    expect(html).not.toContain(':hover')
+    expect(html).not.toContain('brightness')
+  })
+})

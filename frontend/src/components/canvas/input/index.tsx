@@ -1,6 +1,7 @@
 import type { ExportElement } from '@/components/canvas/types'
 import { escapeHtml } from '@/design/escape'
 import { styleToCss } from '@/design/styleToCss'
+import { CONTROL_DEFAULT_STYLE, DISABLED_STYLE } from '@/components/canvas/styleTokens'
 import { INPUT_LABEL_COLOR } from '@/components/canvas/styleTokens'
 import type { DesignNode } from '@/design/types'
 
@@ -17,7 +18,8 @@ export function CanvasInput({ props, style }: { props: Record<string, unknown>; 
         placeholder={placeholder}
         disabled={Boolean(props.disabled)}
         readOnly
-        className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+        className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:border-ring disabled:cursor-not-allowed disabled:opacity-50"
+        style={props.disabled ? DISABLED_STYLE : undefined}
       />
     </div>
   )
@@ -68,6 +70,12 @@ export const buildInputExport = (node: DesignNode): ExportElement => {
     placeholder: typeof props.placeholder === 'string' ? props.placeholder : '',
   }
   if (props.disabled) attrs.disabled = 'disabled'
-  children.push({ tag: 'input', attrs, style: {} })
+  // 默认观感与画布同源（CONTROL_DEFAULT_STYLE）；disabled 静态态双通道同步；
+  // focus ring 为交互态，静态导出不实现（与 button 同口径）
+  children.push({
+    tag: 'input',
+    attrs,
+    style: { ...CONTROL_DEFAULT_STYLE, ...(props.disabled ? DISABLED_STYLE : {}) },
+  })
   return { tag: 'div', attrs: {}, style: styleToCss(node.style), children }
 }

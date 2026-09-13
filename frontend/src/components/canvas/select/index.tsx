@@ -3,6 +3,7 @@ import { useState } from 'react'
 import type { ExportElement } from '@/components/canvas/types'
 import { escapeHtml } from '@/design/escape'
 import { styleToCss } from '@/design/styleToCss'
+import { CONTROL_DEFAULT_STYLE, INPUT_LABEL_COLOR } from '@/components/canvas/styleTokens'
 import type { DesignNode } from '@/design/types'
 
 /** ① 画布渲染：下拉选择（缺陷 14 已修复——可交互：点击展开选项、选中更新显示；阻断冒泡不影响画布拖拽） */
@@ -21,11 +22,11 @@ export function CanvasSelect({ props, style }: { props: Record<string, unknown>;
       onPointerDown={(e) => e.stopPropagation()} // 阻断画布拖拽/选中冒泡
       onClick={(e) => e.stopPropagation()}
     >
-      {label && <label className="text-sm font-medium">{label}</label>}
+      {label && <label className="text-sm font-medium" style={{ color: INPUT_LABEL_COLOR }}>{label}</label>}
       <div className="relative">
         <button
           type="button"
-          className="flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-left text-sm"
+          className="flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-left text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:border-ring"
           style={{ color: selected ? 'var(--foreground)' : undefined }}
           data-testid="canvas-select-trigger"
           onClick={() => setOpen((v) => !v)}
@@ -95,10 +96,12 @@ export const selectSchema = [
 export const buildSelectExport = (node: DesignNode): ExportElement => {
   const props = node.props ?? {}
   const options = Array.isArray(props.options) ? props.options.map((o) => String(o)) : []
+  // 默认观感与 input 同口径（CONTROL_DEFAULT_STYLE）；展开/选中态是画布交互，
+  // 导出为原生 <select> 由浏览器接管下拉交互——有意为之。
   return {
     tag: 'select',
     attrs: {},
-    style: styleToCss(node.style),
+    style: { ...CONTROL_DEFAULT_STYLE, ...styleToCss(node.style) },
     children: options.map((o) => ({ tag: 'option', attrs: {}, style: {}, text: o })),
   }
 }

@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 
 import { componentPalette, componentRegistry } from '@/components/canvas/registry'
@@ -193,5 +193,75 @@ describe('T5 批A 画布内联色收敛', () => {
     expect(xAxis?.tick?.fill, 'XAxis tick fill 应为 text-light').toBe(resolveColor('text-light'))
     expect(yAxis?.tick?.fill, 'YAxis tick fill 应为 text-light').toBe(resolveColor('text-light'))
     expect(grid?.stroke, '网格线应为 border 令牌').toBe(resolveColor('border'))
+  })
+})
+
+/** T5 批B：四件套状态体系（hover/active 走 Tailwind 类、disabled 走内联——jsdom 只能测内联与类名） */
+describe('T5 批B 四件套状态', () => {
+  it('button disabled：内联 opacity 0.5 + cursor not-allowed（§4.2.5 决策 a：补齐）', () => {
+    const def = componentRegistry.button
+    const { unmount } = render(<def.Canvas props={{ text: '去支付', disabled: true }} />)
+    const el = screen.getByText('去支付')
+    expect(el.style.opacity).toBe('0.5')
+    expect(el.style.cursor).toBe('not-allowed')
+    unmount()
+    // 未禁用：不加内联 opacity（保持默认观感）
+    render(<def.Canvas props={{ text: '去支付' }} />)
+    expect(screen.getByText('去支付').style.opacity).toBe('')
+  })
+
+  it('button hover/active：填充变体走 brightness（内联底色上仍生效），ghost 保留 bg-accent', () => {
+    expect(VARIANT_CLASS.default).toContain('hover:brightness-90')
+    expect(VARIANT_CLASS.default).toContain('active:brightness-80')
+    expect(VARIANT_CLASS.default).toContain('cursor-pointer')
+    expect(VARIANT_CLASS.ghost).toContain('hover:bg-accent')
+  })
+
+  it('input disabled：内联 opacity + cursor（原仅 Tailwind 类，jsdom 不可测）', () => {
+    const def = componentRegistry.input
+    render(<def.Canvas props={{ placeholder: 'x', disabled: true }} />)
+    const input = screen.getByPlaceholderText('x')
+    expect(input.style.opacity).toBe('0.5')
+    expect(input.style.cursor).toBe('not-allowed')
+  })
+
+  it('input focus-visible：ring 用主题 ring 令牌类（非浏览器默认蓝框）', () => {
+    expect(componentRegistry.input.schema.length).toBeGreaterThan(0)
+    const { container } = render(<componentRegistry.input.Canvas props={{ placeholder: 'x' }} />)
+    const input = container.querySelector('input')!
+    expect(input.className).toContain('focus-visible:ring-2')
+    expect(input.className).toContain('focus-visible:ring-ring')
+  })
+
+  it('select：触发器 focus ring 与 input 同口径；label 内联 text-primary；选中态 bg-accent/60 保留', () => {
+    const def = componentRegistry.select
+    const { container } = render(<def.Canvas props={{ label: '城市', options: ['北京', '上海'] }} />)
+    const trigger = container.querySelector('[data-testid="canvas-select-trigger"]')!
+    expect(trigger.className).toContain('focus-visible:ring-2')
+    expect(trigger.className).toContain('focus-visible:ring-ring')
+    expect(screen.getByText('城市').style.color).toBe(rgb(resolveColor('text-primary')!))
+    // 选中态（green-lock：既有选中视觉不回退）
+    fireEvent.click(trigger)
+    // 注：此处用 document 精确查询而非 screen.getByTestId——实测后者对该中文 testid 匹配失败
+    const option = document.querySelector('[data-testid="canvas-select-option-北京"]') as HTMLElement
+    expect(option, '点击触发器后应出现选项列表').toBeTruthy()
+    fireEvent.click(option)
+    // 选中态：触发器显示已选值（green-lock：选中交互不回退）
+    expect(trigger.textContent).toContain('北京')
+    // 重新展开：选中项带 bg-accent/60 + font-medium（既有选中视觉不回退）
+    fireEvent.click(trigger)
+    const optionAgain = document.querySelector('[data-testid="canvas-select-option-北京"]') as HTMLElement
+    expect(optionAgain.className).toContain('bg-accent/60')
+    expect(optionAgain.className).toContain('font-medium')
+  })
+
+  it('card 默认观感内联：padding/border/圆角/阴影（可测可导出），hover 抬升有意不加', () => {
+    const def = componentRegistry.card
+    const { container } = render(<def.Canvas props={{ title: '卡片标题', content: '内容' }} />)
+    const card = container.firstElementChild as HTMLElement
+    expect(card.style.padding).toBe('24px')
+    expect(card.style.border).toBe(`1px solid ${rgb(resolveColor('border')!)}`)
+    expect(card.style.boxShadow).toBe('0 1px 2px rgba(29,33,41,0.06)') // beautify「极轻」预置
+    expect(card.style.borderRadius).toBe('8px')
   })
 })
