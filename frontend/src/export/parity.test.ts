@@ -10,7 +10,7 @@ import { describe, expect, it } from 'vitest'
 
 import type { ComponentType, DesignNode } from '@/design/types'
 import { resolveColor } from '@/design/styleToCss'
-import { CHART_COLORS } from '@/components/canvas/chart'
+import { CHART_COLORS } from '@/components/canvas/styleTokens'
 import { designToHtml } from './designToHtml'
 import { designToReactApp } from './designToReact'
 

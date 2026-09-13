@@ -7,6 +7,35 @@
 import { resolveColor } from '@/design/styleToCss'
 import { EFFECT_SPECS } from '@/design/beautify'
 
+/**
+ * 变体底色（T5-0 #5 修复，批C 移入本模块）：画布与导出共用同一映射——底色/描边取
+ * design-system.yaml 令牌，填充上的文字统一白（shadcn 主题三处 --*-foreground 均为
+ * #ffffff，令牌表无对应项，收敛为常量）。此前导出 builder 只输出 node.style，
+ * 变体底色整体丢失，导出工程里"按钮没颜色"。
+ */
+export const BUTTON_VARIANT_STYLE: Record<string, React.CSSProperties> = {
+  default: { background: resolveColor('primary'), color: '#FFFFFF' },
+  primary: { background: resolveColor('primary'), color: '#FFFFFF' },
+  secondary: { background: resolveColor('secondary'), color: '#FFFFFF' },
+  outline: { background: '#FFFFFF', border: `1px solid ${resolveColor('border')}` },
+  ghost: {},
+  destructive: { background: resolveColor('danger'), color: '#FFFFFF' },
+}
+
+/**
+ * 图表序列色（T5-0 #2 修复，批C 移入本模块）：画布与导出共用。前四色取
+ * design-system.yaml 令牌（primary/secondary/success/danger，与原画布硬编码值逐一
+ * 相等），第五色令牌表无语义对应、保留原值。此前导出柱色硬编码 #3D7FFF（恰为
+ * dark 主题 primary，与画布 #0052D9 不一致），pie 多系列色在导出侧整体丢失。
+ */
+export const CHART_COLORS: string[] = [
+  resolveColor('primary')!,
+  resolveColor('secondary')!,
+  resolveColor('success')!,
+  resolveColor('danger')!,
+  '#FF6B6B',
+]
+
 /** 令牌 hex → rgba()（表头底色等需要透明度的派生值用） */
 function tokenRgba(token: string, alpha: number): string {
   const hex = resolveColor(token)!

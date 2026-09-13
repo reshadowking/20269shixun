@@ -2,23 +2,9 @@ import { Bar, BarChart, CartesianGrid, Cell, Line, LineChart, Pie, PieChart, Res
 
 import type { ExportElement } from '@/components/canvas/types'
 import { escapeHtml } from '@/design/escape'
-import { resolveColor, styleToCss } from '@/design/styleToCss'
-import { CHART_AXIS_COLOR, CHART_GRID_COLOR } from '@/components/canvas/styleTokens'
+import { styleToCss } from '@/design/styleToCss'
+import { CHART_AXIS_COLOR, CHART_COLORS, CHART_GRID_COLOR } from '@/components/canvas/styleTokens'
 import type { DesignNode } from '@/design/types'
-
-/**
- * 图表序列色（T5-0 #2 修复）：画布与导出共用。前四色取 design-system.yaml 令牌
- * （primary/secondary/success/danger，与原画布硬编码值逐一相等），第五色令牌表
- * 无语义对应、保留原值。此前导出柱色硬编码 #3D7FFF（恰为 dark 主题 primary，
- * 与画布 #0052D9 不一致），pie 多系列色在导出侧整体丢失。
- */
-export const CHART_COLORS: string[] = [
-  resolveColor('primary')!,
-  resolveColor('secondary')!,
-  resolveColor('success')!,
-  resolveColor('danger')!,
-  '#FF6B6B',
-]
 
 interface ChartDatum { [key: string]: unknown }
 

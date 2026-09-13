@@ -1,23 +1,8 @@
 import { escapeHtml } from '@/design/escape'
-import { resolveColor, styleToCss } from '@/design/styleToCss'
-import { DISABLED_STYLE } from '@/components/canvas/styleTokens'
+import { styleToCss } from '@/design/styleToCss'
+import { BUTTON_VARIANT_STYLE, DISABLED_STYLE } from '@/components/canvas/styleTokens'
 import type { DesignNode } from '@/design/types'
 import type { ExportElement } from '@/components/canvas/types'
-
-/**
- * 变体底色（T5-0 #5 修复）：画布与导出共用同一映射——底色/描边取 design-system.yaml
- * 令牌，填充上的文字统一白（shadcn 主题三处 --*-foreground 均为 #ffffff，令牌表
- * 无对应项，收敛为常量）。此前导出 builder 只输出 node.style，变体底色整体丢失，
- * 导出工程里"按钮没颜色"。
- */
-export const BUTTON_VARIANT_STYLE: Record<string, React.CSSProperties> = {
-  default: { background: resolveColor('primary'), color: '#FFFFFF' },
-  primary: { background: resolveColor('primary'), color: '#FFFFFF' },
-  secondary: { background: resolveColor('secondary'), color: '#FFFFFF' },
-  outline: { background: '#FFFFFF', border: `1px solid ${resolveColor('border')}` },
-  ghost: {},
-  destructive: { background: resolveColor('danger'), color: '#FFFFFF' },
-}
 
 /** ① 画布渲染：按钮（样式参考 shadcn/ui Button，自实现 Canvas 版，支持全部 variant）。
  * 导出仅供 B0 契约测试读取合法集合（与组件库/属性面板三方对齐校验）。
