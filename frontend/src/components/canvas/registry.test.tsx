@@ -265,3 +265,43 @@ describe('T5 批B 四件套状态', () => {
     expect(card.style.borderRadius).toBe('8px')
   })
 })
+
+/** T5.5：盒模型/底色内联收敛（#11/#12/#13）——断言的是画布渲染产物（jsdom 可读内联值） */
+describe('T5.5 画布盒模型内联', () => {
+  it('#13 input 控件本体走 CONTROL_DEFAULT_STYLE：圆角 6px（口径 a 画布现状）、高 40、白底', () => {
+    const def = componentRegistry.input
+    render(<def.Canvas props={{ placeholder: '请输入邮箱' }} />)
+    const input = screen.getByPlaceholderText('请输入邮箱')
+    expect(input.style.borderRadius, 'input 圆角应为 6px（rounded-md 现状）').toBe('6px')
+    expect(input.style.height, 'input 高度应内联 40px').toBe('40px')
+    expect(input.style.background, 'input 底色应内联白').toBe('rgb(255, 255, 255)')
+  })
+
+  it('#13 select 触发器同口径：圆角 6px 内联', () => {
+    const def = componentRegistry.select
+    const { container } = render(<def.Canvas props={{ options: ['北京'] }} />)
+    const trigger = container.querySelector('[data-testid="canvas-select-trigger"]') as HTMLElement
+    expect(trigger.style.borderRadius, 'select 触发器圆角应为 6px').toBe('6px')
+  })
+
+  it('#12 button 静态样式内联：圆角 6/字号 14/字重 500/阴影极轻（交互态类保留）', () => {
+    const def = componentRegistry.button
+    render(<def.Canvas props={{ text: '去支付' }} />)
+    const el = screen.getByText('去支付')
+    expect(el.style.borderRadius, 'button 圆角应为 6px').toBe('6px')
+    expect(el.style.fontSize, 'button 字号应为 14px（text-sm）').toBe('14px')
+    expect(el.style.fontWeight, 'button 字重应为 500（font-medium）').toBe('500')
+    expect(el.style.boxShadow, 'button 阴影应为「极轻」预置（shadow-sm 等值）').toBe('0 1px 2px rgba(29,33,41,0.06)')
+    // green-lock：交互态类不因内联化丢失
+    expect(VARIANT_CLASS.default).toContain('hover:brightness-90')
+    expect(VARIANT_CLASS.default).toContain('active:brightness-80')
+  })
+
+  it('#11 card 底色/文字色内联（导出不再透明）', () => {
+    const def = componentRegistry.card
+    const { container } = render(<def.Canvas props={{ title: '卡片标题', content: '内容' }} />)
+    const card = container.firstElementChild as HTMLElement
+    expect(card.style.background, 'card 底色应为白（bg-card 等值）').toBe('rgb(255, 255, 255)')
+    expect(card.style.color, 'card 文字色应为主文本（text-card-foreground 等值）').toBe(rgb(resolveColor('text-primary')!))
+  })
+})

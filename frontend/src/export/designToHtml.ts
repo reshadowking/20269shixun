@@ -14,14 +14,19 @@ function cssText(style: DesignNode['style']): string {
   return cssTextOfCss(styleToCss(style) as Record<string, unknown>)
 }
 
-/** CSSProperties → "kebab: value; …"（字符串值实体化防属性注入；number → px） */
+/** 无单位数值属性（缺口清单 §4.7）：加 px 会被浏览器整条丢弃（opacity: 0.5px 等） */
+const UNITLESS_PROPS = new Set([
+  'opacity', 'fontWeight', 'flex', 'flexGrow', 'flexShrink', 'zIndex', 'order', 'lineHeight', 'aspectRatio',
+])
+
+/** CSSProperties → "kebab: value; …"（字符串值实体化防属性注入；number → px，无单位白名单除外） */
 function cssTextOfCss(css: Record<string, unknown>): string {
   const parts: string[] = []
   for (const [key, value] of Object.entries(css)) {
     if (value === undefined || value === null) continue
     const kebab = key.replace(/[A-Z]/g, (m) => `-${m.toLowerCase()}`)
     // 字符串值过 escapeHtml：防 style="..." 属性逃逸（值含引号可闭合属性注入新属性）
-    const v = typeof value === 'number' ? `${value}px` : escapeHtml(String(value))
+    const v = typeof value === 'number' && !UNITLESS_PROPS.has(key) ? `${value}px` : escapeHtml(String(value))
     parts.push(`${kebab}: ${v}`)
   }
   return parts.join('; ')

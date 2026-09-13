@@ -71,13 +71,15 @@ export const TABLE_HEAD_TEXT_COLOR = resolveColor('text-light')!
 /** 控件禁用态（T5 批B §4.2.5 决策 a）：button/input 共用，内联保证 jsdom 可测、导出可同步 */
 export const DISABLED_STYLE: React.CSSProperties = { opacity: 0.5, cursor: 'not-allowed' }
 
-/** 控件默认观感（T5 批B）：input/select 共用——h-10 px-3 py-2 text-sm rounded-md
- * border-input bg-background 的内联等价（shadcn --background 白与 button 白字同口径）。 */
+/** 控件默认观感（T5 批B；T5.5 圆角口径 a 后与画布类逐项等价）：input/select 共用——
+ * h-10 px-3 py-2 text-sm rounded-md border-input bg-background 的内联等价
+ * （rounded-md = --radius-md = calc(0.5rem - 2px) = 6px，画布现状优先；shadcn
+ * --background 白与 button 白字同口径）。 */
 export const CONTROL_DEFAULT_STYLE: React.CSSProperties = {
   height: 40,
   padding: '8px 12px',
   border: `1px solid ${resolveColor('border')!}`,
-  borderRadius: 8,
+  borderRadius: 6,
   background: '#FFFFFF',
   fontSize: 14,
 }
@@ -85,10 +87,24 @@ export const CONTROL_DEFAULT_STYLE: React.CSSProperties = {
 /** 卡片阴影：取 beautify-effects 预置「极轻」（令牌化阴影预置，非新造 hex） */
 export const CARD_SHADOW = EFFECT_SPECS.find((s) => s.key === 'shadow')!.values[0].value as string
 
-/** 卡片默认观感（T5 批B）：rounded-lg border shadow-sm p-6 的内联等价，画布/导出共用 */
+/** 卡片默认观感（T5 批B；T5.5 并入底色/文字色）：rounded-lg border shadow-sm p-6
+ * bg-card text-card-foreground 的内联等价（shadcn --card 白、--card-foreground 主文本，
+ * 与令牌 text-primary 同值），画布/导出共用。 */
 export const CARD_DEFAULT_STYLE: React.CSSProperties = {
   padding: 24,
   border: `1px solid ${resolveColor('border')!}`,
   borderRadius: 8,
   boxShadow: CARD_SHADOW,
+  background: '#FFFFFF',
+  color: resolveColor('text-primary')!,
+}
+
+/** 按钮静态基础观感（T5.5 #12）：rounded-md text-sm font-medium shadow-sm 的内联等价
+ * （圆角口径 a = 6px；shadow-sm 等值取「极轻」预置）。尺寸相关的 height/padding
+ * 由画布与 buildButtonExport 按 size 计算；交互态（hover/active/focus）走类，导出不实现。 */
+export const BUTTON_BASE_STYLE: React.CSSProperties = {
+  borderRadius: 6,
+  boxShadow: CARD_SHADOW,
+  fontSize: 14,
+  fontWeight: 500,
 }

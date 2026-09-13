@@ -18,8 +18,8 @@ export function CanvasInput({ props, style }: { props: Record<string, unknown>; 
         placeholder={placeholder}
         disabled={Boolean(props.disabled)}
         readOnly
-        className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:border-ring disabled:cursor-not-allowed disabled:opacity-50"
-        style={props.disabled ? DISABLED_STYLE : undefined}
+        className="w-full ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:border-ring disabled:cursor-not-allowed disabled:opacity-50"
+        style={{ ...CONTROL_DEFAULT_STYLE, ...(props.disabled ? DISABLED_STYLE : undefined) }}
       />
     </div>
   )

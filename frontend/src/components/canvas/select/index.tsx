@@ -26,8 +26,8 @@ export function CanvasSelect({ props, style }: { props: Record<string, unknown>;
       <div className="relative">
         <button
           type="button"
-          className="flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-left text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:border-ring"
-          style={{ color: selected ? 'var(--foreground)' : undefined }}
+          className="flex w-full items-center justify-between text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:border-ring"
+          style={{ ...CONTROL_DEFAULT_STYLE, color: selected ? 'var(--foreground)' : undefined }}
           data-testid="canvas-select-trigger"
           onClick={() => setOpen((v) => !v)}
         >

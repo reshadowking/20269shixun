@@ -344,3 +344,59 @@ describe('T5 批B 四件套状态与默认观感（导出侧双通道）', () =>
     expect(html).not.toContain('brightness')
   })
 })
+
+describe('T5.5 #12 button 静态样式导出（与画布内联值一致）', () => {
+  it('圆角 6/阴影极轻/字号 14/字重 500/高度 40/左右内边距 16 双通道', () => {
+    const react = designToReactApp(plainTree('button', { text: '去支付' }), false)
+    const html = designToHtml(plainTree('button', { text: '去支付' }))
+    expect(react, 'React 缺圆角').toContain('"borderRadius":6')
+    expect(react, 'React 缺阴影').toContain('"boxShadow":"0 1px 2px rgba(29,33,41,0.06)"')
+    expect(react, 'React 缺字号').toContain('"fontSize":14')
+    expect(react, 'React 缺字重').toContain('"fontWeight":500')
+    expect(react, 'React 缺高度').toContain('"height":40')
+    expect(react, 'React 缺左右内边距').toContain('"paddingLeft":16')
+    expect(html, 'HTML 缺圆角').toContain('border-radius: 6px')
+    expect(html, 'HTML 缺阴影').toContain('box-shadow: 0 1px 2px rgba(29,33,41,0.06)')
+    expect(html, 'HTML 缺字号').toContain('font-size: 14px')
+    expect(html, 'HTML 缺字重').toContain('font-weight: 500;')
+    expect(html, 'HTML 缺高度').toContain('height: 40px')
+  })
+
+  it('防回退：button 导出不得无圆角（修复前形态）', () => {
+    const html = designToHtml(plainTree('button', { text: '去支付' }))
+    expect(html).toContain('border-radius')
+  })
+})
+
+describe('T5.5 #11 card 底色/文字色导出（不再透明）', () => {
+  it('background 白 + color 主文本双通道', () => {
+    const react = designToReactApp(plainTree('card', { title: '卡片标题', content: '卡片内容' }), false)
+    const html = designToHtml(plainTree('card', { title: '卡片标题', content: '卡片内容' }))
+    expect(react, 'React 缺卡片白底').toContain('"background":"#FFFFFF"')
+    expect(html, 'HTML 缺卡片白底').toContain('background: #FFFFFF')
+    expect(react, 'React 缺主文本色').toContain(`"color":"${resolveColor('text-primary')!}"`)
+    expect(html, 'HTML 缺主文本色').toContain(`color: ${resolveColor('text-primary')!}`)
+  })
+})
+
+describe('T5.5 §4.7 HTML 通道无单位数值属性（双通道数值一致性）', () => {
+  it('禁用 button：两通道 opacity 等值 0.5，HTML 不得出现 0.5px（假安心断言修正）', () => {
+    const react = designToReactApp(plainTree('button', { text: '去支付', disabled: true }), false)
+    const html = designToHtml(plainTree('button', { text: '去支付', disabled: true }))
+    expect(react).toContain('"opacity":0.5')
+    expect(html, 'HTML opacity 应为无单位 0.5').toContain('opacity: 0.5;')
+    expect(html, 'HTML 不得把 opacity 加 px').not.toContain('0.5px')
+  })
+
+  it('font-weight 600 不加 px（卡片标题）', () => {
+    const html = designToHtml(plainTree('card', { title: '卡片标题', content: '卡片内容' }), )
+    expect(html, 'HTML font-weight 应为无单位 600').toContain('font-weight: 600;')
+    expect(html).not.toContain('600px')
+  })
+
+  it('flex 1 不加 px（chart 导出柱）', () => {
+    const html = designToHtml(plainTree('chart', { chartType: 'bar', data: [{ day: '一月', value: 30 }], xKey: 'day', yKey: 'value' }))
+    expect(html, 'HTML flex 应为无单位 1').toContain('flex: 1;')
+    expect(html).not.toContain('flex: 1px')
+  })
+})

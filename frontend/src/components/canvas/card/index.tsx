@@ -12,7 +12,7 @@ export function CanvasCard({ props, style }: { props: Record<string, unknown>; s
     // 默认观感（边框/圆角/阴影/内边距）内联走 CARD_DEFAULT_STYLE——画布/导出同源；
     // hover 抬升有意不加：卡片是静态容器，导出为静态产物，加 hover 会造成观感分叉
     // （任务卡 §4.2.1）；选中态由画布选中框表达。
-    <div className="bg-card text-card-foreground" style={{ ...CARD_DEFAULT_STYLE, ...(style as object) }}>
+    <div style={{ ...CARD_DEFAULT_STYLE, ...(style as object) }}>
       <div className="flex flex-col gap-1.5">
         {title && <div className="text-lg font-semibold">{title}</div>}
         {content && <div className="text-sm" style={{ color: STAT_LABEL_COLOR }}>{content}</div>}
