@@ -400,3 +400,12 @@ describe('T5.5 §4.7 HTML 通道无单位数值属性（双通道数值一致性
     expect(html).not.toContain('flex: 1px')
   })
 })
+
+describe('T5.6 ghost 变体阴影（导出侧）', () => {
+  it('ghost 导出无 boxShadow（防回归）；填充变体仍有', () => {
+    const reactGhost = designToReactApp(plainTree('button', { text: '取消', variant: 'ghost' }), false)
+    expect(reactGhost, 'ghost 导出不应有 boxShadow').not.toContain('"boxShadow"')
+    const reactPrimary = designToReactApp(plainTree('button', { text: '去支付', variant: 'primary' }), false)
+    expect(reactPrimary).toContain('"boxShadow":"0 1px 2px rgba(29,33,41,0.06)"')
+  })
+})

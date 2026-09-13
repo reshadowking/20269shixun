@@ -305,3 +305,15 @@ describe('T5.5 画布盒模型内联', () => {
     expect(card.style.color, 'card 文字色应为主文本（text-card-foreground 等值）').toBe(rgb(resolveColor('text-primary')!))
   })
 })
+
+/** T5.6：ghost 变体无阴影（修复前 ghost 被 BUTTON_BASE_STYLE 无条件施加 boxShadow） */
+describe('T5.6 ghost 变体阴影', () => {
+  it('画布：ghost 无 boxShadow，填充变体仍有「极轻」阴影', () => {
+    const def = componentRegistry.button
+    const { unmount } = render(<def.Canvas props={{ text: '取消', variant: 'ghost' }} />)
+    expect(screen.getByText('取消').style.boxShadow, 'ghost 不应有阴影（修复前无 shadow-sm）').toBe('')
+    unmount()
+    render(<def.Canvas props={{ text: '去支付', variant: 'primary' }} />)
+    expect(screen.getByText('去支付').style.boxShadow).toBe('0 1px 2px rgba(29,33,41,0.06)')
+  })
+})

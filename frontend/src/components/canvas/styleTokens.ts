@@ -7,6 +7,9 @@
 import { resolveColor } from '@/design/styleToCss'
 import { EFFECT_SPECS } from '@/design/beautify'
 
+/** 卡片阴影：取 beautify-effects 预置「极轻」（令牌化阴影预置，非新造 hex） */
+export const CARD_SHADOW = EFFECT_SPECS.find((s) => s.key === 'shadow')!.values[0].value as string
+
 /**
  * 变体底色（T5-0 #5 修复，批C 移入本模块）：画布与导出共用同一映射——底色/描边取
  * design-system.yaml 令牌，填充上的文字统一白（shadcn 主题三处 --*-foreground 均为
@@ -14,12 +17,14 @@ import { EFFECT_SPECS } from '@/design/beautify'
  * 变体底色整体丢失，导出工程里"按钮没颜色"。
  */
 export const BUTTON_VARIANT_STYLE: Record<string, React.CSSProperties> = {
-  default: { background: resolveColor('primary'), color: '#FFFFFF' },
-  primary: { background: resolveColor('primary'), color: '#FFFFFF' },
-  secondary: { background: resolveColor('secondary'), color: '#FFFFFF' },
-  outline: { background: '#FFFFFF', border: `1px solid ${resolveColor('border')}` },
+  // 阴影跟变体走（T5.6 #14）：修复前 ghost 没有 shadow-sm，其余变体有——
+  // BUTTON_BASE_STYLE 不得无条件施加 boxShadow
+  default: { background: resolveColor('primary'), color: '#FFFFFF', boxShadow: CARD_SHADOW },
+  primary: { background: resolveColor('primary'), color: '#FFFFFF', boxShadow: CARD_SHADOW },
+  secondary: { background: resolveColor('secondary'), color: '#FFFFFF', boxShadow: CARD_SHADOW },
+  outline: { background: '#FFFFFF', border: `1px solid ${resolveColor('border')}`, boxShadow: CARD_SHADOW },
   ghost: {},
-  destructive: { background: resolveColor('danger'), color: '#FFFFFF' },
+  destructive: { background: resolveColor('danger'), color: '#FFFFFF', boxShadow: CARD_SHADOW },
 }
 
 /**
@@ -84,9 +89,6 @@ export const CONTROL_DEFAULT_STYLE: React.CSSProperties = {
   fontSize: 14,
 }
 
-/** 卡片阴影：取 beautify-effects 预置「极轻」（令牌化阴影预置，非新造 hex） */
-export const CARD_SHADOW = EFFECT_SPECS.find((s) => s.key === 'shadow')!.values[0].value as string
-
 /** 卡片默认观感（T5 批B；T5.5 并入底色/文字色）：rounded-lg border shadow-sm p-6
  * bg-card text-card-foreground 的内联等价（shadcn --card 白、--card-foreground 主文本，
  * 与令牌 text-primary 同值），画布/导出共用。 */
@@ -99,12 +101,12 @@ export const CARD_DEFAULT_STYLE: React.CSSProperties = {
   color: resolveColor('text-primary')!,
 }
 
-/** 按钮静态基础观感（T5.5 #12）：rounded-md text-sm font-medium shadow-sm 的内联等价
- * （圆角口径 a = 6px；shadow-sm 等值取「极轻」预置）。尺寸相关的 height/padding
- * 由画布与 buildButtonExport 按 size 计算；交互态（hover/active/focus）走类，导出不实现。 */
+/** 按钮静态基础观感（T5.5 #12）：rounded-md text-sm font-medium 的内联等价
+ * （圆角口径 a = 6px）。阴影跟变体走（见 BUTTON_VARIANT_STYLE，ghost 无阴影）；
+ * 尺寸相关的 height/padding 由画布与 buildButtonExport 按 size 计算；
+ * 交互态（hover/active/focus）走类，导出不实现。 */
 export const BUTTON_BASE_STYLE: React.CSSProperties = {
   borderRadius: 6,
-  boxShadow: CARD_SHADOW,
   fontSize: 14,
   fontWeight: 500,
 }

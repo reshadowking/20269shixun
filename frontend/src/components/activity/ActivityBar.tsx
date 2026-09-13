@@ -1,4 +1,4 @@
-import { History, Layers, Palette, Settings, SlidersHorizontal, Sparkles, type LucideIcon } from 'lucide-react'
+import { Code, History, Layers, Palette, Settings, SlidersHorizontal, Sparkles, type LucideIcon } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
 
@@ -9,6 +9,7 @@ export const ACTIVITY_ITEMS: Array<{ key: string; label: string; icon: LucideIco
   { key: 'ai', label: 'AI 生成', icon: Sparkles },
   { key: 'layers', label: '图层管理', icon: Layers },
   { key: 'history', label: '历史版本', icon: History },
+  { key: 'code', label: '代码', icon: Code },
   { key: 'settings', label: '设置', icon: Settings },
 ]
 

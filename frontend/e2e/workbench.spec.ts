@@ -99,3 +99,18 @@ test('双标签页 Yjs 实时同步', async ({ context }) => {
   await expect(noteInB).toHaveCount(0, { timeout: 8000 })
   await expect(noteInA).toHaveCount(0)
 })
+
+test('T6：常驻「代码」面板展示当前设计的 src/App.tsx', async ({ page }) => {
+  ROOM = 'e2e-' + Math.random().toString(36).slice(2, 10)
+  await login(page)
+  await resetDesign(page)
+
+  // 第 7 个活动入口：切到代码面板
+  await page.getByTestId('activity-code').click()
+  await expect(page.getByTestId('code-viewer')).toBeVisible()
+  await expect(page.getByTestId('code-filename')).toHaveText('src/App.tsx')
+  // 产物是当前设计的 TSX：含 React 组件导出与示例稿真实文本
+  const code = await page.getByTestId('code-body').innerText()
+  expect(code).toContain('export default function App')
+  expect(code).toContain('满减优惠券，先到先得，每人限领 3 张')
+})

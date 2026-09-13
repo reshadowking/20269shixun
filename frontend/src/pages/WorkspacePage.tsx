@@ -5,6 +5,7 @@ import { X } from 'lucide-react'
 import ActivityBar, { ACTIVITY_TITLES } from '@/components/activity/ActivityBar'
 import LayerTree from '@/components/activity/LayerTree'
 import BeautifyPanel from '@/components/beautify/BeautifyPanel'
+import CodeViewer from '@/components/export/CodeViewer'
 import AIChatPanel from '@/components/chat/AIChatPanel'
 import { NodeRenderer } from '@/canvas/NodeRenderer'
 import { freezeToFreeLayout } from '@/canvas/freeze'
@@ -25,6 +26,7 @@ import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { BLANK_DESIGN, DEMO_DESIGNS } from '@/design/demoData'
 import { loadDraft, saveDraft } from '@/lib/designSession'
+import { designToReactApp } from '@/export/designToReact'
 import { findNode, findParent as findParentOf, genId } from '@/design/tree'
 import type { ComponentType, DesignNode } from '@/design/types'
 import { api } from '@/lib/api'
@@ -487,6 +489,10 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
   // 右侧活动面板：点击图标展开，再次点击收起
   const [activePanel, setActivePanel] = useState<string | null>('props')
   const togglePanel = (key: string) => setActivePanel((prev) => (prev === key ? null : key))
+
+  // T6：常驻「代码」面板——当前设计对应的 src/App.tsx（与导出对话框同一产物函数，
+  // withComments 同导出默认 true；上传图片在代码里以原始 URL 呈现，导出对话框才做内联）
+  const appCode = useMemo(() => designToReactApp(design, true), [design])
 
   // 左侧组件库折叠
   const [paletteCollapsed, setPaletteCollapsed] = useState(false)
@@ -1126,6 +1132,7 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
                     onVersionSaved={() => setSavedMeta((m) => ({ ...m }))}
                   />
                 )}
+                {activePanel === 'code' && <CodeViewer filename="src/App.tsx" code={appCode} className="h-full" />}
                 {activePanel === 'settings' && (
                   <div className="flex flex-col gap-4 p-4" data-testid="settings-panel">
                     <div className="flex items-center justify-between">
