@@ -31,6 +31,14 @@ def test_component_sources_agree():
     assert SCHEMA_COMPONENTS == LIB_COMPONENTS
 
 
+def test_generate_component_type_names_in_sync():
+    """T8 §4.4：generate.py 手写的 COMPONENT_TYPE_NAMES 必须与 schema/lib 一致——
+    否则 §8 真扩充组件库时（如加 icon），repair 会把刚合法的新组件降级成 frame（静默消失）。"""
+    from app.services.generate import COMPONENT_TYPE_NAMES
+
+    assert set(COMPONENT_TYPE_NAMES) == SCHEMA_COMPONENTS == LIB_COMPONENTS
+
+
 def test_lib_props_fields_covered_by_schema():
     """lib 组件声明的全部 props 字段都必须存在于 schema props 声明（防漏字段）。"""
     lib_fields = {f for c in LIB["components"] for f in (c.get("props") or {})}

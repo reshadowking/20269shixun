@@ -69,10 +69,11 @@ class TestGeneratePipeline:
         assert result.design["id"] == "gen-root"
 
     def test_fill_invalid_schema_falls_back(self):
-        """LLM 产物 Schema 不合法 → 回退模板，不把脏数据上画布。"""
+        """LLM 产物修复后仍不合法 → 回退模板，不把脏数据上画布。
+        （T8 后 type:"not-a-type" 可降级为 frame；改用仍不可修复的形态：根节点缺 id。）"""
         mock = MockResponder(
             intent={"template": "login", "theme": "default", "components": [], "copy_intent": "x", "style_intent": "y", "tone": "z"},
-            fill={"id": "bad", "type": "not-a-type"},  # 非法节点类型
+            fill={"type": "frame", "content": "x"},  # 修复后仍非法（缺 id）
         )
         result = generate_design("登录页", _client(mock))
         assert result.fallback is False

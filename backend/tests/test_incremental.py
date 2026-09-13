@@ -75,9 +75,12 @@ class TestIncrementalEdit:
         assert result.template == "edit"
 
     def test_edit_schema_invalid_returns_original(self):
+        """T8 后 type:"whatever" 可降级、不再属于坏输入；改用仍不可修复的形态
+        （根节点缺 id——repair 不派生根 id），深层意图「不可修复才回退」不变。"""
+
         class BadResponder:
             def __call__(self, system: str, user: str) -> str:
-                return json.dumps({"id": "bad", "type": "whatever"}, ensure_ascii=False) if "设计修改器" in system else ""
+                return json.dumps({"type": "frame", "content": "x"}, ensure_ascii=False) if "设计修改器" in system else ""
 
         result = generate_design("改按钮", LLMClient(mock_responder=BadResponder()), current_design=CURRENT)
         assert result.fallback is True
@@ -202,6 +205,14 @@ class TestIncrementalVocabularyInjection:
         generate_design("加个阴影", LLMClient(mock_responder=spy2), current_design=CURRENT, locked=False)
         assert "## 可用美化效果" in spy2.system_text
         assert "版面锁定阶段" not in spy2.system_text
+
+    def test_prompts_carry_degradation_guidance(self):
+        """T8 §4.3：三段 system 末尾各含降级指引（禁止自创 componentType + 最接近合法组件表达）。"""
+        from app.services.generate import FILL_SYSTEM, FREE_SYSTEM, incremental_system
+
+        for name, text in (("FILL", FILL_SYSTEM), ("FREE", FREE_SYSTEM), ("INCREMENTAL", incremental_system(False))):
+            assert "禁止自创 componentType" in text, f"{name} 缺降级指引"
+            assert "最接近的合法组件" in text, f"{name} 缺替代表达指引"
 
     def test_api_accepts_locked_field(self, client, auth_headers):
         """/api/generate 新增可选 locked：显式传 true 也向后兼容（旧调用方不传仍 200）。"""

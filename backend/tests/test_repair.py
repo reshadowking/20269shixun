@@ -36,10 +36,62 @@ class TestRepairDesign:
         assert fixed["children"][0] == {"id": "nav", "type": "component", "componentType": "navbar"}
         assert fixed["children"][1]["type"] == "text"
 
-    def test_unknown_type_stays_unchanged(self):
-        """不认识的类型不猜（留给 Schema 校验拦截回退）。"""
-        node = {"id": "x", "type": "whatever"}
-        assert repair_design(node)["type"] == "whatever"
+    def test_unknown_bare_type_degraded_to_frame(self):
+        """T8（spec 变更，取代旧 test_unknown_type_stays_unchanged）：裸未知 type 降级 frame——
+        坏节点不再拖垮整棵树；保留 id，降级后过 Schema。"""
+        fixed = repair_design({"id": "x", "type": "tabs"})
+        assert fixed["type"] == "frame"
+        assert fixed["id"] == "x"
+        validate_design(fixed)
+
+    def test_unknown_component_type_degraded_to_frame(self):
+        """T8 核心用例：模型自创 componentType:"icon" → 降级 frame，保留 id/style/children。"""
+        node = {
+            "id": "ic", "type": "component", "componentType": "icon",
+            "style": {"width": 24, "color": "text-light"},
+            "children": [{"id": "c", "type": "text", "props": {"text": "✓"}}],
+        }
+        fixed = repair_design(node)
+        assert fixed["type"] == "frame"
+        assert "componentType" not in fixed
+        assert fixed["id"] == "ic"
+        assert fixed["style"]["width"] == 24
+        assert fixed["children"][0]["props"]["text"] == "✓"
+        validate_design(fixed)  # 红：现状原样放行 → 校验失败
+
+    def test_degrade_salvages_visible_text(self):
+        """T8 §4.2：降级时 props.text 有可见内容 → 抢救为 text 子节点（追加末尾），其余 props 删除。"""
+        node = {"id": "ic", "type": "component", "componentType": "icon", "props": {"text": "★"}}
+        fixed = repair_design(node)
+        assert fixed["type"] == "frame"
+        assert "props" not in fixed
+        assert fixed["children"] == [{"id": "ic-salvaged", "type": "text", "props": {"text": "★"}}]
+        validate_design(fixed)
+
+    def test_unknown_node_key_trimmed(self):
+        """T8 §4.1-4（历史报错真凶）：节点级未知键（content 等）裁剪，不整树回退。"""
+        node = {"id": "f", "type": "frame", "content": "hello"}
+        fixed = repair_design(node)
+        assert "content" not in fixed
+        assert fixed["type"] == "frame"
+        validate_design(fixed)  # 红：现状 Additional properties not allowed ('content')
+
+    def test_known_components_and_conversion_untouched(self):
+        """green-lock：已知组件与 {"type":"button"} 转正路径行为不变，新规则不误伤。"""
+        assert repair_design({"id": "b", "type": "divider"}) == {"id": "b", "type": "component", "componentType": "divider"}
+        assert repair_design({"id": "c", "type": "component", "componentType": "card"}) == {
+            "id": "c", "type": "component", "componentType": "card",
+        }
+        node = {
+            "id": "root", "type": "frame",
+            "children": [
+                {"id": "b1", "type": "component", "componentType": "button", "props": {"text": "x"}},
+                {"id": "u", "type": "component", "componentType": "icon", "props": {"text": "★"}},
+            ],
+        }
+        fixed = repair_design(node)
+        assert fixed["children"][0] == {"id": "b1", "type": "component", "componentType": "button", "props": {"text": "x"}}
+        assert fixed["children"][1]["type"] == "frame"
 
     def test_children_not_list_cleared(self):
         fixed = repair_design({"id": "r", "type": "frame", "children": "oops"})
@@ -130,15 +182,43 @@ class TestGenerateWithRepair:
         assert types == [("component", "navbar"), ("component", "button"), ("component", "divider")]
 
     def test_unrepairable_output_still_falls_back(self):
-        """修复后仍非法（如 type:"whatever"）→ 回退模板，脏数据不上画布。"""
+        """修复后仍非法 → 回退模板，脏数据不上画布。
+        （T8 后 type/componentType 未知可降级，不再属于此类；改用仍不可修复的形态：
+        根节点缺 id——repair 不派生根 id，validator required=["id","type"] 实测拒绝。）"""
 
         class Responder:
             def __call__(self, system: str, user: str) -> str:
-                return json.dumps({"id": "bad", "type": "whatever"}, ensure_ascii=False) if "设计生成器" in system else ""
+                return json.dumps({"type": "frame", "content": "x"}, ensure_ascii=False) if "设计生成器" in system else ""
 
         result = generate_design("登录页", LLMClient(mock_responder=Responder()))
         assert result.fallback is False  # mock 模式不标记降级（回退模板仍生效）
         assert result.design["id"] == "login-root"
+
+
+class TestUnknownComponentEndToEnd:
+    def test_icon_in_tree_no_longer_falls_back(self):
+        """T8 端到端：模型输出含自创 icon → 降级落地（fallback=False、icon 位变 frame、
+        可见文本抢救为 text 子节点、degraded 清单外显）。"""
+
+        fill = {
+            "id": "gen-root", "type": "frame", "style": {"layout": "column"},
+            "children": [
+                {"id": "t", "type": "text", "props": {"text": "标题"}},
+                {"id": "ic", "type": "component", "componentType": "icon", "props": {"text": "★"}},
+            ],
+        }
+
+        class Responder:
+            def __call__(self, system: str, user: str) -> str:
+                return json.dumps(fill, ensure_ascii=False) if "设计生成器" in system else ""
+
+        result = generate_design("登录页", LLMClient(mock_responder=Responder()))
+        assert result.fallback is False, result.error
+        assert result.design["id"] == "gen-root"  # 红：现状整树回退 → login-root
+        assert result.design["children"][0]["props"]["text"] == "标题"
+        assert result.design["children"][1]["type"] == "frame"  # icon 位降级
+        assert result.design["children"][1]["children"][0]["props"]["text"] == "★"  # 文本抢救
+        assert result.degraded == ["icon@ic"]  # 降级清单外显
 
 
 class TestLongPromptEndpoint:

@@ -39,6 +39,8 @@ class GenerateResponse(BaseModel):
     error: str = ""
     # B2-2：逐项合规拉回明细 [{node_id, field, original, corrected}]（前端逐项报告/还原用）
     violations_detail: list = []
+    # T8：本轮降级明细（["icon@节点id"]）——附加字段，前端暂未消费（已知静默行为）
+    degraded: list = []
 
 
 @router.post("/api/generate", response_model=GenerateResponse)
@@ -61,6 +63,7 @@ def generate(req: GenerateRequest, _user: str = Depends(get_current_user)):
         mock=result.mock,
         error=result.error,
         violations_detail=result.violations_detail,
+        degraded=result.degraded,
     )
 
 

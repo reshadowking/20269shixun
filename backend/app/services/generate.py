@@ -60,7 +60,10 @@ button, card, input, select, table, chart, stat-block, navbar, sidebar, avatar, 
     输出前检查每个对象闭合。
 11. 输出体积（严格遵守）：使用紧凑 JSON——嵌套层级之间允许必要换行，但不要为空行、
     不要大段缩进（如每行 16 空格）、不要重复冗余字段；输出越长越容易在尾部出错。
-    目标是整棵树的输出 token 越少越好。"""
+    目标是整棵树的输出 token 越少越好。
+12. 需求里出现图标、开关、标签页、分页、弹窗等组件白名单外的元素：禁止自创 componentType
+    （如 icon/switch/tabs/pagination/dialog，会导致整稿被拒）；用最接近的合法组件表达——
+    图标→text 或 tag（放符号字符）、开关→button、标签页/分页→一排 button、弹窗→frame + 按钮。"""
 
 # 用户指定色提取：prompt 中的 hex（品牌色不被合规检查器拉回，v2.2 §4.5）
 HEX_RE = re.compile(r"#[0-9a-fA-F]{3,8}\b")
@@ -200,12 +203,53 @@ def _repair_props(node: dict) -> None:
                 gen_logger.debug("修复 props.%s 非对象 %r 已删除", key, value)
 
 
-def repair_design(node: dict) -> dict:
-    """宽容化修复 LLM 产物的常见格式错误（不认识的节点原样保留，仍非法则回退模板）。
+# T8：已知节点类型（schema type 枚举）与节点级键白名单——降级/裁剪的判定依据
+KNOWN_NODE_TYPES = frozenset({"frame", "text", "rect", "component", "group"})
+NODE_KEYS = frozenset({"id", "type", "componentType", "props", "style", "x", "y", "hidden", "children"})
 
-    常见错误：模型把组件名直接写进 type（如 {"type": "divider"}），
-    或样式数值超界（如 radius: 100 超出 0-64）。
+
+def _salvage_text_child(node: dict) -> dict | None:
+    """降级前抢救可见文本：props.text/label/name 的第一个非空字符串 → text 子节点。"""
+    props = node.get("props")
+    if not isinstance(props, dict):
+        return None
+    for key in ("text", "label", "name"):
+        value = props.get(key)
+        if isinstance(value, str) and value.strip():
+            return {"id": f"{node.get('id', 'n')}-salvaged", "type": "text", "props": {"text": value}}
+    return None
+
+
+def _degrade_to_frame(node: dict, reason: str, degraded: list[str] | None) -> None:
+    """T8：未知组件/未知节点类型降级为 frame——保留 id/style/x/y/hidden/children；
+    可见文本（props.text/label/name）抢救为 text 子节点追加末尾，其余 props 删除
+    （避免把未知组件的语义塞进 frame）。每次降级写生成日志（评测脚本消费生成日志）。"""
+    salvaged = _salvage_text_child(node)
+    node["type"] = "frame"
+    node.pop("componentType", None)
+    node.pop("props", None)
+    children = node.get("children")
+    if salvaged is not None:
+        if not isinstance(children, list):
+            children = []
+        children.append(salvaged)
+        node["children"] = children
+    if degraded is not None:
+        degraded.append(f"{reason}@{node.get('id', '?')}")
+    gen_logger.info("未知节点降级为 frame：%s（id=%s，可见文本%s）", reason, node.get("id"), "已抢救" if salvaged else "无")
+
+
+def repair_design(node: dict, degraded: list[str] | None = None) -> dict:
+    """宽容化修复 LLM 产物的常见格式错误（T8：未知组件/未知类型降级 frame、未知键裁剪，
+    不再原样放行拖垮整棵树；仍无法修复的形态交由 Schema 校验回退兜底）。
+
+    修复范围：组件名误写进 type（如 {"type": "divider"}）转正；样式数值超界 clamp；
+    未知 componentType（如自创 "icon"）与裸未知 type（如 "tabs"）降级 frame；
+    节点级未知键（如 "content"，Additional properties 报错来源）裁剪。
     这类错误只占整棵树的少数节点，修复后可保留 LLM 的其余成果，避免整棵回退。
+
+    degraded：可选降级清单累积器（generate_design 传入以向 API 外显降级明细，
+    形如 ["icon@节点id"]）；直接调用方（测试等）不传则不收集。
     """
     node = dict(node)
     t = node.get("type")
@@ -217,6 +261,16 @@ def repair_design(node: dict) -> dict:
         node["componentType"] = t
     elif ct is not None and t is None:
         node["type"] = "component"
+    # T8：先转正再判合法性（{"type":"button"} 已在上面转成合法组件，不会被误伤）。
+    # componentType 缺失的 component 节点 Schema 本就合法，不在降级之列。
+    if node.get("type") == "component" and isinstance(node.get("componentType"), str) and node["componentType"] not in COMPONENT_TYPE_NAMES:
+        _degrade_to_frame(node, node["componentType"], degraded)
+    elif node.get("type") not in KNOWN_NODE_TYPES:
+        _degrade_to_frame(node, str(node.get("type")), degraded)
+    # T8：节点级未知键裁剪（"Additional properties are not allowed" 历史报错的来源）
+    for key in [k for k in node if k not in NODE_KEYS]:
+        node.pop(key)
+        gen_logger.debug("裁剪节点级未知键 %s（id=%s）", key, node.get("id"))
     _clamp_style(node)
     _repair_props(node)
     children = node.get("children")
@@ -232,7 +286,7 @@ def repair_design(node: dict) -> dict:
                         child = dict(child)
                         child["id"] = f"{node.get('id', 'n')}-c{i}"
                         gen_logger.debug("修复 children 元素缺 id → %s", child["id"])
-                    child = repair_design(child)
+                    child = repair_design(child, degraded)
                 else:
                     # 字符串等非对象元素 → text 节点（模型把菜单项/标签直接写进 children）
                     child = {"id": f"{node.get('id', 'n')}-c{i}", "type": "text", "props": {"text": str(child)}}
@@ -260,7 +314,10 @@ button, card, input, select, table, chart, stat-block, navbar, sidebar, avatar, 
 8. 节点格式（严格遵守）：容器用 {"type":"frame"}；组件必须用 {"type":"component","componentType":"组件类型"}，
    禁止把组件名直接写在 type 字段（例如 {"type":"divider"} 或 {"type":"button"} 都是错的）。
 9. 输出体积（严格遵守）：使用紧凑 JSON——嵌套层级之间允许必要换行，不要空行、不要大段缩进；
-   输出越长越容易在尾部出错，整棵树输出 token 越少越好。"""
+   输出越长越容易在尾部出错，整棵树输出 token 越少越好。
+10. 需求里出现图标、开关、标签页、分页、弹窗等组件白名单外的元素：禁止自创 componentType
+    （如 icon/switch/tabs/pagination/dialog，会导致整稿被拒）；用最接近的合法组件表达——
+    图标→text 或 tag（放符号字符）、开关→button、标签页/分页→一排 button、弹窗→frame + 按钮。"""
 
 
 def extract_user_colors(prompt: str) -> list[str]:
@@ -285,7 +342,10 @@ INCREMENTAL_SYSTEM = """你是 AI 设计修改器。基于给定的 DesignNode �
 4. 组件类型必须用 {"type":"component","componentType":"xxx"}；样式颜色优先令牌名
    （primary/secondary/danger/success/background/text-primary/text-secondary/text-light/border），用户指定 hex 原样。
 5. 字号 fontSize 用数字（8-96）；间距 gap/圆角 radius 用数字。
-6. 输出必须是合法 JSON（完整 DesignNode 树），不要输出任何其他内容；JSON 语法必须正确（属性间逗号、对象闭合）。"""
+6. 输出必须是合法 JSON（完整 DesignNode 树），不要输出任何其他内容；JSON 语法必须正确（属性间逗号、对象闭合）。
+7. 需求里出现图标、开关、标签页、分页、弹窗等组件白名单外的元素：禁止自创 componentType
+   （如 icon/switch/tabs/pagination/dialog，会导致整稿被拒）；用最接近的合法组件表达——
+   图标→text 或 tag（放符号字符）、开关→button、标签页/分页→一排 button、弹窗→frame + 按钮。"""
 
 # T4 批2：锁定阶段的额外约束段（仅 locked=True 时追加到增量提示词末尾）
 LOCKED_STAGE_SECTION = """
@@ -376,6 +436,8 @@ class GenerateResult:
     error: str = ""  # LLM 失败原因（限流/超时等），供前端展示与排查
     # B2-2：逐项合规拉回明细（node_id/field/original/corrected），供逐项报告 UI
     violations_detail: list = field(default_factory=list)
+    # T8：本轮降级明细（["icon@节点id"]，无降级为空）——前端暂未消费（已知静默行为，见 T8 报告）
+    degraded: list[str] = field(default_factory=list)
 
 
 # ---- T4 前置：mock 模式增量修改（确定性关键词规则，无 LLM）----
@@ -455,6 +517,7 @@ def generate_design(
     fallback = False
     error = ""
     is_edit = current_design is not None
+    degraded: list[str] = []  # T8：本轮降级明细（["icon@节点id"]），随结果外显
     start_all = time.perf_counter()
     gen_logger.info("生成开始 prompt=%d字符 mode=%s", len(prompt), "edit" if is_edit else "full")
 
@@ -525,8 +588,9 @@ def generate_design(
                 error = "参数填充未返回有效 JSON（模型限流或超时）"
             filled = default
         else:
-            # LLM 产物先宽容修复常见格式错误（type 误写/数值超界/枚举非法/props 类型），再过 Schema
-            filled = repair_design(filled)
+            # LLM 产物先宽容修复常见格式错误（type 误写/数值超界/枚举非法/props 类型），
+            # T8 起未知组件/未知类型降级、未知键裁剪（不再整树回退），再过 Schema
+            filled = repair_design(filled, degraded)
             try:
                 validate_design(filled)
             except SchemaError as exc:
@@ -570,4 +634,5 @@ def generate_design(
         mock=client.is_mock,
         error=error,
         violations_detail=[asdict(f) for f in fixes],
+        degraded=degraded,
     )
