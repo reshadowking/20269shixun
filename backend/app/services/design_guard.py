@@ -13,34 +13,20 @@ import json
 from pathlib import Path
 from typing import Final
 
-# 页面类型词（与模板关键词同源，命中即视为设计请求）
-PAGE_KEYWORDS: Final[tuple[str, ...]] = (
-    "页面", "登录", "注册", "电商", "优惠", "商城", "购物", "仪表", "报表", "数据大屏",
-    "表单", "登记", "问卷", "列表", "订单", "文章", "博客", "落地页", "推广", "设置页",
-    "个人主页", "首页", "导航", "课程", "论坛", "详情页", "活动页", "会场",
-)
-
-# 设计动词
-DESIGN_VERBS: Final[tuple[str, ...]] = (
-    "设计", "生成", "创建", "做", "画", "把", "将", "改成", "改为", "变成", "调大", "调小",
-    "放大", "缩小", "移动", "删除", "加个", "添加", "换颜色", "加宽", "加高",
-)
-
-# UI/组件词
-UI_KEYWORDS: Final[tuple[str, ...]] = (
-    "ui", "界面", "布局", "按钮", "颜色", "色彩", "间距", "圆角", "字体", "字号",
-    "图标", "图片", "背景", "导航栏", "侧边栏", "卡片", "表格", "图表", "输入框",
-    "下拉", "头像", "标签", "分割线", "标题", "画布", "设计稿", "样式", "轮播", "页脚",
-)
-
-# 缺口清单 §4.6 方案 A：组件词/效果词的单一来源是 shared/design-guard-words.json
-# （与前端 designGuard.ts 共读同一文件，模式同 beautify-effects.json）——扩充效果库时
-# 只改 JSON 一处，两端判定自动同步；契约测试（TestGuardWordsSharedSource）防漂移。
 ROOT = Path(__file__).resolve().parent.parent.parent.parent
 GUARD_WORDS_FILE = ROOT / "shared" / "design-guard-words.json"
 with GUARD_WORDS_FILE.open(encoding="utf-8") as f:
     _GUARD_WORDS: dict[str, list[str]] = json.load(f)
 
+# T10 §2.3：三张基础词表与 componentWords/effectWords 同住 shared/design-guard-words.json
+# （单一来源，取前后端并集）——改词只改 JSON 一处，两端判定自动同步。
+PAGE_KEYWORDS: Final[list[str]] = _GUARD_WORDS["pageKeywords"]
+DESIGN_VERBS: Final[list[str]] = _GUARD_WORDS["designVerbs"]
+UI_KEYWORDS: Final[list[str]] = _GUARD_WORDS["uiKeywords"]
+
+# 缺口清单 §4.6 方案 A：组件词/效果词的单一来源是 shared/design-guard-words.json
+# （与前端 designGuard.ts 共读同一文件，模式同 beautify-effects.json）——扩充效果库时
+# 只改 JSON 一处，两端判定自动同步；契约测试（TestGuardWordsSharedSource）防漂移。
 # 直接引用已加载的列表（运行时单一来源；测试通过追加假词可观测"读取"语义）
 COMPONENT_WORDS: Final[list[str]] = _GUARD_WORDS["componentWords"]
 EFFECT_WORDS: Final[list[str]] = _GUARD_WORDS["effectWords"]

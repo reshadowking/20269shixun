@@ -535,3 +535,39 @@ describe('T8 收尾：degraded 降级提示（缺口清单 §4.8）', () => {
     expect(screen.queryByText(/项能力暂不支持/)).not.toBeInTheDocument()
   })
 })
+
+describe('T10：守卫分级（增量路径放行，缺口清单 §4.9）', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    localStorage.clear()
+  })
+
+  it('有设计稿 + 「加高级功能」：请求发出、不显示角色拒答', async () => {
+    const fetchMock = mockFetch({ questions: [] })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<AIChatPanel sessionKey="s-test" onGenerate={() => {}} design={DESIGN as DesignNode} />)
+    typeAndSend('加高级功能')
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some((c) => String(c[0]) === '/api/generate')).toBe(true)
+    })
+    expect(screen.queryByText(/只负责 UI/)).not.toBeInTheDocument()
+  })
+
+  it('无设计稿 + 同句：仍被拦（首轮守卫强度保持）', async () => {
+    const fetchMock = mockFetch({ questions: [] })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<AIChatPanel sessionKey="s-test" onGenerate={() => {}} />)
+    typeAndSend('加高级功能')
+    expect(await screen.findByText(/只负责 UI/)).toBeInTheDocument()
+    expect(fetchMock.mock.calls.some((c) => String(c[0]).includes('/api/generate'))).toBe(false)
+  })
+
+  it('有设计稿但无编辑动词（今天天气怎么样）：仍被拦', async () => {
+    const fetchMock = mockFetch({ questions: [] })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<AIChatPanel sessionKey="s-test" onGenerate={() => {}} design={DESIGN as DesignNode} />)
+    typeAndSend('今天天气怎么样')
+    expect(await screen.findByText(/只负责 UI/)).toBeInTheDocument()
+    expect(fetchMock.mock.calls.some((c) => String(c[0]).includes('/api/generate'))).toBe(false)
+  })
+})

@@ -39,3 +39,28 @@ test('聊天生成设计稿 → 画布更新', async ({ page }) => {
   // 锁定解除
   await expect(page.getByTestId('canvas-lock')).toHaveCount(0)
 })
+
+test('T10：增量上下文里原先被拦的说法（加高级功能）现在能走通', async ({ page }) => {
+  ROOM = 'e2e-' + Math.random().toString(36).slice(2, 10)
+  test.setTimeout(120_000)
+  await page.goto('/workspace?room=' + ROOM)
+  if (await page.getByTestId('login-password').isVisible().catch(() => false)) {
+    await page.getByTestId('login-password').fill('demo123')
+    await page.getByTestId('login-submit').click()
+  }
+  await expect(page.getByTestId('workspace-page')).toBeVisible()
+  await page.getByTestId('activity-ai').click()
+  await expect(page.getByTestId('ai-chat-panel')).toBeVisible()
+
+  // 先出稿（mock 后端即时返回）
+  await page.getByTestId('chat-input').fill('设计一个登录页面，简洁风格')
+  await page.getByTestId('chat-send').click()
+  await expect(page.getByTestId('node-login-root')).toBeVisible({ timeout: 15_000 })
+
+  // 有设计稿后说「加高级功能」——§4.9 实测曾被本地守卫误拦（请求根本没发出）
+  await page.getByTestId('chat-input').fill('加高级功能')
+  await page.getByTestId('chat-send').click()
+  // 严格断言：本轮增量修改真的落地（不能被第一条生成的历史消息空匹配）
+  await expect(page.getByText(/已应用修改 ✓/)).toBeVisible({ timeout: 15_000 })
+  await expect(page.getByText(/只负责 UI/)).toHaveCount(0)
+})

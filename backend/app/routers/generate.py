@@ -46,8 +46,9 @@ class GenerateResponse(BaseModel):
 @router.post("/api/generate", response_model=GenerateResponse)
 def generate(req: GenerateRequest, _user: str = Depends(get_current_user)):
     """自然语言生成设计稿（意图解析 + 模板匹配 + 参数填充 + 合规检查）。"""
-    # 缺陷 9：角色边界——无关请求礼貌拒答（防绕过）
-    if not is_design_request(req.prompt):
+    # 缺陷 9 + T10：角色边界分级——带 design 的增量修改不调守卫（「有设计稿且提要求」
+    # 本来就该放行，§4.9 实测「加高级功能」被误拦）；首轮生成保持原有强度。
+    if req.design is None and not is_design_request(req.prompt):
         raise HTTPException(status_code=422, detail=GUARD_REPLY)
     try:
         result = generate_design(req.prompt, current_design=req.design, locked=req.locked)

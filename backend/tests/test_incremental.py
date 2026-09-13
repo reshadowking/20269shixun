@@ -206,6 +206,14 @@ class TestIncrementalVocabularyInjection:
         assert "## 可用美化效果" in spy2.system_text
         assert "版面锁定阶段" not in spy2.system_text
 
+    def test_incremental_prompt_off_topic_fallback(self):
+        """T10 §2.2：增量路径放行后的提示词兜底——与界面设计无关的要求保持 current_design 原样。"""
+        from app.services.generate import incremental_system
+
+        for locked in (False, True):
+            text = incremental_system(locked)
+            assert "保持 current_design 原样不变" in text, f"locked={locked} 缺兜底"
+
     def test_prompts_carry_degradation_guidance(self):
         """T8 §4.3：三段 system 末尾各含降级指引（禁止自创 componentType + 最接近合法组件表达）。"""
         from app.services.generate import FILL_SYSTEM, FREE_SYSTEM, incremental_system

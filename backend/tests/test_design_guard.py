@@ -41,6 +41,36 @@ class TestGuardRules:
             assert not is_design_request(prompt), f"应拦截: {prompt}"
 
 
+class TestGuardWordsTablesSharedSource:
+    """T10 §2.3：三张表（pageKeywords/designVerbs/uiKeywords）搬进 shared JSON，两端共读。
+    取前后端并集（后端独有的 10 个词是真实缺失，不是脏数据）。"""
+
+    def test_loaded_word_tables_match_shared_file(self):
+        from app.services.design_guard import DESIGN_VERBS, PAGE_KEYWORDS, UI_KEYWORDS
+
+        assert list(PAGE_KEYWORDS) == SHARED_WORDS["pageKeywords"]
+        assert list(DESIGN_VERBS) == SHARED_WORDS["designVerbs"]
+        assert list(UI_KEYWORDS) == SHARED_WORDS["uiKeywords"]
+
+    def test_fake_page_word_takes_effect(self):
+        """证明是"读取"而非"抄写"：给加载结果追加假页面词 → 判定即时变化。"""
+        from app.services import design_guard
+
+        design_guard.PAGE_KEYWORDS.append("布拉格")
+        try:
+            assert design_guard.is_design_request("布拉格测试词你好") is True
+        finally:
+            design_guard.PAGE_KEYWORDS.remove("布拉格")
+        assert design_guard.is_design_request("布拉格测试词你好") is False
+
+    def test_union_vectors_previously_divergent(self):
+        """§4.9 两端分叉的说法（仅后端有的词）取并集后放行——前端曾拦、后端曾放，现在一致。"""
+        from app.services.design_guard import is_design_request
+
+        for prompt in ("把页脚改成深色", "加个轮播图", "做一个数据大屏", "加个推广模块", "开个论坛页面"):
+            assert is_design_request(prompt) is True, prompt
+
+
 class TestGuardApi:
     def test_generate_blocked_with_guard_reply(self, client, auth_headers):
         resp = client.post("/api/generate", json={"prompt": "帮我写首诗"}, headers=auth_headers)
@@ -51,6 +81,22 @@ class TestGuardApi:
         resp = client.post("/api/generate/questions", json={"prompt": "今天天气怎么样"}, headers=auth_headers)
         assert resp.status_code == 422
         assert GUARD_REPLY in resp.json()["detail"]
+
+    def test_generate_with_design_skips_guard(self, client, auth_headers):
+        """T10 批1：增量路径（带 design）不再调角色守卫——「加高级功能」这类说法直达模型。"""
+        resp = client.post(
+            "/api/generate",
+            json={"prompt": "加高级功能", "design": {"id": "d1", "type": "frame", "style": {"layout": "column"}, "children": []}},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200, resp.text[:200]
+        assert resp.json()["template"] == "edit"
+
+    def test_generate_without_design_still_guarded_for_same_prompt(self, client, auth_headers):
+        """T10 批1：无设计稿时强度保持——同句仍被守卫拦下。"""
+        resp = client.post("/api/generate", json={"prompt": "加高级功能"}, headers=auth_headers)
+        assert resp.status_code == 422
+        assert "AI 设计助手" in resp.json()["detail"]
 
     def test_generate_questions_has_design_bypass(self, client, auth_headers):
         """增量修改（has_design）放行——改现有设计必是设计请求。"""

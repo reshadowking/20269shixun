@@ -546,15 +546,18 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
       }
       return
     }
-    // 缺陷 9：角色边界——无关请求不发请求，礼貌提示
-    if (!isDesignRequest(raw)) {
+    // 缺陷 9 + T10：角色边界分级——增量修改路径（有设计稿且命中编辑动词）不再调守卫：
+    // "用户在有设计稿时提要求"本来就该直达模型（§4.9 实测「加高级功能」被误拦）。
+    // 首轮生成保持原有强度——「今天天气怎么样」这类无编辑动词的话仍被拦下。
+    const incremental = Boolean(design) && isEditIntent(raw)
+    if (!incremental && !isDesignRequest(raw)) {
       setMessages((m) => [...m, { role: 'assistant', text: GUARD_HINT }])
       return
     }
     const prompt = stripCommandWords(raw)
     const quick = detectQuickCommands(raw)
     // P0-1：修改类指令且画布有设计 → 增量编辑（跳过追问，携带当前树）
-    if (design && isEditIntent(raw)) {
+    if (incremental) {
       await runGenerate(prompt, design)
       return
     }

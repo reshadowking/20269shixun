@@ -345,7 +345,9 @@ INCREMENTAL_SYSTEM = """你是 AI 设计修改器。基于给定的 DesignNode �
 6. 输出必须是合法 JSON（完整 DesignNode 树），不要输出任何其他内容；JSON 语法必须正确（属性间逗号、对象闭合）。
 7. 需求里出现图标、开关、标签页、分页、弹窗等组件白名单外的元素：禁止自创 componentType
    （如 icon/switch/tabs/pagination/dialog，会导致整稿被拒）；用最接近的合法组件表达——
-   图标→text 或 tag（放符号字符）、开关→button、标签页/分页→一排 button、弹窗→frame + 按钮。"""
+   图标→text 或 tag（放符号字符）、开关→button、标签页/分页→一排 button、弹窗→frame + 按钮。
+8. 若用户要求与界面设计无关（例如写诗、算术、闲聊），保持 current_design 原样不变，不要为了
+   "完成指令"去改动任何节点。"""
 
 # T4 批2：锁定阶段的额外约束段（仅 locked=True 时追加到增量提示词末尾）
 LOCKED_STAGE_SECTION = """

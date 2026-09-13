@@ -15,7 +15,13 @@ import { isDesignRequest } from './designGuard'
 /** 与 beautify.test.ts 同范式：vitest cwd 为 frontend/，shared 在其上一级 */
 const SHARED_WORDS = JSON.parse(
   readFileSync(resolve(process.cwd(), '../shared/design-guard-words.json'), 'utf-8'),
-) as { componentWords: string[]; effectWords: string[] }
+) as {
+  componentWords: string[]
+  effectWords: string[]
+  pageKeywords: string[]
+  designVerbs: string[]
+  uiKeywords: string[]
+}
 
 describe('designGuard（缺陷 9 角色边界）', () => {
   it('设计请求放行（既有口径回归）', () => {
@@ -79,5 +85,29 @@ describe('designGuard 词表单一来源（§4.6 方案 A：shared/design-guard-
       effectWords.pop()
     }
     expect(isDesignRequest('给按钮加测试假效果')).toBe(false)
+  })
+})
+
+describe('T10：三张表搬进 shared JSON（缺口清单 §4.9）', () => {
+  it('三张表加载结果 == shared JSON 内容', () => {
+    expect(guardWords.pageKeywords).toEqual(SHARED_WORDS.pageKeywords)
+    expect(guardWords.designVerbs).toEqual(SHARED_WORDS.designVerbs)
+    expect(guardWords.uiKeywords).toEqual(SHARED_WORDS.uiKeywords)
+  })
+
+  it('假页面词生效：判定跟着变（读取而非抄写）', () => {
+    const pageKeywords = guardWords.pageKeywords as string[]
+    pageKeywords.push('布拉格')
+    try {
+      expect(isDesignRequest('布拉格测试词你好')).toBe(true)
+    } finally {
+      pageKeywords.pop()
+    }
+    expect(isDesignRequest('布拉格测试词你好')).toBe(false)
+  })
+
+  it('并集向量：§4.9 两端分叉的说法现在放行（前端曾拦的那批）', () => {
+    const allowed = ['把页脚改成深色', '加个轮播图', '做一个数据大屏', '加个推广模块', '开个论坛页面']
+    for (const prompt of allowed) expect(isDesignRequest(prompt), prompt).toBe(true)
   })
 })
