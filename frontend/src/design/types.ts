@@ -25,6 +25,7 @@ export type ComponentType =
   | 'hero'
   | 'image'
   | 'icon'
+  | 'switch'
 
 export type LayoutMode = 'row' | 'column' | 'grid' | 'free'
 
@@ -34,6 +35,7 @@ export interface ComponentProps {
   label?: string
   placeholder?: string
   disabled?: boolean
+  checked?: boolean
   variant?: string
   size?: string
   options?: string[]
@@ -102,5 +104,5 @@ export interface DesignNode {
 
 export const COMPONENT_TYPES: ComponentType[] = [
   'button', 'card', 'input', 'select', 'table', 'chart', 'stat-block',
-  'navbar', 'sidebar', 'avatar', 'tag', 'divider', 'title-text', 'hero', 'image', 'icon',
+  'navbar', 'sidebar', 'avatar', 'tag', 'divider', 'title-text', 'hero', 'image', 'icon', 'switch',
 ]

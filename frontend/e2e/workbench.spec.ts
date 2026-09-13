@@ -136,3 +136,27 @@ test('T9：icon 组件面板添加 → 画布渲染 svg 图标 → 可选中改�
   await nameSelect.selectOption('heart')
   await expect(iconNode.locator('path')).toHaveAttribute('d', /.+/)
 })
+
+test('T9：switch 组件添加 → 点击切换状态进树（轨道变色）→ 再点切回', async ({ page }) => {
+  ROOM = 'e2e-' + Math.random().toString(36).slice(2, 10)
+  await login(page)
+  await resetDesign(page)
+
+  await page.getByTestId('palette-switch').click()
+  const switchNode = page.locator('[data-node-id^="switch-"]').last()
+  await expect(switchNode).toBeVisible()
+  const track = switchNode.locator('[data-testid="canvas-switch-track"]')
+
+  // 点击切换：写 props.checked（状态进树）→ 轨道变主色（primary #0052D9）
+  await track.click()
+  await expect(track).toHaveAttribute('style', /rgb\(0, 82, 217\)/)
+
+  // 再点切回：轨道不再是主色
+  await track.click()
+  await expect(track).not.toHaveAttribute('style', /rgb\(0, 82, 217\)/)
+
+  // 选中节点（面板新增节点无 label，点轨道右侧空白区；轨道本身 stopPropagation 不选中）→
+  // 属性面板出现 checked 开关控件
+  await switchNode.click({ position: { x: 150, y: 11 } })
+  await expect(page.getByTestId('prop-checked')).toBeVisible()
+})

@@ -121,6 +121,18 @@ class TestRecommender:
         assert recs[0]["component_type"] == "button"
         assert recs[0]["default_props"]["text"] == "提交"
 
+    def test_form_container_recommends_switch(self):
+        """T9：表单容器追加 switch 推荐（订阅/协议类确认项）。"""
+        design = {
+            "id": "root", "type": "frame",
+            "children": [
+                {"id": "f", "type": "frame",
+                 "children": [{"id": "i1", "type": "component", "componentType": "input", "props": {"label": "姓名"}}]},
+            ],
+        }
+        recs = recommend_components(design, "f")
+        assert any(r["component_type"] == "switch" for r in recs)
+
     def test_stat_container_recommends_chart(self):
         design = {
             "id": "root", "type": "frame",

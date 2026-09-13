@@ -40,7 +40,7 @@ def _rec(component_type: str, reason: str, index: int, props: dict | None = None
 
 
 def recommend_components(design: dict[str, Any], container_id: str) -> list[dict]:
-    """按容器上下文返回 0-3 条推荐（找不到节点返回空列表）。"""
+    """按容器上下文返回 0-4 条推荐（找不到节点返回空列表；T9 起表单容器追加 switch）。"""
     node = _find_node(design, container_id)
     if node is None:
         return []
@@ -94,11 +94,12 @@ def recommend_components(design: dict[str, Any], container_id: str) -> list[dict
             rec("tag", "角标标签突出重要状态", {"text": "NEW"}),
         ]
     if "input" in types or "select" in types:
-        # 表单容器：提交按钮 + 补充字段
+        # 表单容器：提交按钮 + 补充字段 + 开关确认项（T9）
         return [
             rec("button", "表单提交按钮完成主操作", {"text": "提交", "variant": "primary"}),
             rec("select", "下拉选择收集结构化数据", {"label": "选项", "options": ["选项 A", "选项 B"]}),
             rec("input", "补充录入字段完善表单", {"label": "补充信息", "placeholder": "选填"}),
+            rec("switch", "开关适合订阅/协议类确认项", {"label": "接收通知"}),
         ]
     if "stat-block" in types:
         # 数据容器：图表 + 表格让数据可视化

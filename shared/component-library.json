@@ -1,5 +1,5 @@
 {
-  "_comment": "组件库唯一规范源（E5-2：MCP get_component_library 数据源）。16 个组件，与前端组件注册表、AI 生成白名单一致。新增/修改组件：改这里 → 同步前端 registry 与 AI Prompt 白名单。",
+  "_comment": "组件库唯一规范源（E5-2：MCP get_component_library 数据源）。17 个组件，与前端组件注册表、AI 生成白名单一致。新增/修改组件：改这里 → 同步前端 registry 与 AI Prompt 白名单。",
   "components": [
     {
       "type": "button",
@@ -490,6 +490,32 @@
       "default_style": {
         "width": 20,
         "height": 20
+      }
+    },
+    {
+      "type": "switch",
+      "name": "开关",
+      "description": "布尔开关（选中态写在 props.checked，可撤销/协作/导出）",
+      "props": {
+        "label": {
+          "type": "string",
+          "default": "",
+          "description": "标签文本"
+        },
+        "checked": {
+          "type": "boolean",
+          "default": false,
+          "description": "选中态"
+        },
+        "disabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "禁用"
+        }
+      },
+      "default_style": {
+        "width": 40,
+        "height": 22
       }
     }
   ]

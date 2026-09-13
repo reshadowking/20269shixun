@@ -20,8 +20,8 @@
     },
     "componentType": {
       "type": "string",
-      "enum": ["button", "card", "input", "select", "table", "chart", "stat-block", "navbar", "sidebar", "avatar", "tag", "divider", "title-text", "hero", "image", "icon"],
-      "description": "type=component 时的组件类型（16 个：v2.2 §5.2 的 15 个 + T9 扩充）"
+      "enum": ["button", "card", "input", "select", "table", "chart", "stat-block", "navbar", "sidebar", "avatar", "tag", "divider", "title-text", "hero", "image", "icon", "switch"],
+      "description": "type=component 时的组件类型（17 个：v2.2 §5.2 的 15 个 + T9 扩充）"
     },
     "props": {
       "type": "object",
@@ -63,6 +63,7 @@
         "color": { "type": "string", "maxLength": 64, "description": "tag 颜色" },
         "content": { "type": "string", "maxLength": 5000 },
         "action": { "type": "object", "additionalProperties": true },
+        "checked": { "type": "boolean", "description": "开关选中态（switch；状态进树，可撤销/协作/保存/导出）" },
         "type_": { "type": "string", "enum": ["text", "password", "email", "number"], "description": "input 类型" }
       },
       "additionalProperties": true

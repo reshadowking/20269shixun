@@ -60,6 +60,17 @@ class TestRepairDesign:
         assert fixed["children"][0]["props"]["text"] == "✓"
         validate_design(fixed)  # 红：现状原样放行 → 校验失败
 
+    def test_switch_stays_component_and_checked_type_repaired(self):
+        """T9：switch 合法化（不再降级）；checked 给错类型（字符串 "true"）→ 删除该字段
+        用默认值渲染（§2.2：PROPS_BOOL_FIELDS 已收 checked），不整树回退。"""
+        fixed = repair_design({"id": "s", "type": "component", "componentType": "switch", "props": {"checked": True, "label": "接收通知"}})
+        assert fixed["type"] == "component"
+        assert fixed["props"]["checked"] is True
+        validate_design(fixed)
+        bad_bool = repair_design({"id": "s", "type": "component", "componentType": "switch", "props": {"checked": "true"}})
+        assert "checked" not in bad_bool["props"]
+        validate_design(bad_bool)
+
     def test_degrade_salvages_visible_text(self):
         """T8 §4.2：降级时 props.text 有可见内容 → 抢救为 text 子节点（追加末尾），其余 props 删除。"""
         node = {"id": "ic", "type": "component", "componentType": "pagination", "props": {"text": "★"}}

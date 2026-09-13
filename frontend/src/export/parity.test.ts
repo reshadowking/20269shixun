@@ -42,6 +42,7 @@ const FIXTURES: ComponentFixture[] = [
   { componentType: 'hero', props: { title: '主视觉标题', subtitle: '副标题文案', cta: { text: '立即开始' } }, text: '主视觉标题', htmlTag: 'section' },
   { componentType: 'image', props: { src: 'https://cdn.example.com/a.png', alt: '示例图' }, text: '示例图', htmlTag: 'img' },
   { componentType: 'icon', props: { name: 'star', color: 'primary', size: 'default' }, text: '', htmlTag: 'span' },
+  { componentType: 'switch', props: { label: '接收通知', checked: true }, text: '接收通知' },
 ]
 
 /** 每个组件挂在一个带样式的 frame 下（同时覆盖 frame 样式键 parity） */
@@ -461,5 +462,34 @@ describe('T9 icon parity（lucide 数据内联，span > svg > path 双通道同�
       .icons.find((i) => i.name === 'help-circle')!.path
     expect(react).toContain(`d="${fallbackPath}"`)
     expect(html).toContain(`d="${fallbackPath}"`)
+  })
+})
+
+describe('T9 switch parity（双形态导出 §5.12：只测一种等于没测另一半）', () => {
+  it('checked:true：轨道 primary 底 + 白滑块右移（left 20px）+ 盒模型 40×22/圆角 11（双通道）', () => {
+    const props = { label: '接收通知', checked: true }
+    const react = designToReactApp(plainTree('switch', props), false)
+    const html = designToHtml(plainTree('switch', props))
+    expect(react).toContain(`"background":"${resolveColor('primary')}"`)
+    expect(html).toContain(`background: ${resolveColor('primary')}`)
+    expect(react).toContain('"left":20')
+    expect(html).toContain('left: 20px')
+    expect(react).toContain('"borderRadius":11')
+    expect(html).toContain('border-radius: 11px')
+    expect(react).toContain('"width":40')
+    expect(html).toContain('width: 40px')
+    expect(html).toContain('height: 22px')
+  })
+
+  it('checked:false：轨道 border 令牌底 + 滑块左移（left 2px）；反断言：不得混入选中形态的 primary', () => {
+    const props = { label: '接收通知', checked: false }
+    const react = designToReactApp(plainTree('switch', props), false)
+    const html = designToHtml(plainTree('switch', props))
+    expect(react).toContain(`"background":"${resolveColor('border')}"`)
+    expect(html).toContain(`background: ${resolveColor('border')}`)
+    expect(react).toContain('"left":2,')
+    expect(html).toContain('left: 2px')
+    expect(react, '未选中态不得出现 primary 底').not.toContain(`"background":"${resolveColor('primary')}"`)
+    expect(html, '未选中态不得出现 primary 底').not.toContain(`background: ${resolveColor('primary')}`)
   })
 })
