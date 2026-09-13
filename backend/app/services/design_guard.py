@@ -9,6 +9,8 @@
   都会放行，削弱角色边界）
 其余（"帮我写首诗""1+1 等于几"）→ 拦截并提示角色边界。
 """
+import json
+from pathlib import Path
 from typing import Final
 
 # 页面类型词（与模板关键词同源，命中即视为设计请求）
@@ -31,13 +33,17 @@ UI_KEYWORDS: Final[tuple[str, ...]] = (
     "下拉", "头像", "标签", "分割线", "标题", "画布", "设计稿", "样式", "轮播", "页脚",
 )
 
-# 缺口清单 §4.6：组件词 + 美化效果词定向识别（与前端 designGuard.ts 保持同源）
-COMPONENT_WORDS: Final[tuple[str, ...]] = (
-    "卡片", "按钮", "标题", "图片", "表格", "导航", "侧边栏", "输入框", "标签",
-)
-EFFECT_WORDS: Final[tuple[str, ...]] = (
-    "阴影", "投影", "渐变", "动效", "动画", "圆角", "描边", "边框", "背景", "变换",
-)
+# 缺口清单 §4.6 方案 A：组件词/效果词的单一来源是 shared/design-guard-words.json
+# （与前端 designGuard.ts 共读同一文件，模式同 beautify-effects.json）——扩充效果库时
+# 只改 JSON 一处，两端判定自动同步；契约测试（TestGuardWordsSharedSource）防漂移。
+ROOT = Path(__file__).resolve().parent.parent.parent.parent
+GUARD_WORDS_FILE = ROOT / "shared" / "design-guard-words.json"
+with GUARD_WORDS_FILE.open(encoding="utf-8") as f:
+    _GUARD_WORDS: dict[str, list[str]] = json.load(f)
+
+# 直接引用已加载的列表（运行时单一来源；测试通过追加假词可观测"读取"语义）
+COMPONENT_WORDS: Final[list[str]] = _GUARD_WORDS["componentWords"]
+EFFECT_WORDS: Final[list[str]] = _GUARD_WORDS["effectWords"]
 
 
 def is_design_request(prompt: str) -> bool:

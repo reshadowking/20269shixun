@@ -1,6 +1,12 @@
 """AI 角色边界守卫测试（缺陷 9）：无关请求拦截，设计请求放行。"""
 
+import json
+from pathlib import Path
+
 from app.services.design_guard import GUARD_REPLY, is_design_request
+
+ROOT = Path(__file__).resolve().parent.parent.parent
+SHARED_WORDS = json.loads((ROOT / "shared" / "design-guard-words.json").read_text(encoding="utf-8"))
 
 
 class TestGuardRules:
@@ -58,3 +64,38 @@ class TestGuardApi:
     def test_generate_design_prompt_still_works(self, client, auth_headers):
         resp = client.post("/api/generate", json={"prompt": "设计一个登录页"}, headers=auth_headers)
         assert resp.status_code == 200
+
+
+class TestGuardWordsSharedSource:
+    """缺口清单 §4.6 方案 A：词表单一来源 shared/design-guard-words.json。
+
+    前后端共用同一文件（照抄 beautify-effects.json 模式）——扩充效果库时只改
+    JSON 一处，两端判定自动同步，杜绝"前端放行、后端 422"的人工同步漂移。
+    """
+
+    def test_loaded_words_match_shared_file(self):
+        from app.services.design_guard import COMPONENT_WORDS, EFFECT_WORDS
+
+        assert list(COMPONENT_WORDS) == SHARED_WORDS["componentWords"]
+        assert list(EFFECT_WORDS) == SHARED_WORDS["effectWords"]
+
+    def test_fake_effect_word_takes_effect(self):
+        """证明是"读取"而非"抄写"：给加载结果追加假词 → 判定行为跟着变。"""
+        from app.services import design_guard
+
+        design_guard.EFFECT_WORDS.append("测试假效果")
+        try:
+            assert design_guard.is_design_request("给按钮加测试假效果") is True
+        finally:
+            design_guard.EFFECT_WORDS.remove("测试假效果")
+        assert design_guard.is_design_request("给按钮加测试假效果") is False
+
+    def test_fake_component_word_takes_effect(self):
+        from app.services import design_guard
+
+        design_guard.COMPONENT_WORDS.append("测试假组件")
+        try:
+            assert design_guard.is_design_request("测试假组件加阴影") is True
+        finally:
+            design_guard.COMPONENT_WORDS.remove("测试假组件")
+        assert design_guard.is_design_request("测试假组件加阴影") is False

@@ -2,10 +2,20 @@
  * AI 角色边界前端守卫测试（缺陷 9 + 缺口清单 §4.6）：
  * 无关请求拦截（不发请求、礼貌提示），设计请求放行。
  * 「组件词+效果词」定向识别的正反例双向覆盖（不引入裸"加"动词）。
+ * §4.6 方案 A：词表单一来源 shared/design-guard-words.json（前后端共读，防人工同步漂移）。
  */
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+
 import { describe, expect, it } from 'vitest'
 
+import guardWords from '../../../shared/design-guard-words.json'
 import { isDesignRequest } from './designGuard'
+
+/** 与 beautify.test.ts 同范式：vitest cwd 为 frontend/，shared 在其上一级 */
+const SHARED_WORDS = JSON.parse(
+  readFileSync(resolve(process.cwd(), '../shared/design-guard-words.json'), 'utf-8'),
+) as { componentWords: string[]; effectWords: string[] }
 
 describe('designGuard（缺陷 9 角色边界）', () => {
   it('设计请求放行（既有口径回归）', () => {
@@ -42,5 +52,32 @@ describe('designGuard（缺陷 9 角色边界）', () => {
       '更加厉害的人工智能', // 含"更加"但无组件/效果词
     ]
     for (const prompt of blocked) expect(isDesignRequest(prompt), prompt).toBe(false)
+  })
+})
+
+describe('designGuard 词表单一来源（§4.6 方案 A：shared/design-guard-words.json）', () => {
+  it('运行时加载结果 == shared JSON 内容（与 beautify-effects 契约测试同范式）', () => {
+    expect(guardWords.componentWords).toEqual(SHARED_WORDS.componentWords)
+    expect(guardWords.effectWords).toEqual(SHARED_WORDS.effectWords)
+  })
+
+  it('假词生效：给加载结果追加 → 判定跟着变（证明是"读取"而非"抄写"）', () => {
+    const componentWords = guardWords.componentWords as string[]
+    componentWords.push('测试假组件')
+    try {
+      expect(isDesignRequest('测试假组件加阴影')).toBe(true)
+    } finally {
+      componentWords.pop()
+    }
+    expect(isDesignRequest('测试假组件加阴影')).toBe(false)
+
+    const effectWords = guardWords.effectWords as string[]
+    effectWords.push('测试假效果')
+    try {
+      expect(isDesignRequest('给按钮加测试假效果')).toBe(true)
+    } finally {
+      effectWords.pop()
+    }
+    expect(isDesignRequest('给按钮加测试假效果')).toBe(false)
   })
 })

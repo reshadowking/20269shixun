@@ -1,0 +1,5 @@
+{
+  "$comment": "缺陷 9 角色边界守卫的「组件词+效果词」定向识别词表（单一来源，缺口清单 §4.6 方案 A）：前后端共读本文件（照抄 beautify-effects.json 模式）。扩充效果库（新增预置如「光泽/噪点」）时同步补 effectWords，两端判定自动同步；契约测试（backend/tests/test_design_guard.py::TestGuardWordsSharedSource 与 frontend/src/lib/designGuard.test.ts）比对加载结果防漂移。",
+  "componentWords": ["卡片", "按钮", "标题", "图片", "表格", "导航", "侧边栏", "输入框", "标签"],
+  "effectWords": ["阴影", "投影", "渐变", "动效", "动画", "圆角", "描边", "边框", "背景", "变换"]
+}
