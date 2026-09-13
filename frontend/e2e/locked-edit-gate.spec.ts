@@ -94,3 +94,17 @@ test('未锁定：AI 改文案 → 正常落地（对照组）', async ({ page }
   // 未锁定：AI 的改写直接落地
   await expect(page.getByTestId('node-coupon-sub')).toHaveText(MOCK_EDIT_TEXT, { timeout: 15_000 })
 })
+
+test('缺口 §4.6：锁定态「给所有卡片加阴影」（裸加句式）→ 守卫放行 + 闸门通过', async ({ page }) => {
+  test.setTimeout(120_000)
+  const session = `s-${RUN}-batchguard`
+  await openWorkspace(page, session)
+  await confirmLayout(page)
+
+  // 该句式曾被前端守卫 isDesignRequest 误拦（"AI 拒答"，请求未发出）；
+  // 修复后应到达后端（后端守卫同口径放行）→ mock 关键词规则落预置「轻」→ 闸门放行
+  await chat(page, '给所有卡片加阴影')
+  await expect(page.getByText(/已应用修改 ✓/)).toBeVisible({ timeout: 20_000 })
+  await expect(page.getByText(/AI 设计助手，只负责/)).toHaveCount(0) // 未被守卫拒答
+  await expect(page.getByTestId('node-coupon-title')).toHaveAttribute('style', /box-shadow/, { timeout: 15_000 })
+})

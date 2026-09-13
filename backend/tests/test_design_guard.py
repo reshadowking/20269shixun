@@ -14,6 +14,10 @@ class TestGuardRules:
             "将标题居中，圆角再大一点",
             "帮我做个金融数据仪表板",
             "生成一个个人主页",
+            # 缺口清单 §4.6：「组件词+效果词」定向识别（裸"加"不入动词表，防"增加/加载"放行）
+            "给所有卡片加阴影",  # 批 2 提示词明确支持的批量表述，曾被动词表误拦
+            "卡片加个渐变",
+            "给标题加描边",
         ]
         for prompt in allowed:
             assert is_design_request(prompt), f"应放行: {prompt}"
@@ -25,6 +29,7 @@ class TestGuardRules:
             "什么是人工智能",
             "今天天气怎么样",
             "帮我写一段 Python 代码",  # 无页面词 + 无 UI 词（"代码"不在 UI 词表）
+            "帮我加载更多按钮",  # §4.6 近似反例：裸"加"未入动词表，且按钮(组件词)无效果词搭配
         ]
         for prompt in blocked:
             assert not is_design_request(prompt), f"应拦截: {prompt}"

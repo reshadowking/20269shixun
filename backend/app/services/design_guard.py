@@ -3,6 +3,10 @@
 规则（保守放行，避免误杀）：
 - 含页面类型词（登录/电商/仪表/表单/列表/文章/落地页等）→ 设计请求
 - 或 含设计动词（设计/生成/创建/改成/调大…）+ UI/组件词（按钮/布局/颜色/间距…）→ 设计请求
+- 或 组件词（卡片/按钮/标题…）+ 美化效果词（阴影/渐变/圆角…）同时出现 → 设计请求
+  （缺口清单 §4.6：「给所有卡片加阴影」这类"裸加+效果"句式曾是最高频的自然说法，
+  被动词表误拦在模型门口；定向识别而非把裸"加"入动词表——否则"增加/加载/更加"
+  都会放行，削弱角色边界）
 其余（"帮我写首诗""1+1 等于几"）→ 拦截并提示角色边界。
 """
 from typing import Final
@@ -27,6 +31,14 @@ UI_KEYWORDS: Final[tuple[str, ...]] = (
     "下拉", "头像", "标签", "分割线", "标题", "画布", "设计稿", "样式", "轮播", "页脚",
 )
 
+# 缺口清单 §4.6：组件词 + 美化效果词定向识别（与前端 designGuard.ts 保持同源）
+COMPONENT_WORDS: Final[tuple[str, ...]] = (
+    "卡片", "按钮", "标题", "图片", "表格", "导航", "侧边栏", "输入框", "标签",
+)
+EFFECT_WORDS: Final[tuple[str, ...]] = (
+    "阴影", "投影", "渐变", "动效", "动画", "圆角", "描边", "边框", "背景", "变换",
+)
+
 
 def is_design_request(prompt: str) -> bool:
     """判断是否 UI 设计相关请求（保守放行）。"""
@@ -35,7 +47,11 @@ def is_design_request(prompt: str) -> bool:
         return True
     has_verb = any(v in prompt for v in DESIGN_VERBS)
     has_ui = any(k in lowered for k in UI_KEYWORDS)
-    return has_verb and has_ui
+    if has_verb and has_ui:
+        return True
+    has_component = any(k in prompt for k in COMPONENT_WORDS)
+    has_effect = any(k in prompt for k in EFFECT_WORDS)
+    return has_component and has_effect
 
 
 GUARD_REPLY = (
