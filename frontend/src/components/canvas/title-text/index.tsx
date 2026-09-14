@@ -1,15 +1,15 @@
 import type { ExportElement } from '@/components/canvas/types'
+import { TITLE_TEXT_SIZES, TITLE_TEXT_WEIGHT_STYLE } from '@/components/canvas/styleTokens'
 import { escapeHtml } from '@/design/escape'
 import { styleToCss } from '@/design/styleToCss'
 import type { DesignNode } from '@/design/types'
 
-/** ① 画布渲染：标题文本（h1-h6） */
+/** ① 画布渲染：标题文本（h1-h6；T12-D 字重/行高/字号内联，画布/导出共用 TITLE_TEXT_*） */
 export function CanvasTitleText({ props, style }: { props: Record<string, unknown>; style?: React.CSSProperties }) {
   const text = typeof props.text === 'string' ? props.text : '标题'
   const level = Math.min(6, Math.max(1, typeof props.level === 'number' ? props.level : 2))
-  const sizes: Record<number, number> = { 1: 28, 2: 24, 3: 20, 4: 18, 5: 16, 6: 14 }
   return (
-    <div className="font-semibold leading-tight" style={{ fontSize: sizes[level], ...(style as object) }}>
+    <div style={{ ...TITLE_TEXT_WEIGHT_STYLE, fontSize: TITLE_TEXT_SIZES[level], ...(style as object) }}>
       {text}
     </div>
   )
@@ -38,14 +38,16 @@ export const titleTextSchema = [
   { key: 'level', label: '级别', control: 'select' as const, options: ['1', '2', '3', '4', '5', '6'] },
 ]
 
-/** B1：导出语义描述（level → h1-h6，与引擎 case 一致） */
+/** B1：导出语义描述（level → h1-h6，与引擎 case 一致）。
+ * T12-D：字重 600 / 行高 1.25 / margin 0 / 按等级字号与画布共用 TITLE_TEXT_*
+ * （此前导出 <h*> 默认 700 + 上下 margin，比画布多出外边距）。 */
 export const buildTitleTextExport = (node: DesignNode): ExportElement => {
   const props = node.props ?? {}
   const level = typeof props.level === 'number' && props.level >= 1 && props.level <= 6 ? props.level : 2
   return {
     tag: `h${level}`,
     attrs: {},
-    style: styleToCss(node.style),
+    style: { ...TITLE_TEXT_WEIGHT_STYLE, fontSize: TITLE_TEXT_SIZES[level], ...styleToCss(node.style) },
     text: typeof props.text === 'string' ? props.text : '',
   }
 }

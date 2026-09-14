@@ -1,7 +1,7 @@
 import type { ExportElement } from '@/components/canvas/types'
 import { escapeHtml } from '@/design/escape'
 import { resolveColor, styleToCss } from '@/design/styleToCss'
-import { STAT_LABEL_COLOR } from '@/components/canvas/styleTokens'
+import { STAT_CONTAINER_STYLE, STAT_LABEL_COLOR } from '@/components/canvas/styleTokens'
 import type { DesignNode } from '@/design/types'
 
 /**
@@ -19,7 +19,8 @@ export function CanvasStatBlock({ props, style }: { props: Record<string, unknow
   const value = typeof props.value === 'string' ? props.value : '0'
   const trend = typeof props.trend === 'string' ? props.trend : ''
   return (
-    <div className="rounded-lg border bg-card p-4 shadow-sm" style={style as object}>
+    // 容器默认观感内联（T12-D，画布/导出共用 STAT_CONTAINER_STYLE）；三块内容样式不动
+    <div style={{ ...STAT_CONTAINER_STYLE, ...(style as object) }}>
       <div className="text-sm" style={{ color: STAT_LABEL_COLOR }}>{label}</div>
       <div className="mt-1 text-2xl font-bold">{value}</div>
       {trend && (
@@ -81,5 +82,6 @@ export const buildStatBlockExport = (node: DesignNode): ExportElement => {
       text: props.trend,
     })
   }
-  return { tag: 'div', attrs: {}, style: styleToCss(node.style), children }
+  // T12-D：容器观感与画布共用 STAT_CONTAINER_STYLE（此前导出容器整体透明无边框）
+  return { tag: 'div', attrs: {}, style: { ...STAT_CONTAINER_STYLE, ...styleToCss(node.style) }, children }
 }

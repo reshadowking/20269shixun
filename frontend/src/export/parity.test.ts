@@ -697,3 +697,98 @@ describe('T12-C table/chart 默认观感双通道（口径以画布为准）', (
     expect(react, '旧口径 marginBottom 12 不得回归').not.toContain('"marginBottom":12')
   })
 })
+
+describe('T12-D tag 彩色标签修复 + 内容/装饰型组件默认观感双通道', () => {
+  it('tag 彩色分支：底色经 resolveColor 解析（danger → 令牌色）+ 白字 + 基础观感（双通道 + 令牌名反断言）', () => {
+    const react = designToReactApp(plainTree('tag', { text: '限时 5 折', color: 'danger' }), false)
+    const html = designToHtml(plainTree('tag', { text: '限时 5 折', color: 'danger' }))
+    const DANGER = resolveColor('danger')
+    expect(react).toContain(`"background":"${DANGER}"`)
+    expect(html).toContain(`background: ${DANGER}`)
+    expect(react).toContain('"color":"#FFFFFF"')
+    expect(html).toContain('color: #FFFFFF')
+    // 未解析的令牌名字面量不得出现（这就是"标签隐形"的根因：background: danger 被 CSSOM 丢弃）
+    expect(react, '未解析令牌名不得出现在产物中').not.toContain('"background":"danger"')
+    expect(html, '未解析令牌名不得出现在产物中').not.toContain('background: danger')
+    // 基础观感（此前导出圆角/内边距/字号/字重全丢）
+    expect(react).toContain('"borderRadius":6')
+    expect(react).toContain('"padding":"2px 10px"')
+    expect(react).toContain('"fontSize":12')
+    expect(react).toContain('"fontWeight":600')
+    expect(html).toContain('border-radius: 6px')
+    expect(html).toContain('padding: 2px 10px')
+    expect(html).toContain('font-size: 12px')
+  })
+
+  it('tag 默认分支：secondary 底 + 白字（secondary-foreground）+ 基础观感（双通道）', () => {
+    const react = designToReactApp(plainTree('tag', { text: '普通标签' }), false)
+    const html = designToHtml(plainTree('tag', { text: '普通标签' }))
+    expect(react).toContain(`"background":"${resolveColor('secondary')}"`)
+    expect(html).toContain(`background: ${resolveColor('secondary')}`)
+    expect(react).toContain('"color":"#FFFFFF"')
+    expect(html).toContain('color: #FFFFFF')
+    expect(react).toContain('"borderRadius":6')
+    expect(html).toContain('border-radius: 6px')
+  })
+
+  it('stat-block：容器圆角 8 / border 令牌 / 白底 / padding 16 / 「极轻」阴影（双通道；三块内容不动）', () => {
+    const props = { label: '本月营收', value: '¥1.2万', trend: '↑12%' }
+    const react = designToReactApp(plainTree('stat-block', props), false)
+    const html = designToHtml(plainTree('stat-block', props))
+    const BORDER = `1px solid ${resolveColor('border')}`
+    expect(react).toContain('"borderRadius":8')
+    expect(react).toContain(`"border":"${BORDER}"`)
+    expect(react).toContain('"background":"#FFFFFF"')
+    expect(react).toContain('"padding":16')
+    expect(react).toContain('"boxShadow":"0 1px 2px rgba(29,33,41,0.06)"')
+    expect(html).toContain('border-radius: 8px')
+    expect(html).toContain(`border: ${BORDER}`)
+    expect(html).toContain('background: #FFFFFF')
+    expect(html).toContain('padding: 16px')
+    expect(html).toContain('box-shadow: 0 1px 2px rgba(29,33,41,0.06)')
+  })
+
+  it('divider：高度 1 / border 令牌色 / 外边距清零（双通道；<hr> 浏览器默认边框与 margin 已清除）', () => {
+    const react = designToReactApp(plainTree('divider', {}), false)
+    const html = designToHtml(plainTree('divider', {}))
+    expect(react).toContain('"height":1')
+    expect(react).toContain(`"background":"${resolveColor('border')}"`)
+    expect(react).toContain('"margin":0')
+    expect(html).toContain('height: 1px')
+    expect(html).toContain(`background: ${resolveColor('border')}`)
+    expect(html).toContain('margin: 0')
+    expect(react, 'hr 不得保留浏览器默认边框').toContain('"border":"none"')
+  })
+
+  it('title-text：字重 600 / 行高 1.25 / margin 0 / 按等级字号（双通道；<h*> 默认 700 与上下 margin 已清零）', () => {
+    for (const [level, size] of [[2, 24], [3, 20]] as const) {
+      const react = designToReactApp(plainTree('title-text', { text: '标题', level }), false)
+      const html = designToHtml(plainTree('title-text', { text: '标题', level }))
+      expect(react, `level=${level}`).toContain(`"fontSize":${size}`)
+      expect(html, `level=${level}`).toContain(`font-size: ${size}px`)
+      expect(react).toContain('"fontWeight":600')
+      expect(html).toContain('font-weight: 600')
+      expect(react).toContain('"lineHeight":1.25')
+      expect(html).toContain('line-height: 1.25')
+      expect(react).toContain('"margin":0')
+      expect(html).toContain('margin: 0')
+    }
+  })
+
+  it('avatar：尺寸 40×40 / primary 底 / 白字 / 字号 14（双通道；圆角与居中沿用既有）', () => {
+    const react = designToReactApp(plainTree('avatar', { name: '设计师' }), false)
+    const html = designToHtml(plainTree('avatar', { name: '设计师' }))
+    expect(react).toContain('"width":40')
+    expect(react).toContain('"height":40')
+    expect(html).toContain('width: 40px')
+    expect(html).toContain('height: 40px')
+    expect(react).toContain(`"background":"${resolveColor('primary')}"`)
+    expect(html).toContain(`background: ${resolveColor('primary')}`)
+    expect(react).toContain('"color":"#FFFFFF"')
+    expect(html).toContain('color: #FFFFFF')
+    expect(react).toContain('"fontSize":14')
+    expect(html).toContain('font-size: 14px')
+    expect(react).toContain('"borderRadius":"50%"')
+    expect(html).toContain('border-radius: 50%')
+  })
+})

@@ -229,3 +229,65 @@ export const CHART_DEFAULT_STYLE: React.CSSProperties = {
 
 /** 图表标题（text-sm font-semibold mb-4 = 14 / 600 / 下间距 16；此前导出下间距 12） */
 export const CHART_TITLE_STYLE: React.CSSProperties = { fontSize: 14, fontWeight: 600, marginBottom: 16 }
+
+// ---- T12-D：内容/装饰型组件配方（口径以画布为准）----
+
+/** 标签基础观感（rounded-md px-2.5 py-0.5 text-xs font-semibold = 圆角 6 / 内边距 2×10 / 字号 12 / 字重 600） */
+export const TAG_BASE_STYLE: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  borderRadius: 6,
+  padding: '2px 10px',
+  fontSize: 12,
+  fontWeight: 600,
+}
+
+/** 标签默认分支（bg-secondary text-secondary-foreground）：次级色底 + 白字
+ *（--secondary-foreground = #ffffff） */
+export const TAG_DEFAULT_COLOR_STYLE: React.CSSProperties = {
+  background: resolveColor('secondary'),
+  color: '#FFFFFF',
+}
+
+/** 指标块容器（rounded-lg border bg-card p-4 shadow-sm）：圆角 8 / border 令牌 / 白底 /
+ * padding 16 / 「极轻」阴影（CARD_SHADOW）。label/value/trend 三块沿用既有令牌常量，不动。 */
+export const STAT_CONTAINER_STYLE: React.CSSProperties = {
+  borderRadius: 8,
+  border: `1px solid ${resolveColor('border')!}`,
+  background: '#FFFFFF',
+  padding: 16,
+  boxShadow: CARD_SHADOW,
+}
+
+/** 分割线（h-px w-full bg-border）：高 1px / 无边框 / border 令牌底色 / 外边距清零
+ * （导出为 <hr>，必须清掉浏览器默认边框与 margin，画布与导出的间距才一致） */
+export const DIVIDER_STYLE: React.CSSProperties = {
+  height: 1,
+  border: 'none',
+  background: resolveColor('border'),
+  margin: 0,
+  width: '100%',
+}
+
+/** 标题文本字重/行高/外边距（font-semibold leading-tight）：600 / 1.25 / margin 0
+ * （导出为 <h*>，默认 700 与上下 margin 会与画布不一致，必须清零） */
+export const TITLE_TEXT_WEIGHT_STYLE: React.CSSProperties = { fontWeight: 600, lineHeight: 1.25, margin: 0 }
+
+/** 标题文本按等级字号（画布既有口径：h1-h6 = 28/24/20/18/16/14） */
+export const TITLE_TEXT_SIZES: Record<number, number> = { 1: 28, 2: 24, 3: 20, 4: 18, 5: 16, 6: 14 }
+
+/** 头像默认观感（h-10 w-10 rounded-full bg-primary text-sm font-semibold text-primary-foreground）：
+ * 40×40 / 圆形 / primary 底 / 白字 14px / 600。圆形与居中此前导出已有——并入本常量统一为
+ * 一处定义（值不变），并修正展开顺序为「默认在前、node.style 最后」。 */
+export const AVATAR_DEFAULT_STYLE: React.CSSProperties = {
+  width: 40,
+  height: 40,
+  borderRadius: '50%',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  background: resolveColor('primary'),
+  color: '#FFFFFF',
+  fontSize: 14,
+  fontWeight: 600,
+}

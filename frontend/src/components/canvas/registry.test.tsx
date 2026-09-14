@@ -306,6 +306,69 @@ describe('T5.5 画布盒模型内联', () => {
   })
 })
 
+/** T12-D：tag 彩色标签修复 + 内容/装饰型组件画布内联 */
+describe('T12-D 画布内联', () => {
+  it('tag 彩色分支：底色为解析后的令牌色（danger → 令牌值）——修复「白字无底色 = 隐形」', () => {
+    const def = componentRegistry.tag
+    const { container } = render(<def.Canvas props={{ text: '限时 5 折', color: 'danger' }} />)
+    const el = container.querySelector('[data-testid="canvas-tag"]') as HTMLElement
+    expect(el.style.background).toBe(rgb(resolveColor('danger')!))
+    expect(el.style.color).toBe('rgb(255, 255, 255)')
+    expect(el.style.borderRadius).toBe('6px')
+    expect(el.style.padding).toBe('2px 10px')
+    expect(el.style.fontSize).toBe('12px')
+    expect(el.style.fontWeight).toBe('600')
+  })
+
+  it('tag 默认分支：secondary 底 + 白字（secondary-foreground）内联', () => {
+    const def = componentRegistry.tag
+    const { container } = render(<def.Canvas props={{ text: '普通标签' }} />)
+    const el = container.querySelector('[data-testid="canvas-tag"]') as HTMLElement
+    expect(el.style.background).toBe(rgb(resolveColor('secondary')!))
+    expect(el.style.color).toBe('rgb(255, 255, 255)')
+  })
+
+  it('stat-block 容器内联：圆角 8 / border 令牌 / 白底 / padding 16 / 阴影', () => {
+    const def = componentRegistry['stat-block']
+    const { container } = render(<def.Canvas props={{ label: 'L', value: 'V' }} />)
+    const root = container.firstElementChild as HTMLElement
+    expect(root.style.borderRadius).toBe('8px')
+    expect(root.style.border).toBe(`1px solid ${rgb(resolveColor('border')!)}`)
+    expect(root.style.background).toBe('rgb(255, 255, 255)')
+    expect(root.style.padding).toBe('16px')
+    expect(root.style.boxShadow).toBe('0 1px 2px rgba(29,33,41,0.06)')
+  })
+
+  it('divider 内联：高度 1px / border 令牌色（画布无 margin）', () => {
+    const def = componentRegistry.divider
+    const { container } = render(<def.Canvas props={{}} />)
+    const root = container.firstElementChild as HTMLElement
+    expect(root.style.height).toBe('1px')
+    expect(root.style.background).toBe(rgb(resolveColor('border')!))
+  })
+
+  it('title-text 内联：字重 600 / 行高 1.25 / 字号按等级（此处 level 3 = 20）', () => {
+    const def = componentRegistry['title-text']
+    render(<def.Canvas props={{ text: '设计师小王', level: 3 }} />)
+    const el = screen.getByText('设计师小王')
+    expect(el.style.fontWeight).toBe('600')
+    expect(el.style.lineHeight).toBe('1.25')
+    expect(el.style.fontSize).toBe('20px')
+  })
+
+  it('avatar 内联：40×40 / primary 底 / 白字 / 字号 14 / 圆形（圆角与居中沿用既有）', () => {
+    const def = componentRegistry.avatar
+    const { container } = render(<def.Canvas props={{ name: '设计师' }} />)
+    const el = container.firstElementChild as HTMLElement
+    expect(el.style.width).toBe('40px')
+    expect(el.style.height).toBe('40px')
+    expect(el.style.background).toBe(rgb(resolveColor('primary')!))
+    expect(el.style.color).toBe('rgb(255, 255, 255)')
+    expect(el.style.fontSize).toBe('14px')
+    expect(el.style.borderRadius).toBe('50%')
+  })
+})
+
 /** T12-C：table/chart 默认观感画布侧内联 */
 describe('T12-C table/chart 画布内联', () => {
   it('table 画布：容器圆角 8/border 令牌/白底；单元格 padding 16×12；表头左对齐·500；行分隔线内联', () => {
