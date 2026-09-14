@@ -79,7 +79,7 @@ function ImageUploadControl({ value, onChange }: { value: string; onChange: (v: 
  * 修复前用 textarea + `String(value)`：显示 `[object Object]`，手改后把字符串写回 props
  * （字符串进树后会被增量生成路径的 repair 删除）。本控件：
  * - 显示 JSON.stringify（树值变化——撤销/协作/切换选中——自动同步回文本）；
- * - 文本经 JSON.parse 校验成功才写回（非法输入不落树，显示可见错误提示）；
+ * - 文本经 JSON.parse 校验成功且为数组才写回（非法/非数组不落树，显示可见错误提示）；
  * - 清空 → 写回空数组（当前全部 json 控件消费方均为数组字段，见各组件 schema）。
  * 类型写错的合法 JSON（如给数组字段写对象）由各组件容错渲染 + 后端 repair 兜底。
  */
@@ -114,7 +114,14 @@ function JsonControl({ fieldKey, value, onChange }: { fieldKey: string; value: u
       return
     }
     try {
-      onChange(JSON.parse(next))
+      const parsed: unknown = JSON.parse(next)
+      // T13 #25：当前全部 json 控件消费方均为数组字段（items/links/columns/rows/data）——
+      // 非数组（对象/标量）不落树；将来出现对象字段时需为本控件增加类型参数
+      if (!Array.isArray(parsed)) {
+        setError('必须是 JSON 数组（如 [{"label":"标签一"}]）')
+        return
+      }
+      onChange(parsed)
       setError('')
     } catch {
       setError('JSON 无效，未写入（其余字段不受影响）')

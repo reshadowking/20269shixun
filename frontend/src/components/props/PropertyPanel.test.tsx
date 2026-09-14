@@ -73,6 +73,17 @@ describe('属性面板 JSON 控件（#21）', () => {
     expect(getWritten()?.props?.items).toEqual([])
   })
 
+  it('T13 #25：对象/标量 JSON 被拒——必须是 JSON 数组（不落树 + 可见提示）', () => {
+    const { itemsBox, onUpdate } = renderPanel(sidebarNode())
+    fireEvent.change(itemsBox(), { target: { value: '{"label":"A"}' } })
+    expect(onUpdate).not.toHaveBeenCalled()
+    expect(screen.getByTestId('json-error-items').textContent).toContain('数组')
+    fireEvent.change(itemsBox(), { target: { value: '123' } })
+    expect(onUpdate).not.toHaveBeenCalled()
+    fireEvent.change(itemsBox(), { target: { value: '[{"label":"A"}]' } })
+    expect(screen.queryByTestId('json-error-items')).toBeNull()
+  })
+
   it('六个数组字段统一使用 json 控件（sidebar/tabs 同类问题一并处理）', () => {
     // 每个字段一次断言：control 必须是 json（而非 textarea——旧控件会 String 化显示与写回）
     const cases: Array<[string, Array<{ key: string; control: string }>]> = [
