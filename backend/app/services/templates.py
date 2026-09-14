@@ -1,7 +1,7 @@
 """模板库（v2.2 §4.3：8 个模板，每个 = DesignNode 骨架 + 默认文案）。
 
 模板是"可渲染的默认稿"：mock 模式直接返回模板；real 模式下 LLM 基于骨架填充参数与文案。
-组件引用必须来自组件注册表（15 个 componentType）。
+组件引用必须来自组件注册表（18 个 componentType，T9 扩充 icon/switch/tabs 后）。
 """
 
 from typing import Any

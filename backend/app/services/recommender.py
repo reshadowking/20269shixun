@@ -1,4 +1,7 @@
-"""组件智能推荐（E3-3）：分析容器上下文，推荐 3 个组件（component_type / reason / suggested_index / default_props）。
+"""组件智能推荐（E3-3）：分析容器上下文，推荐 3-4 个组件（component_type / reason / suggested_index / default_props）。
+
+T9.1 #22 口径裁定：表单容器（+switch）与商品/详情容器（+tabs）为 **4 条**（追加而非替换，
+信息更全；前端列表渲染不设数量硬约束）；其余语境仍为 3 条。行为由 test_assist 锁定。
 
 确定性规则引擎（不调 LLM）：可单测、可进 CI。
 - 容器（有 children 的 frame/group）：推荐"容器内部子组件"，suggested_index 指向容器 children 末尾

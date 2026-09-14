@@ -131,7 +131,10 @@ class TestRecommender:
             ],
         }
         recs = recommend_components(design, "f")
-        assert any(r["component_type"] == "switch" for r in recs)
+        # T9.1 #22 口径：表单容器 4 条（追加而非替换），switch 位于末位
+        assert len(recs) == 4
+        assert recs[-1]["component_type"] == "switch"
+        assert recs[0]["component_type"] == "button"  # 既有首条不回退
 
     def test_product_container_recommends_tabs(self):
         """T9：详情/商品容器追加 tabs 推荐（详情/评价分组）。"""
@@ -146,7 +149,9 @@ class TestRecommender:
             ],
         }
         recs = recommend_components(design, "p")
-        assert any(r["component_type"] == "tabs" for r in recs)
+        # T9.1 #22 口径：商品/详情容器 4 条（追加而非替换），tabs 位于末位
+        assert len(recs) == 4
+        assert recs[-1]["component_type"] == "tabs"
 
     def test_stat_container_recommends_chart(self):
         design = {

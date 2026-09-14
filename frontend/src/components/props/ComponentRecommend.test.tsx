@@ -69,6 +69,23 @@ describe('ComponentRecommend', () => {
     })
   })
 
+  it('renders 4 recommendations (T9.1 #22：表单/商品容器 4 条，UI 不设数量硬约束)', async () => {
+    const four = [...RECS, { component_type: 'switch', reason: '开关适合订阅/协议类确认项', suggested_index: 3, default_props: { label: '接收通知' } }]
+    fetchMock = vi.fn(async (url: string) => {
+      if (String(url).includes('/api/recommend-components')) {
+        return { ok: true, status: 200, json: async () => ({ recommendations: four }) }
+      }
+      throw new Error(`unexpected fetch: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<ComponentRecommend design={DESIGN} containerId="card" onAdd={vi.fn()} />)
+    fireEvent.click(screen.getByTestId('recommend-open'))
+    await waitFor(() => {
+      expect(screen.getAllByTestId(/recommend-item-/)).toHaveLength(4)
+    })
+    expect(screen.getByTestId('recommend-item-switch')).toHaveTextContent('开关适合订阅/协议类确认项')
+  })
+
   it('shows error message on failure', async () => {
     fetchMock = vi.fn(async () => ({ ok: false, status: 500, json: async () => ({ detail: '推荐服务不可用' }) }))
     vi.stubGlobal('fetch', fetchMock)
