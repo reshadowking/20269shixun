@@ -149,3 +149,53 @@ export const SIDEBAR_DEFAULT_STYLE: React.CSSProperties = {
 /** 侧栏项基础观感（px-3 py-2 / rounded-md / text-sm = 内边距 12/8、圆角 6、字号 14）——
  * active/idle 的颜色叠加仍由 sidebar 组件的 T5-0 常量负责。 */
 export const SIDEBAR_ITEM_BASE: React.CSSProperties = { padding: '8px 12px', borderRadius: 6, fontSize: 14 }
+
+// ---- T12-B：展示类组件配方（口径以画布为准）----
+
+/** Hero 默认观感（px-12 py-20 / gap-4 / bg-muted / 居中）：内边距 80×48、间距 16、
+ * 底色 background 令牌（bg-muted = --muted = 令牌 background #F5F5F5）、内容居中 */
+export const HERO_DEFAULT_STYLE: React.CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  alignItems: 'center',
+  justifyContent: 'center',
+  gap: 16,
+  padding: '80px 48px',
+  textAlign: 'center',
+  background: resolveColor('background'),
+}
+
+/** Hero 标题（text-4xl font-bold = 36 / 700） */
+export const HERO_TITLE_STYLE: React.CSSProperties = { fontSize: 36, fontWeight: 700 }
+
+/** Hero 副标题（text-lg = 18；色 = text-light 令牌，与画布 muted-foreground 同源） */
+export const HERO_SUBTITLE_STYLE: React.CSSProperties = { fontSize: 18, color: resolveColor('text-light') }
+
+/** Hero CTA：复用按钮配方（BUTTON_BASE_STYLE + primary 变体），尺寸 px-6 py-2.5 = 24×10、上间距 8 */
+export const HERO_CTA_STYLE: React.CSSProperties = {
+  ...BUTTON_BASE_STYLE,
+  ...BUTTON_VARIANT_STYLE.primary,
+  padding: '10px 24px',
+  marginTop: 8,
+}
+
+/** 图片默认观感（w-full rounded-md）：宽 100%、圆角 6、块级（消除行内基线间隙） */
+export const IMAGE_DEFAULT_STYLE: React.CSSProperties = { display: 'block', width: '100%', borderRadius: 6 }
+
+/** 图片空态占位盒（h-40 + 虚线边框 + bg-muted/30）：高度 160、圆角 6、1px 虚线 border 令牌、
+ * background 令牌 30% 透明（进度对齐画布 border border-dashed bg-muted/30） */
+export const IMAGE_PLACEHOLDER_STYLE: React.CSSProperties = {
+  height: 160,
+  borderRadius: 6,
+  border: `1px dashed ${resolveColor('border')!}`,
+  background: tokenRgba('background', 0.3),
+}
+
+/** 画布空态占位的居中与提示文字（导出侧为 <img>，无法承载子文本——只复用上面的盒子样式） */
+export const IMAGE_PLACEHOLDER_CANVAS_STYLE: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  fontSize: 12,
+  color: resolveColor('text-light'),
+}

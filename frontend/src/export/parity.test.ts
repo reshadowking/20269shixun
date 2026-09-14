@@ -577,3 +577,76 @@ describe('T12-A navbar/sidebar 默认观感双通道（口径以画布为准）'
     expect(react).toContain(`"color":"${resolveColor('text-light')}"`)
   })
 })
+
+describe('T12-B hero 默认观感双通道（此前导出≈秃文字）', () => {
+  const HERO = { title: '让设计更快一步', subtitle: '自然语言生成高保真界面', cta: { text: '立即开始' } }
+
+  it('容器：内边距 80/48、居中、gap 16、底色 background 令牌（双通道）', () => {
+    const react = designToReactApp(plainTree('hero', HERO), false)
+    const html = designToHtml(plainTree('hero', HERO))
+    expect(react).toContain('"padding":"80px 48px"')
+    expect(html).toContain('padding: 80px 48px')
+    expect(react).toContain('"flexDirection":"column"')
+    expect(html).toContain('flex-direction: column')
+    expect(react).toContain('"alignItems":"center"')
+    expect(html).toContain('align-items: center')
+    expect(react).toContain('"textAlign":"center"')
+    expect(html).toContain('text-align: center')
+    expect(react).toContain('"gap":16')
+    expect(html).toContain('gap: 16px')
+    expect(react).toContain(`"background":"${resolveColor('background')}"`)
+    expect(html).toContain(`background: ${resolveColor('background')}`)
+  })
+
+  it('标题 36/700、副标题 18 + text-light、CTA 复用按钮配方（primary 底/白字/圆角 6/内边距 10·24）', () => {
+    const react = designToReactApp(plainTree('hero', HERO), false)
+    const html = designToHtml(plainTree('hero', HERO))
+    expect(react).toContain('"fontSize":36')
+    expect(react).toContain('"fontWeight":700')
+    expect(html).toContain('font-size: 36px')
+    expect(react).toContain('"fontSize":18')
+    expect(react).toContain(`"color":"${resolveColor('text-light')}"`)
+    expect(html).toContain('font-size: 18px')
+    // CTA 与 button 组件同源：primary 底 + 白字 + 圆角 6 + 内边距 24/10（此前导出是裸 <button>）
+    expect(react).toContain(`"background":"${resolveColor('primary')}"`)
+    expect(react).toContain('"color":"#FFFFFF"')
+    expect(html).toContain(`background: ${resolveColor('primary')}`)
+    expect(html).toContain('color: #FFFFFF')
+    expect(react).toContain('"borderRadius":6')
+    expect(html).toContain('border-radius: 6px')
+    expect(react).toContain('"padding":"10px 24px"')
+    expect(html).toContain('padding: 10px 24px')
+    expect(html, 'CTA 不得回落浏览器默认灰底').not.toContain('rgb(240, 240, 240)')
+  })
+})
+
+describe('T12-B image 双通道（fit 映射 + 空态口径统一）', () => {
+  const BORDER = `1px dashed ${resolveColor('border')}`
+
+  it('有 src：w-full + 圆角 6 + objectFit 映射（cover/contain/fill 逐一断言，双通道）', () => {
+    for (const fit of ['cover', 'contain', 'fill'] as const) {
+      const props = { src: 'https://cdn.example.com/a.png', alt: '示例图', fit }
+      const react = designToReactApp(plainTree('image', props), false)
+      const html = designToHtml(plainTree('image', props))
+      expect(react, `${fit}: React 缺 objectFit`).toContain(`"objectFit":"${fit}"`)
+      expect(html, `${fit}: HTML 缺 object-fit`).toContain(`object-fit: ${fit}`)
+      expect(react).toContain('"width":"100%"')
+      expect(html).toContain('width: 100%')
+      expect(react).toContain('"borderRadius":6')
+      expect(html).toContain('border-radius: 6px')
+    }
+  })
+
+  it('空 src：导出也渲染占位块（虚线 border 令牌 + muted 底 + 高度 160），反断言空 src 不出现', () => {
+    const react = designToReactApp(plainTree('image', { alt: '示例图' }), false)
+    const html = designToHtml(plainTree('image', { alt: '示例图' }))
+    expect(react).toContain(`"border":"${BORDER}"`)
+    expect(html).toContain(`border: ${BORDER}`)
+    expect(react).toContain('"height":160')
+    expect(html).toContain('height: 160px')
+    expect(react).toContain('"background":"rgba(245, 245, 245, 0.3)"')
+    expect(html).toContain('background: rgba(245, 245, 245, 0.3)')
+    expect(react, '空 src 不得再输出 src=""').not.toContain('src=""')
+    expect(html, '空 src 不得再输出 src=""').not.toContain('src=""')
+  })
+})

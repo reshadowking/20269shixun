@@ -306,6 +306,40 @@ describe('T5.5 画布盒模型内联', () => {
   })
 })
 
+/** T12-B：hero/image 默认观感画布侧内联 */
+describe('T12-B hero/image 画布内联', () => {
+  it('hero 画布：内边距 80/48、居中、gap 16、底色 background 令牌；标题 36/700；副标题 18 + text-light；CTA primary 底白字', () => {
+    const def = componentRegistry.hero
+    render(<def.Canvas props={{ title: '让设计更快一步', subtitle: '自然语言生成高保真界面', cta: { text: '立即开始' } }} />)
+    const root = screen.getByTestId('canvas-hero')
+    expect(root.style.padding).toBe('80px 48px')
+    expect(root.style.textAlign).toBe('center')
+    expect(root.style.gap).toBe('16px')
+    expect(root.style.background).toBe(rgb(resolveColor('background')!))
+    const title = screen.getByText('让设计更快一步')
+    expect(title.style.fontSize).toBe('36px')
+    expect(title.style.fontWeight).toBe('700')
+    const sub = screen.getByText('自然语言生成高保真界面')
+    expect(sub.style.fontSize).toBe('18px')
+    expect(sub.style.color).toBe(rgb(resolveColor('text-light')!))
+    const cta = screen.getByText('立即开始')
+    expect(cta.style.backgroundColor).toBe(rgb(resolveColor('primary')!))
+    expect(cta.style.color).toBe('rgb(255, 255, 255)')
+  })
+
+  it('image 空态画布：虚线占位 160 高（border 令牌 + muted 底）内联可测；有图时 objectFit 内联', () => {
+    const def = componentRegistry.image
+    const { container, unmount } = render(<def.Canvas props={{}} />)
+    const placeholder = container.firstElementChild as HTMLElement
+    expect(placeholder.style.height).toBe('160px')
+    expect(placeholder.style.border).toBe(`1px dashed ${rgb(resolveColor('border')!)}`)
+    unmount()
+    const { container: c2 } = render(<def.Canvas props={{ src: 'https://x/img.png', fit: 'contain' }} />)
+    const img = c2.querySelector('img')!
+    expect(img.style.objectFit).toBe('contain')
+  })
+})
+
 /** T12-A：navbar/sidebar 默认观感画布侧内联（jsdom 读不到 Tailwind 类——T12 把这些观感从类名移入内联） */
 describe('T12-A navbar/sidebar 画布内联', () => {
   it('navbar 画布内联：高度 56 / 左右内边距 24 / 下边框 border 令牌 / 白底 / 标题 18·600 / 链接 14 与 gap 24', () => {
