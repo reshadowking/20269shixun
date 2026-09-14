@@ -120,6 +120,6 @@ export const buildTabsExport = (node: DesignNode): ExportElement => {
 
 /** ④ 属性面板配置：与画布点击共用 props.active（不得各存一份） */
 export const tabsSchema = [
-  { key: 'items', label: '标签项（JSON 数组）', control: 'textarea' as const },
+  { key: 'items', label: '标签项（JSON 数组）', control: 'json' as const },
   { key: 'active', label: '选中项（序号）', control: 'number' as const, min: 0 },
 ]

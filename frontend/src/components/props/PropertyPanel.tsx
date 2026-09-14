@@ -75,6 +75,70 @@ function ImageUploadControl({ value, onChange }: { value: string; onChange: (v: 
 }
 
 /**
+ * T9.1 #21：JSON 字段控件（items/links/columns/rows/data 等数组 props）。
+ * 修复前用 textarea + `String(value)`：显示 `[object Object]`，手改后把字符串写回 props
+ * （字符串进树后会被增量生成路径的 repair 删除）。本控件：
+ * - 显示 JSON.stringify（树值变化——撤销/协作/切换选中——自动同步回文本）；
+ * - 文本经 JSON.parse 校验成功才写回（非法输入不落树，显示可见错误提示）；
+ * - 清空 → 写回空数组（当前全部 json 控件消费方均为数组字段，见各组件 schema）。
+ * 类型写错的合法 JSON（如给数组字段写对象）由各组件容错渲染 + 后端 repair 兜底。
+ */
+function JsonControl({ fieldKey, value, onChange }: { fieldKey: string; value: unknown; onChange: (v: unknown) => void }) {
+  const stringify = (v: unknown) => (v === undefined || v === null ? '' : JSON.stringify(v, null, 2))
+  const [text, setText] = useState(() => stringify(value))
+  const [error, setError] = useState('')
+  const [lastValue, setLastValue] = useState(value)
+
+  // 树值变化（撤销/协作/切换选中）→ 渲染期同步文本缓冲（React 官方 "adjusting state when
+  // props change" 模式，避免 effect 级联渲染）；若文本与树值语义等价（刚由本控件写回），
+  // 保持原文本不打断输入。
+  if (value !== lastValue) {
+    setLastValue(value)
+    setText((current) => {
+      if (current === stringify(value)) return current
+      try {
+        if (JSON.stringify(JSON.parse(current)) === JSON.stringify(value ?? null)) return current
+      } catch {
+        // 文本当前非法：外部值变化视为新真相，覆盖
+      }
+      return stringify(value)
+    })
+    setError('')
+  }
+
+  const handleChange = (next: string) => {
+    setText(next)
+    if (next.trim() === '') {
+      setError('')
+      onChange([])
+      return
+    }
+    try {
+      onChange(JSON.parse(next))
+      setError('')
+    } catch {
+      setError('JSON 无效，未写入（其余字段不受影响）')
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-1">
+      <Textarea
+        data-testid={`prop-${fieldKey}`}
+        className="min-h-16 font-mono text-xs"
+        value={text}
+        onChange={(e) => handleChange(e.target.value)}
+      />
+      {error && (
+        <p className="text-[11px] text-destructive" data-testid={`json-error-${fieldKey}`}>
+          {error}
+        </p>
+      )}
+    </div>
+  )
+}
+
+/**
  * 属性面板（v2.2 §3.5：文本/颜色/字号/间距/布局 + 组件 schema 控件）。
  * 修改通过 store.updateNode 走 Yjs transaction；
  * 手动改色给"建议令牌色"提醒但不强制（v2.2 §4.6）。
@@ -188,6 +252,8 @@ export default function PropertyPanel({ node, onUpdate, onDelete, onMoveLayer, o
         )
       case 'upload':
         return <ImageUploadControl value={stringVal} onChange={onChange} />
+      case 'json':
+        return <JsonControl fieldKey={field.key} value={value} onChange={onChange} />
       case 'color':
         return (
           <div className="flex flex-col gap-1">

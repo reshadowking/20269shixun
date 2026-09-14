@@ -61,7 +61,7 @@ ${items.map((item) => {
 
 /** ④ 属性面板配置 */
 export const sidebarSchema = [
-  { key: 'items', label: '菜单项（JSON 数组）', control: 'textarea' as const },
+  { key: 'items', label: '菜单项（JSON 数组）', control: 'json' as const },
   { key: 'active', label: '选中项', control: 'text' as const },
 ]
 

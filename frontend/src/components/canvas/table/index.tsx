@@ -76,8 +76,8 @@ ${columns.map((col) => `              <td className="px-4 py-3">${escapeHtml(Str
 
 /** ④ 属性面板配置 */
 export const tableSchema = [
-  { key: 'columns', label: '列（JSON 数组）', control: 'textarea' as const },
-  { key: 'rows', label: '行数据（JSON 数组）', control: 'textarea' as const },
+  { key: 'columns', label: '列（JSON 数组）', control: 'json' as const },
+  { key: 'rows', label: '行数据（JSON 数组）', control: 'json' as const },
 ]
 
 /** B1：导出语义描述——thead/tbody 结构与引擎 case 一致（单元格边框常量统一） */

@@ -46,7 +46,7 @@ ${links.map((link) => `            <a href="${escapeHtml(safeHref(link.href))}" 
 /** ④ 属性面板配置 */
 export const navbarSchema = [
   { key: 'title', label: '品牌名', control: 'text' as const },
-  { key: 'links', label: '链接（JSON 数组）', control: 'textarea' as const },
+  { key: 'links', label: '链接（JSON 数组）', control: 'json' as const },
 ]
 
 /** B1：导出语义描述——href 在此过 safeHref 白名单；链接间距双通道统一 marginLeft 12 */

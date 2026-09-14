@@ -93,7 +93,7 @@ export const chartSchema = [
   { key: 'title', label: '标题', control: 'text' as const },
   { key: 'xKey', label: 'X 轴字段', control: 'text' as const },
   { key: 'yKey', label: 'Y 轴字段', control: 'text' as const },
-  { key: 'data', label: '数据（JSON 数组）', control: 'textarea' as const },
+  { key: 'data', label: '数据（JSON 数组）', control: 'json' as const },
 ]
 
 /** B1：导出语义描述——纯 CSS 柱状示意（与引擎 case 一致；画布为 Recharts 真实渲染）。
