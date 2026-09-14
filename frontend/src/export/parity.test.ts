@@ -792,3 +792,31 @@ describe('T12-D tag 彩色标签修复 + 内容/装饰型组件默认观感双�
     expect(html).toContain('border-radius: 50%')
   })
 })
+
+describe('T13 #26 stat-block 三块内容双通道对齐（T12 卡口径写错导致的漏做）', () => {
+  const PROPS = { label: '本月营收', value: '¥1.2万', trend: '↑12%' }
+
+  it('label 字号 14（画布 text-sm 口径；此前导出 13）+ 色 text-light（双通道 + 反断言 13 不回归）', () => {
+    const react = designToReactApp(plainTree('stat-block', PROPS), false)
+    const html = designToHtml(plainTree('stat-block', PROPS))
+    expect(react).toContain('"fontSize":14')
+    expect(html).toContain('font-size: 14px')
+    expect(react, '旧口径 13 不得回归').not.toContain('"fontSize":13')
+    expect(html, '旧口径 13px 不得回归').not.toContain('font-size: 13px')
+    expect(react).toContain(`"color":"${resolveColor('text-light')}"`)
+    expect(html).toContain(`color: ${resolveColor('text-light')}`)
+  })
+
+  it('value：24 / 700 / marginTop 4（此前导出缺上间距）；trend：12 / marginTop 4（双通道）', () => {
+    const react = designToReactApp(plainTree('stat-block', PROPS), false)
+    const html = designToHtml(plainTree('stat-block', PROPS))
+    expect(react).toContain('"fontSize":24')
+    expect(react).toContain('"fontWeight":700')
+    expect(react).toContain('"marginTop":4')
+    expect(html).toContain('font-size: 24px')
+    expect(html).toContain('margin-top: 4px')
+    expect(react).toContain('"fontSize":12')
+    expect(html).toContain('font-size: 12px')
+    expect(react, '趋势色仍为 success 令牌').toContain(`"color":"${resolveColor('success')}"`)
+  })
+})

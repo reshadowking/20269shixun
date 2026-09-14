@@ -306,6 +306,25 @@ describe('T5.5 画布盒模型内联', () => {
   })
 })
 
+/** T13 #26：stat-block 三块内容画布侧内联（label 14 / value 24·700·mt4 / trend 12·mt4） */
+describe('T13 #26 stat-block 三块内容', () => {
+  it('label 14 + text-light；value 24·700·mt 4；trend 12·mt 4 且色为 success', () => {
+    const def = componentRegistry['stat-block']
+    render(<def.Canvas props={{ label: 'L', value: 'V', trend: '↑12%' }} />)
+    const label = screen.getByText('L')
+    expect(label.style.fontSize).toBe('14px')
+    expect(label.style.color).toBe(rgb(resolveColor('text-light')!))
+    const value = screen.getByText('V')
+    expect(value.style.fontSize).toBe('24px')
+    expect(value.style.fontWeight).toBe('700')
+    expect(value.style.marginTop).toBe('4px')
+    const trend = screen.getByText('↑12%')
+    expect(trend.style.fontSize).toBe('12px')
+    expect(trend.style.marginTop).toBe('4px')
+    expect(trend.style.color).toBe(rgb(resolveColor('success')!))
+  })
+})
+
 /** T12-D：tag 彩色标签修复 + 内容/装饰型组件画布内联 */
 describe('T12-D 画布内联', () => {
   it('tag 彩色分支：底色为解析后的令牌色（danger → 令牌值）——修复「白字无底色 = 隐形」', () => {

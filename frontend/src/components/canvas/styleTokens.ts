@@ -291,3 +291,14 @@ export const AVATAR_DEFAULT_STYLE: React.CSSProperties = {
   fontSize: 14,
   fontWeight: 600,
 }
+
+// ---- T13 #26：指标块三块内容配方（口径以画布为准，纠正 T12 卡"别动"遗漏）----
+
+/** 指标块 label（text-sm = 14；此前导出 13） */
+export const STAT_LABEL_STYLE: React.CSSProperties = { fontSize: 14, color: STAT_LABEL_COLOR }
+
+/** 指标块 value（text-2xl font-bold + mt-1 = 24 / 700 / 上间距 4；此前导出缺上间距） */
+export const STAT_VALUE_STYLE: React.CSSProperties = { fontSize: 24, fontWeight: 700, marginTop: 4 }
+
+/** 指标块 trend（text-xs + mt-1 = 12 / 上间距 4；色由 trendColor 叠加） */
+export const STAT_TREND_STYLE: React.CSSProperties = { fontSize: 12, marginTop: 4 }

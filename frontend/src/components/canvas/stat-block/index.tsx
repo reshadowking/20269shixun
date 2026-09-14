@@ -1,7 +1,7 @@
 import type { ExportElement } from '@/components/canvas/types'
 import { escapeHtml } from '@/design/escape'
 import { resolveColor, styleToCss } from '@/design/styleToCss'
-import { STAT_CONTAINER_STYLE, STAT_LABEL_COLOR } from '@/components/canvas/styleTokens'
+import { STAT_CONTAINER_STYLE, STAT_LABEL_STYLE, STAT_TREND_STYLE, STAT_VALUE_STYLE } from '@/components/canvas/styleTokens'
 import type { DesignNode } from '@/design/types'
 
 /**
@@ -19,13 +19,11 @@ export function CanvasStatBlock({ props, style }: { props: Record<string, unknow
   const value = typeof props.value === 'string' ? props.value : '0'
   const trend = typeof props.trend === 'string' ? props.trend : ''
   return (
-    // 容器默认观感内联（T12-D，画布/导出共用 STAT_CONTAINER_STYLE）；三块内容样式不动
+    // 容器默认观感内联（T12-D）；三块内容配方共用 STAT_* 常量（T13 #26 对齐）
     <div style={{ ...STAT_CONTAINER_STYLE, ...(style as object) }}>
-      <div className="text-sm" style={{ color: STAT_LABEL_COLOR }}>{label}</div>
-      <div className="mt-1 text-2xl font-bold">{value}</div>
-      {trend && (
-        <div className="mt-1 text-xs" style={{ color: trendColor(trend) }}>{trend}</div>
-      )}
+      <div style={{ ...STAT_LABEL_STYLE }}>{label}</div>
+      <div style={{ ...STAT_VALUE_STYLE }}>{value}</div>
+      {trend && <div style={{ ...STAT_TREND_STYLE, color: trendColor(trend) }}>{trend}</div>}
     </div>
   )
 }
@@ -60,17 +58,18 @@ export const statBlockSchema = [
 /** B1：导出语义描述（label/value/trend 三段，内部常量样式与引擎 case 一致） */
 export const buildStatBlockExport = (node: DesignNode): ExportElement => {
   const props = node.props ?? {}
+  // T13 #26：三块内容与画布共用 STAT_* 常量（label 14 / value 24·700·mt4 / trend 12·mt4）
   const children: ExportElement[] = [
     {
       tag: 'div',
       attrs: {},
-      style: { fontSize: 13, color: STAT_LABEL_COLOR },
+      style: { ...STAT_LABEL_STYLE },
       text: typeof props.label === 'string' ? props.label : '',
     },
     {
       tag: 'div',
       attrs: {},
-      style: { fontSize: 24, fontWeight: 700 },
+      style: { ...STAT_VALUE_STYLE },
       text: typeof props.value === 'string' ? props.value : '',
     },
   ]
@@ -78,7 +77,7 @@ export const buildStatBlockExport = (node: DesignNode): ExportElement => {
     children.push({
       tag: 'div',
       attrs: {},
-      style: { fontSize: 12, color: trendColor(props.trend) },
+      style: { ...STAT_TREND_STYLE, color: trendColor(props.trend) },
       text: props.trend,
     })
   }
