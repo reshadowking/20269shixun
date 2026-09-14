@@ -205,6 +205,15 @@
               }
             },
             {
+              "id": "ecom-p1-icon",
+              "type": "component",
+              "componentType": "icon",
+              "props": {
+                "name": "plus",
+                "color": "primary"
+              }
+            },
+            {
               "id": "ecom-p1-btn",
               "type": "component",
               "componentType": "button",
@@ -296,6 +305,15 @@
               "props": {
                 "text": "立减 200",
                 "color": "danger"
+              }
+            },
+            {
+              "id": "ecom-p2-icon",
+              "type": "component",
+              "componentType": "icon",
+              "props": {
+                "name": "plus",
+                "color": "primary"
               }
             },
             {
@@ -393,6 +411,15 @@
               }
             },
             {
+              "id": "ecom-p3-icon",
+              "type": "component",
+              "componentType": "icon",
+              "props": {
+                "name": "plus",
+                "color": "primary"
+              }
+            },
+            {
               "id": "ecom-p3-btn",
               "type": "component",
               "componentType": "button",
@@ -484,6 +511,15 @@
               "props": {
                 "text": "新品 8 折",
                 "color": "danger"
+              }
+            },
+            {
+              "id": "ecom-p4-icon",
+              "type": "component",
+              "componentType": "icon",
+              "props": {
+                "name": "plus",
+                "color": "primary"
               }
             },
             {

@@ -61,6 +61,15 @@
       }
     },
     {
+      "id": "login-remember",
+      "type": "component",
+      "componentType": "switch",
+      "props": {
+        "label": "记住登录状态",
+        "checked": true
+      }
+    },
+    {
       "id": "login-btn",
       "type": "component",
       "componentType": "button",

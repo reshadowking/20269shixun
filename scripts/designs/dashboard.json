@@ -68,6 +68,42 @@
       ]
     },
     {
+      "id": "dash-range",
+      "type": "frame",
+      "style": {
+        "layout": "row",
+        "gap": 8,
+        "alignItems": "center"
+      },
+      "children": [
+        {
+          "id": "dash-range-icon",
+          "type": "component",
+          "componentType": "icon",
+          "props": {
+            "name": "calendar",
+            "color": "text-secondary"
+          }
+        },
+        {
+          "id": "dash-range-tabs",
+          "type": "component",
+          "componentType": "tabs",
+          "props": {
+            "items": [
+              {
+                "label": "近 7 天"
+              },
+              {
+                "label": "近 30 天"
+              }
+            ],
+            "active": 0
+          }
+        }
+      ]
+    },
+    {
       "id": "dash-chart",
       "type": "component",
       "componentType": "chart",
