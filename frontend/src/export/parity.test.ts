@@ -650,3 +650,50 @@ describe('T12-B image 双通道（fit 映射 + 空态口径统一）', () => {
     expect(html, '空 src 不得再输出 src=""').not.toContain('src=""')
   })
 })
+
+describe('T12-C table/chart 默认观感双通道（口径以画布为准）', () => {
+  const TABLE_PROPS_C = { columns: [{ key: 'a', title: '列A' }], rows: [{ a: '值1' }, { a: '值2' }] }
+
+  it('table：容器圆角 8 / border 令牌 / 白底 + 单元格 padding 16×12 + 表头左对齐·500 + 行分隔线（双通道 + 反断言 padding 8 不回归）', () => {
+    const react = designToReactApp(plainTree('table', TABLE_PROPS_C), false)
+    const html = designToHtml(plainTree('table', TABLE_PROPS_C))
+    const BORDER = `1px solid ${resolveColor('border')}`
+    expect(react).toContain('"borderRadius":8')
+    expect(html).toContain('border-radius: 8px')
+    expect(react).toContain(`"border":"${BORDER}"`)
+    expect(html).toContain(`border: ${BORDER}`)
+    expect(react).toContain('"background":"#FFFFFF"')
+    expect(html).toContain('background: #FFFFFF')
+    // 单元格 padding 统一到画布 16×12（此前导出 8）
+    expect(react).toContain('"padding":"12px 16px"')
+    expect(html).toContain('padding: 12px 16px')
+    expect(react, '旧口径 padding 8 不得回归').not.toContain('"padding":8')
+    expect(html, '旧口径 padding 8px 不得回归').not.toContain('padding: 8px')
+    // 表头左对齐 + 500（此前导出继承浏览器默认居中/700）
+    expect(react).toContain('"textAlign":"left"')
+    expect(html).toContain('text-align: left')
+    expect(react).toContain('"fontWeight":500')
+    expect(html).toContain('font-weight: 500')
+    // 行分隔线走行容器（末行无）
+    expect(react).toContain(`"borderBottom":"${BORDER}"`)
+    expect(html).toContain(`border-bottom: ${BORDER}`)
+  })
+
+  it('chart：容器圆角 8 / border 令牌 / 白底 / padding 16 + 标题 marginBottom 16（双通道 + 反断言旧值 12 不回归）', () => {
+    const CHART_PROPS_C = { chartType: 'bar', title: '月度趋势', data: [{ day: '一月', value: 30 }], xKey: 'day', yKey: 'value' }
+    const react = designToReactApp(plainTree('chart', CHART_PROPS_C), false)
+    const html = designToHtml(plainTree('chart', CHART_PROPS_C))
+    const BORDER = `1px solid ${resolveColor('border')}`
+    expect(react).toContain('"borderRadius":8')
+    expect(html).toContain('border-radius: 8px')
+    expect(react).toContain(`"border":"${BORDER}"`)
+    expect(html).toContain(`border: ${BORDER}`)
+    expect(react).toContain('"background":"#FFFFFF"')
+    expect(html).toContain('background: #FFFFFF')
+    expect(react).toContain('"padding":16')
+    expect(html).toContain('padding: 16px')
+    expect(react).toContain('"marginBottom":16')
+    expect(html).toContain('margin-bottom: 16px')
+    expect(react, '旧口径 marginBottom 12 不得回归').not.toContain('"marginBottom":12')
+  })
+})

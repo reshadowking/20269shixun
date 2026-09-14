@@ -199,3 +199,33 @@ export const IMAGE_PLACEHOLDER_CANVAS_STYLE: React.CSSProperties = {
   fontSize: 12,
   color: resolveColor('text-light'),
 }
+
+// ---- T12-C：数据类组件配方（口径以画布为准）----
+
+/** 表格/图表容器观感（rounded-lg border bg-card）：圆角 8 / border 令牌 / 白底。
+ * 表格结构差异说明：画布是「外层 div + table」，导出为单个 <table> 承载同款容器观感
+ * （单元格不再各带边框，行分隔线走行容器——与画布 tr border-b 语义一致）。 */
+export const TABLE_CONTAINER_STYLE: React.CSSProperties = {
+  width: '100%',
+  borderRadius: 8,
+  border: TABLE_CELL_BORDER,
+  background: '#FFFFFF',
+}
+
+/** 表格单元格默认观感（px-4 py-3 = 内边距 16×12）——此前导出为 8，与画布不一致 */
+export const TABLE_CELL_STYLE: React.CSSProperties = { padding: '12px 16px' }
+
+/** 表头单元格（text-left font-medium = 左对齐 + 500；色另由 TABLE_HEAD_TEXT_COLOR） */
+export const TABLE_HEAD_CELL_STYLE: React.CSSProperties = { textAlign: 'left', fontWeight: 500 }
+
+/** 表格行分隔线（画布 tr border-b，末行无） */
+export const TABLE_ROW_BORDER: React.CSSProperties = { borderBottom: TABLE_CELL_BORDER }
+
+/** 图表容器（与 TABLE_CONTAINER_STYLE 同观感 + p-4 = padding 16） */
+export const CHART_DEFAULT_STYLE: React.CSSProperties = {
+  ...TABLE_CONTAINER_STYLE,
+  padding: 16,
+}
+
+/** 图表标题（text-sm font-semibold mb-4 = 14 / 600 / 下间距 16；此前导出下间距 12） */
+export const CHART_TITLE_STYLE: React.CSSProperties = { fontSize: 14, fontWeight: 600, marginBottom: 16 }

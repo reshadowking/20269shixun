@@ -306,6 +306,37 @@ describe('T5.5 画布盒模型内联', () => {
   })
 })
 
+/** T12-C：table/chart 默认观感画布侧内联 */
+describe('T12-C table/chart 画布内联', () => {
+  it('table 画布：容器圆角 8/border 令牌/白底；单元格 padding 16×12；表头左对齐·500；行分隔线内联', () => {
+    const def = componentRegistry.table
+    const { container } = render(<def.Canvas props={{ columns: [{ key: 'a', title: '列A' }], rows: [{ a: '值1' }] }} />)
+    const root = container.firstElementChild as HTMLElement
+    expect(root.style.borderRadius).toBe('8px')
+    expect(root.style.border).toBe(`1px solid ${rgb(resolveColor('border')!)}`)
+    expect(root.style.background).toBe('rgb(255, 255, 255)')
+    const th = screen.getByText('列A')
+    expect(th.style.padding).toBe('12px 16px')
+    expect(th.style.textAlign).toBe('left')
+    expect(th.style.fontWeight).toBe('500')
+    expect(screen.getByText('值1').style.padding).toBe('12px 16px')
+  })
+
+  it('chart 画布：容器圆角 8/border 令牌/白底/padding 16；标题 14·600·mb 16 内联', () => {
+    const def = componentRegistry.chart
+    const { container } = render(<def.Canvas props={{ chartType: 'bar', title: '月度趋势', data: [{ day: '一月', value: 30 }], xKey: 'day', yKey: 'value' }} />)
+    const root = container.querySelector('[data-testid="canvas-chart"]') as HTMLElement
+    expect(root.style.borderRadius).toBe('8px')
+    expect(root.style.border).toBe(`1px solid ${rgb(resolveColor('border')!)}`)
+    expect(root.style.background).toBe('rgb(255, 255, 255)')
+    expect(root.style.padding).toBe('16px')
+    const title = screen.getByText('月度趋势')
+    expect(title.style.fontSize).toBe('14px')
+    expect(title.style.fontWeight).toBe('600')
+    expect(title.style.marginBottom).toBe('16px')
+  })
+})
+
 /** T12-B：hero/image 默认观感画布侧内联 */
 describe('T12-B hero/image 画布内联', () => {
   it('hero 画布：内边距 80/48、居中、gap 16、底色 background 令牌；标题 36/700；副标题 18 + text-light；CTA primary 底白字', () => {

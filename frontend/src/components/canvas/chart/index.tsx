@@ -3,7 +3,7 @@ import { Bar, BarChart, CartesianGrid, Cell, Line, LineChart, Pie, PieChart, Res
 import type { ExportElement } from '@/components/canvas/types'
 import { escapeHtml } from '@/design/escape'
 import { styleToCss } from '@/design/styleToCss'
-import { CHART_AXIS_COLOR, CHART_COLORS, CHART_GRID_COLOR } from '@/components/canvas/styleTokens'
+import { CHART_AXIS_COLOR, CHART_COLORS, CHART_DEFAULT_STYLE, CHART_GRID_COLOR, CHART_TITLE_STYLE } from '@/components/canvas/styleTokens'
 import type { DesignNode } from '@/design/types'
 
 interface ChartDatum { [key: string]: unknown }
@@ -17,8 +17,8 @@ export function CanvasChart({ props, style }: { props: Record<string, unknown>; 
   const yKey = typeof props.yKey === 'string' ? props.yKey : 'y'
 
   return (
-    <div className="w-full rounded-lg border bg-card p-4" data-testid="canvas-chart" style={style as object}>
-      {title && <div className="mb-4 text-sm font-semibold">{title}</div>}
+    <div data-testid="canvas-chart" style={{ ...CHART_DEFAULT_STYLE, ...(style as object) }}>
+      {title && <div style={CHART_TITLE_STYLE}>{title}</div>}
       <ResponsiveContainer width="100%" height={180}>
         {chartType === 'line' ? (
           <LineChart data={data}>
@@ -110,7 +110,7 @@ export const buildChartExport = (node: DesignNode): ExportElement => {
     {
       tag: 'div',
       attrs: {},
-      style: { fontSize: 14, fontWeight: 600, marginBottom: 12 },
+      style: { ...CHART_TITLE_STYLE },
       text: typeof props.title === 'string' ? props.title : '',
     },
   ]
@@ -143,5 +143,5 @@ export const buildChartExport = (node: DesignNode): ExportElement => {
       text: String(d[xKey] ?? ''),
     })),
   })
-  return { tag: 'div', attrs: {}, style: styleToCss(node.style), children }
+  return { tag: 'div', attrs: {}, style: { ...CHART_DEFAULT_STYLE, ...styleToCss(node.style) }, children }
 }
