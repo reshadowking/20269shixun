@@ -158,3 +158,39 @@ class TestTestIsolationSafety:
             assert "example.invalid" not in real.read_text(encoding="utf-8")
         assert llm_runtime.CONFIG_FILE != real
         assert llm_runtime.CONFIG_FILE.exists() or not before
+
+
+class TestConfigFileEnvOverride:
+    def test_env_var_overrides_config_file(self):
+        """T10.2：LLM_CONFIG_FILE 环境变量可覆盖配置文件路径——测试/演练模式不再依赖
+        「启动包装器改模块常量」。用子进程验证（不 reload 当前进程，避免破坏 conftest
+        的会话级隔离）。"""
+        import os
+        import subprocess
+        import sys
+        from pathlib import Path
+
+        backend = Path(__file__).resolve().parent.parent
+        env = {**os.environ, "LLM_CONFIG_FILE": "_t10_2_override/probe.json"}
+        out = subprocess.run(
+            [sys.executable, "-c", "from app import llm_runtime; print(llm_runtime.CONFIG_FILE)"],
+            cwd=backend, env=env, capture_output=True, text=True, timeout=60, check=False,
+        )
+        assert out.returncode == 0, out.stderr
+        assert Path(out.stdout.strip()).as_posix().endswith("_t10_2_override/probe.json"), out.stdout
+
+    def test_default_path_when_env_absent(self):
+        """未设置环境变量时维持默认路径 backend/data/llm-config.json。"""
+        import os
+        import subprocess
+        import sys
+        from pathlib import Path
+
+        backend = Path(__file__).resolve().parent.parent
+        env = {k: v for k, v in os.environ.items() if k != "LLM_CONFIG_FILE"}
+        out = subprocess.run(
+            [sys.executable, "-c", "from app import llm_runtime; print(llm_runtime.CONFIG_FILE)"],
+            cwd=backend, env=env, capture_output=True, text=True, timeout=60, check=False,
+        )
+        assert out.returncode == 0, out.stderr
+        assert Path(out.stdout.strip()).as_posix().endswith("data/llm-config.json"), out.stdout

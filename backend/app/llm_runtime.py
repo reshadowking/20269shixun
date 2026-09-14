@@ -5,6 +5,7 @@
 """
 import json
 import logging
+import os
 from functools import lru_cache
 from pathlib import Path
 
@@ -13,7 +14,11 @@ from .config import get_settings
 logger = logging.getLogger(__name__)
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
-CONFIG_FILE = DATA_DIR / "llm-config.json"
+# T10.2：配置文件路径允许环境变量覆盖（LLM_CONFIG_FILE）——测试/E2E 的 mock 隔离
+# 不再依赖「启动包装器改模块常量」（docs/AI后续优化与测试提示词.md §1 的正确做法），
+# 一句 `LLM_CONFIG_FILE=/tmp/none.json` 即可让运行时配置回到"无文件"状态。
+# 未设置时保持默认 backend/data/llm-config.json。
+CONFIG_FILE = Path(os.environ.get("LLM_CONFIG_FILE") or (DATA_DIR / "llm-config.json"))
 
 # 允许前端覆盖的字段（白名单，防止写入任意键）
 RUNTIME_KEYS = (
