@@ -110,3 +110,42 @@ export const BUTTON_BASE_STYLE: React.CSSProperties = {
   fontSize: 14,
   fontWeight: 500,
 }
+
+// ---- T12-A：导航类组件配方（口径以画布为准；此前默认观感在 Tailwind 类名里、导出侧整体丢失）----
+
+/** 导航默认观感（h-14 / px-6 / border-b / bg-background）：高度 56、左右内边距 24、
+ * 下边框 border 令牌、底色白（bg-background = --background #ffffff；白为既有例外口径，
+ * 与 CARD_DEFAULT_STYLE 一致）。画布与导出共用，node.style 最后展开。 */
+export const NAVBAR_DEFAULT_STYLE: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  height: 56,
+  paddingLeft: 24,
+  paddingRight: 24,
+  borderBottom: `1px solid ${resolveColor('border')!}`,
+  background: '#FFFFFF',
+}
+
+/** 导航标题（text-lg font-semibold = 18 / 600）——此前导出 <strong> 为浏览器默认 16/700 */
+export const NAVBAR_TITLE_STYLE: React.CSSProperties = { fontSize: 18, fontWeight: 600 }
+
+/** 导航链接容器（gap-6 = 24）——T12-A 统一到画布口径；此前导出用 marginLeft 12（不一致） */
+export const NAVBAR_LINKS_STYLE: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 24 }
+
+/** 导航链接文字（text-sm = 14）；颜色另由 NAV_LINK_COLOR（text-light 令牌） */
+export const NAVBAR_LINK_STYLE: React.CSSProperties = { fontSize: 14, color: NAV_LINK_COLOR }
+
+/** 侧栏默认观感（w-48 / p-4 / gap-1）：宽度 192、内边距 16、项间距 4、纵向排列。
+ * 底色 ASIDE_BG 由 sidebar 组件定义（T5-0 基准，不重写）。 */
+export const SIDEBAR_DEFAULT_STYLE: React.CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  width: 192,
+  padding: 16,
+  gap: 4,
+}
+
+/** 侧栏项基础观感（px-3 py-2 / rounded-md / text-sm = 内边距 12/8、圆角 6、字号 14）——
+ * active/idle 的颜色叠加仍由 sidebar 组件的 T5-0 常量负责。 */
+export const SIDEBAR_ITEM_BASE: React.CSSProperties = { padding: '8px 12px', borderRadius: 6, fontSize: 14 }

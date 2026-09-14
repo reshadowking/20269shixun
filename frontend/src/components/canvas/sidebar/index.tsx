@@ -1,4 +1,5 @@
 import type { ExportElement } from '@/components/canvas/types'
+import { SIDEBAR_DEFAULT_STYLE, SIDEBAR_ITEM_BASE } from '@/components/canvas/styleTokens'
 import { escapeHtml } from '@/design/escape'
 import { resolveColor, styleToCss } from '@/design/styleToCss'
 import type { DesignNode } from '@/design/types'
@@ -25,11 +26,12 @@ export function CanvasSidebar({ props, style }: { props: Record<string, unknown>
   const items = Array.isArray(props.items) ? (props.items as SideItem[]) : []
   const active = typeof props.active === 'string' ? props.active : ''
   return (
-    <div className="flex w-48 flex-col gap-1 p-4" style={{ backgroundColor: ASIDE_BG, ...(style as object) }}>
+    // 静态观感内联（T12-A，画布/导出共用 SIDEBAR_* 常量；底色/两态色仍是 T5-0 常量）
+    <div style={{ ...SIDEBAR_DEFAULT_STYLE, backgroundColor: ASIDE_BG, ...(style as object) }}>
       {items.map((item, i) => {
         const isActive = item.label === active
         return (
-          <div key={i} className="rounded-md px-3 py-2 text-sm" style={isActive ? SIDEBAR_ITEM_ACTIVE : SIDEBAR_ITEM_IDLE}>
+          <div key={i} style={{ ...SIDEBAR_ITEM_BASE, ...(isActive ? SIDEBAR_ITEM_ACTIVE : SIDEBAR_ITEM_IDLE) }}>
             {escapeHtml(item.label ?? '菜单项')}
           </div>
         )
@@ -66,7 +68,9 @@ export const sidebarSchema = [
 ]
 
 /** B1：导出语义描述（菜单项渲染 label）。T5-0 #4：active 高亮/非 active 灰/根底色
- * 与画布共用同一常量，node.style 仍可覆盖根样式。 */
+ * 与画布共用同一常量，node.style 仍可覆盖根样式。
+ * T12-A：默认观感（宽度 192 / 内边距 16 / 项间距 4 / item 圆角与字号）补齐，
+ * 与画布共用 SIDEBAR_* 常量（此前这些值在类名里、导出侧整体丢失）。 */
 export const buildSidebarExport = (node: DesignNode): ExportElement => {
   const props = node.props ?? {}
   const items = Array.isArray(props.items) ? (props.items as SideItem[]) : []
@@ -74,12 +78,12 @@ export const buildSidebarExport = (node: DesignNode): ExportElement => {
   return {
     tag: 'aside',
     attrs: {},
-    style: { backgroundColor: ASIDE_BG, ...styleToCss(node.style) },
+    style: { ...SIDEBAR_DEFAULT_STYLE, backgroundColor: ASIDE_BG, ...styleToCss(node.style) },
     children: items.map((it) => ({
       tag: 'div',
       attrs: {},
       style: {
-        padding: '8px 12px',
+        ...SIDEBAR_ITEM_BASE,
         ...(it.label === active ? SIDEBAR_ITEM_ACTIVE : SIDEBAR_ITEM_IDLE),
       },
       text: typeof it.label === 'string' ? it.label : '',

@@ -306,6 +306,41 @@ describe('T5.5 画布盒模型内联', () => {
   })
 })
 
+/** T12-A：navbar/sidebar 默认观感画布侧内联（jsdom 读不到 Tailwind 类——T12 把这些观感从类名移入内联） */
+describe('T12-A navbar/sidebar 画布内联', () => {
+  it('navbar 画布内联：高度 56 / 左右内边距 24 / 下边框 border 令牌 / 白底 / 标题 18·600 / 链接 14 与 gap 24', () => {
+    const def = componentRegistry.navbar
+    const { container } = render(<def.Canvas props={{ title: '优选商城', links: [{ label: '首页', href: '#' }, { label: '分类', href: '#' }] }} />)
+    const root = container.firstElementChild as HTMLElement
+    expect(root.style.height).toBe('56px')
+    expect(root.style.paddingLeft).toBe('24px')
+    expect(root.style.borderBottom).toBe(`1px solid ${rgb(resolveColor('border')!)}`)
+    expect(root.style.background).toBe('rgb(255, 255, 255)')
+    const title = screen.getByText('优选商城')
+    expect(title.style.fontSize).toBe('18px')
+    expect(title.style.fontWeight).toBe('600')
+    const link = screen.getByText('首页')
+    expect(link.style.fontSize).toBe('14px')
+    expect((link.parentElement as HTMLElement).style.gap).toBe('24px')
+  })
+
+  it('sidebar 画布内联：宽度 192 / 内边距 16 / 项间距 4 / 纵向 + item 圆角 6 与字号 14', () => {
+    const def = componentRegistry.sidebar
+    const { container } = render(<def.Canvas props={{ items: [{ label: '总览' }, { label: '报表' }], active: '总览' }} />)
+    const root = container.firstElementChild as HTMLElement
+    expect(root.style.width).toBe('192px')
+    expect(root.style.padding).toBe('16px')
+    expect(root.style.gap).toBe('4px')
+    expect(root.style.flexDirection).toBe('column')
+    const item = screen.getByText('报表')
+    expect(item.style.padding).toBe('8px 12px')
+    expect(item.style.borderRadius).toBe('6px')
+    expect(item.style.fontSize).toBe('14px')
+    // active 态仍内联（T5-0 基准不回退）
+    expect(screen.getByText('总览').style.backgroundColor).toBe(rgb(resolveColor('primary')!))
+  })
+})
+
 /** T5.6：ghost 变体无阴影（修复前 ghost 被 BUTTON_BASE_STYLE 无条件施加 boxShadow） */
 describe('T5.6 ghost 变体阴影', () => {
   it('画布：ghost 无 boxShadow，填充变体仍有「极轻」阴影', () => {

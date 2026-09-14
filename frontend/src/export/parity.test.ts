@@ -522,3 +522,58 @@ describe('T9 tabs parity（active 双形态导出 §5.12；复用 items/active �
     expect(html.match(new RegExp(`border-bottom: 2px solid ${PRIMARY}`, 'g'))).toHaveLength(1)
   })
 })
+
+describe('T12-A navbar/sidebar 默认观感双通道（口径以画布为准）', () => {
+  const NAV = { title: '优选商城', links: [{ label: '首页', href: '#' }, { label: '分类', href: '#' }] }
+
+  it('navbar：高度 56 / 左右内边距 24 / 下边框 border 令牌 / 白底 / 标题 18·600 / 链接 14 与 gap 24（双通道）', () => {
+    const react = designToReactApp(plainTree('navbar', NAV), false)
+    const html = designToHtml(plainTree('navbar', NAV))
+    const BORDER = `1px solid ${resolveColor('border')}`
+    // 盒模型（此前导出高度 21px、无内边距/边框/底色）
+    expect(react).toContain('"height":56')
+    expect(html).toContain('height: 56px')
+    expect(react).toContain('"paddingLeft":24')
+    expect(html).toContain('padding-left: 24px')
+    expect(react).toContain(`"borderBottom":"${BORDER}"`)
+    expect(html).toContain(`border-bottom: ${BORDER}`)
+    expect(react).toContain('"background":"#FFFFFF"')
+    expect(html).toContain('background: #FFFFFF')
+    // 标题字号字重（此前 <strong> 默认 16/700）
+    expect(react).toContain('"fontSize":18')
+    expect(react).toContain('"fontWeight":600')
+    expect(html).toContain('font-size: 18px')
+    expect(html).toContain('font-weight: 600') // 样式末位属性无尾分号，不断 ';'
+    expect(html, 'font-weight 不得被加 px').not.toContain('font-weight: 600px')
+    // 链接字号与间距（间距统一到画布 gap-6=24；此前导出 marginLeft 12）
+    expect(react).toContain('"fontSize":14')
+    expect(html).toContain('font-size: 14px')
+    expect(react).toContain('"gap":24')
+    expect(html).toContain('gap: 24px')
+    expect(react, '旧口径 marginLeft 12 不得回归').not.toContain('"marginLeft":12')
+    expect(html, '旧口径 margin-left 12 不得回归').not.toContain('margin-left: 12px')
+  })
+
+  it('sidebar：宽度 192 / 外层内边距 16 / 项间距 4 / 纵向排列 + item 圆角 6 与字号 14（此前导出整体丢失）', () => {
+    const props = { items: [{ label: '总览' }, { label: '报表' }], active: '总览' }
+    const react = designToReactApp(plainTree('sidebar', props), false)
+    const html = designToHtml(plainTree('sidebar', props))
+    expect(react).toContain('"width":192')
+    expect(html).toContain('width: 192px')
+    expect(react).toContain('"padding":16')
+    expect(html).toContain('padding: 16px')
+    expect(react).toContain('"gap":4')
+    expect(html).toContain('gap: 4px')
+    expect(react).toContain('"flexDirection":"column"')
+    expect(html).toContain('flex-direction: column')
+    // item 基础观感（此前导出只有 padding，圆角/字号丢失）
+    expect(react).toContain('"borderRadius":6')
+    expect(html).toContain('border-radius: 6px')
+    expect(react).toContain('"padding":"8px 12px"')
+    expect(html).toContain('padding: 8px 12px')
+    // active/idle 两态仍在（T5-0 基准不回退）
+    expect(react).toContain(`"background":"${resolveColor('primary')}"`)
+    expect(html).toContain(`background: ${resolveColor('primary')}`)
+    expect(react).toContain(`"color":"${resolveColor('text-light')}"`)
+  })
+})
