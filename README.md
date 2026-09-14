@@ -18,6 +18,9 @@ docs/          开发文档（API 契约、评测口径、部署）
 
 ## 快速开始（本机开发）
 
+0. **克隆后一次性**：`powershell -ExecutionPolicy Bypass -File scripts/install-hooks.ps1`
+   —— 把 `scripts/precommit.ps1` 挂成 git pre-commit hook（停用：`git config --unset core.hooksPath`）。
+
 1. **Docker 基础服务**（PG / Redis:6380 / Jaeger / y-websocket:1234）：
    ```bash
    cd docker && docker compose up -d postgres redis jaeger y-websocket

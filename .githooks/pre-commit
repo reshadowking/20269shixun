@@ -1,0 +1,10 @@
+#!/bin/sh
+# T13-A3：git pre-commit hook —— 自动执行仓库自带的轻量门禁 scripts/precommit.ps1，非 0 即中止提交。
+# 安装（克隆后一次性）：powershell -ExecutionPolicy Bypass -File scripts/install-hooks.ps1
+#   （等价于 git config core.hooksPath .githooks；只作用于本仓库，不动 --global）
+# 停用：git config --unset core.hooksPath
+# 说明：precommit.ps1 会按既有策略拦截 .md（docs/ 不入库，README.md 为入库例外）。
+#   确需提交被拦文件时，正确做法是走 -AllowDocs（脚本内提示），而不是惯用 --no-verify。
+
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/precommit.ps1
+exit $?
