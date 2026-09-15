@@ -177,21 +177,22 @@ export default function HomePage() {
         {hasDraft && (
           <section>
             <button
-              className="flex w-full items-center gap-3 rounded-xl border bg-background p-5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-primary/50 hover:shadow-md"
+              className="flex w-full items-center gap-4 rounded-2xl border border-border bg-card p-5 text-left transition hover:-translate-y-0.5 hover:border-primary/40"
               data-testid="home-resume"
               onClick={() =>
                 openWorkspace(draftSession ? `?session=${draftSession}&from=draft` : '?from=draft')
               }
             >
-              <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-gradient-to-br from-primary/15 to-secondary/15 text-primary">
-                <Clock className="h-5 w-5" />
+              <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-primary/30 bg-primary/15 text-primary">
+                <Clock className="h-6 w-6" />
               </span>
               <span>
-                <span className="block text-sm font-medium">继续上次编辑</span>
+                <span className="block text-[15px] font-semibold">继续上次编辑</span>
                 <span className="text-xs text-muted-foreground">
                   {draftSession ? `回到会话 ${draftSession}` : '从上次的草稿继续，不会丢失'}
                 </span>
               </span>
+              <span className="ml-auto text-xs text-muted-foreground">按上次状态接着改 →</span>
             </button>
           </section>
         )}
@@ -205,31 +206,35 @@ export default function HomePage() {
             新建
             <span className="text-xs font-normal text-muted-foreground">空白起步，或一键体验完整功能</span>
           </h2>
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-2 gap-4">
             <button
-              className="group flex flex-col items-center gap-2 rounded-xl border border-dashed bg-background p-6 transition hover:-translate-y-0.5 hover:border-primary/60 hover:bg-primary/[0.03] hover:shadow-md"
+              className="group flex items-center gap-4 rounded-2xl border border-border bg-card p-5 text-left transition hover:-translate-y-0.5 hover:border-primary/40"
               data-testid="home-new-blank"
               onClick={() => {
                 // 空白画布（缺陷 4）：新建唯一 sessionId + 全新空会话（不继承任何历史）
                 openWorkspace(`?session=${randomSessionKey()}&from=blank`)
               }}
             >
-              <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-primary/15 to-secondary/15 text-primary transition group-hover:scale-105">
+              <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-primary/30 bg-primary/15 text-primary transition group-hover:scale-105">
                 <FilePlus2 className="h-6 w-6" />
               </span>
-              <span className="text-sm font-medium">空白画布</span>
-              <span className="text-xs text-muted-foreground">自由布局，从零开始</span>
+              <span>
+                <span className="block text-[15px] font-semibold">空白画布</span>
+                <span className="text-xs text-muted-foreground">自由布局，从零开始</span>
+              </span>
             </button>
             <button
-              className="group flex flex-col items-center gap-2 rounded-xl border border-dashed bg-background p-6 transition hover:-translate-y-0.5 hover:border-primary/60 hover:bg-primary/[0.03] hover:shadow-md"
+              className="group flex items-center gap-4 rounded-2xl border border-border bg-card p-5 text-left transition hover:-translate-y-0.5 hover:border-primary/40"
               data-testid="home-new-demo"
               onClick={() => openWorkspace(`?from=demo&demo=${DEMO_DESIGNS[0].id}`)}
             >
-              <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-muted text-muted-foreground transition group-hover:scale-105">
+              <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-muted text-muted-foreground transition group-hover:scale-105">
                 <FolderOpen className="h-6 w-6" />
               </span>
-              <span className="text-sm font-medium">示例优惠券页</span>
-              <span className="text-xs text-muted-foreground">快速体验完整功能</span>
+              <span>
+                <span className="block text-[15px] font-semibold">示例优惠券页</span>
+                <span className="text-xs text-muted-foreground">快速体验完整功能</span>
+              </span>
             </button>
           </div>
         </section>
@@ -247,11 +252,17 @@ export default function HomePage() {
             {templates.map((t) => (
               <button
                 key={t.key}
-                className="rounded-xl border bg-background px-3 py-4 text-center text-sm font-medium transition hover:-translate-y-0.5 hover:border-primary/50 hover:shadow-md"
+                className="overflow-hidden rounded-xl border border-border bg-card text-left transition hover:-translate-y-0.5 hover:border-primary/40"
                 data-testid={`home-template-${t.key}`}
                 onClick={() => openWorkspace(`?template=${t.key}`)}
               >
-                {t.name}
+                {/* T36：模板卡加迷你预览（纯装饰骨架，不依赖外部图片） */}
+                <span className="block h-[68px] bg-muted/40 p-3">
+                  <span className="mb-1.5 block h-1.5 w-2/5 rounded-full bg-foreground/15" />
+                  <span className="mb-1.5 block h-1.5 w-3/5 rounded-full bg-foreground/10" />
+                  <span className="block h-3 w-10 rounded-full bg-primary/70" />
+                </span>
+                <span className="block border-t border-border px-3 py-2 text-xs text-muted-foreground">{t.name}</span>
               </button>
             ))}
           </div>
