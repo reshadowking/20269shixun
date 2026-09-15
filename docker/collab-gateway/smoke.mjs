@@ -47,23 +47,44 @@ async function register(username) {
   return (await login.json()).token
 }
 
-/** 打开一个 WS，返回 { ws, closeCode }；resolve 时表示已连接（或已关闭）。 */
+/**
+ * 打开一个 WS。**必须区分"连上"与"被拒"**：
+ * 旧版只看 `close` 事件，结果 4403 到达前就 resolve 了，closeCode 仍是 null → 全部误判（实测 1/5）。
+ * 这里改成：先到的事件决定结论；并用 `expectDenied` 等待 close（带超时）。
+ */
 function open(room, token) {
   const url = `${GATEWAY}/${encodeURIComponent(room)}${token ? `?token=${encodeURIComponent(token)}` : ''}`
   const ws = new WebSocket(url)
-  const state = { ws, closeCode: null, opened: false }
+  const state = { ws, closeCode: null, opened: false, firstEvent: null }
   const done = new Promise((resolve) => {
     ws.on('open', () => {
       state.opened = true
+      state.firstEvent = 'open'
       resolve(state)
     })
     ws.on('close', (code) => {
       state.closeCode = code
+      state.firstEvent = state.firstEvent ?? 'close'
       resolve(state)
     })
     ws.on('error', () => resolve(state))
   })
   return { state, done }
+}
+
+/** 期望被拒：等 close（最多 3000ms）。若期间连上了，判定失败。 */
+async function expectDenied(room, token) {
+  const { state } = open(room, token)
+  const deadline = Date.now() + 3000
+  while (Date.now() < deadline) {
+    if (state.closeCode !== null || state.opened) break
+    await new Promise((r) => setTimeout(r, 50))
+  }
+  if (state.opened && state.closeCode === null) {
+    state.ws.close()
+    return { denied: false, code: null }
+  }
+  return { denied: state.closeCode === 4403, code: state.closeCode }
 }
 
 const results = []
@@ -79,19 +100,33 @@ const ownerToken = await register(ownerUser)
 const outsiderToken = await register(outsiderUser)
 
 // ① owner（合法成员）能连上
-const a = open(ROOM, ownerToken)
+//    注意：**不能用新注册的账号去连别人的 design-<id>**——它不是该稿件工作区的成员，网关会（正确地）拒绝。
+//    所以脚本自建一份稿件：创建人天然是 owner。
+let room = ROOM
+if (!args.design) {
+  const created = await fetch(`${BACKEND}/api/designs`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ownerToken}` },
+    body: JSON.stringify({ name: 'gateway-smoke', design: { id: 'root', type: 'frame', children: [] } }),
+  })
+  if (!created.ok) throw new Error(`创建测试稿件失败：HTTP ${created.status}`)
+  room = `design-${(await created.json()).id}`
+  console.log(`（未传 --design，已自建测试稿件 room=${room}）`)
+}
+
+const a = open(room, ownerToken)
 const aState = await a.done
 check('合法成员可连接', aState.opened === true, aState.opened ? '' : `close=${aState.closeCode}`)
 
 // ② 无 token / 错 token 被拒
-const noToken = await open(ROOM, '').done
-check('无 token 被拒（4403）', noToken.closeCode === 4403, `close=${noToken.closeCode}`)
-const badToken = await open(ROOM, 'not-a-jwt').done
-check('非法 token 被拒（4403）', badToken.closeCode === 4403, `close=${badToken.closeCode}`)
+const noToken = await expectDenied(room, '')
+check('无 token 被拒（4403）', noToken.denied, `close=${noToken.code}`)
+const badToken = await expectDenied(room, 'not-a-jwt')
+check('非法 token 被拒（4403）', badToken.denied, `close=${badToken.code}`)
 
 // ③ 非成员被拒
-const outsider = await open(ROOM, outsiderToken).done
-check('非成员被拒（4403）', outsider.closeCode === 4403, `close=${outsider.closeCode}`)
+const outsider = await expectDenied(room, outsiderToken)
+check('非成员被拒（4403）', outsider.denied, `close=${outsider.code}`)
 
 // ④ viewer 只读：owner 与 viewer 各连一个，viewer 发一条 Yjs update，owner 不应收到
 const invite = await fetch(`${BACKEND}/api/workspaces`, { headers: { Authorization: `Bearer ${ownerToken}` } })
@@ -118,15 +153,16 @@ if (workspaceId) {
 if (!viewerToken) {
   check('viewer 只读（写消息被丢）', false, '未能准备 viewer 账号（邀请/加入失败），跳过')
 } else {
-  const ownerClient = await open(ROOM, ownerToken).done
-  const viewerClient = await open(ROOM, viewerToken).done
+  const ownerClient = await open(room, ownerToken).done
+  const viewerClient = await open(room, viewerToken).done
   let ownerSawWrite = false
-  ownerClient.ws.on('message', () => {
-    ownerSawWrite = true
+  // 关键：**只匹配我们发的那条写消息**。上游连上时会立刻发 sync step1（00000100）等管家消息，
+  // 旧版"收到任何消息即失败"会把这类正常消息算成写穿透（实测必误判）。
+  const marker = Buffer.from([0, 2, 9, 9, 9])
+  ownerClient.ws.on('message', (data) => {
+    if (Buffer.compare(Buffer.from(data), marker) === 0) ownerSawWrite = true
   })
-  // 一条最小 Yjs update 消息：类型 0（sync）子类型 2（update）+ 空载荷（内容不重要，关键看是否被转发）
-  const fakeUpdate = Buffer.from([0, 2, 1])
-  viewerClient.ws.send(fakeUpdate)
+  viewerClient.ws.send(marker)
   await new Promise((r) => setTimeout(r, 600))
   check('viewer 只读（写消息被丢）', ownerSawWrite === false, ownerSawWrite ? 'owner 收到了 viewer 的写消息' : '')
   ownerClient.ws.close()
