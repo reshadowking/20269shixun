@@ -73,8 +73,8 @@ class TestFreeGeneration:
             validate_design(design)
             from app.services.compliance import compliance_rate, enforce_compliance
 
-            _, violations, total = enforce_compliance(design)
-            assert compliance_rate(violations, total) >= 85
+            _, fixes, total = enforce_compliance(design)
+            assert compliance_rate(len(fixes), total) >= 85
 
     def test_free_default_all_components_in_whitelist(self):
         def walk(node):
@@ -112,12 +112,13 @@ class TestFreeGeneration:
         assert result.design["id"] == "free-llm-root"
 
     def test_llm_free_output_schema_invalid_falls_back(self):
-        """自由生成产物 Schema 不合法 → 回退自由兜底稿。"""
+        """自由生成产物修复后仍不合法 → 回退自由兜底稿。
+        （T8 后 type:"not-a-type" 可降级为 frame；改用仍不可修复的形态：根节点缺 id。）"""
         import json
 
         class Responder:
             def __call__(self, system: str, user: str) -> str:
-                return json.dumps({"id": "bad", "type": "not-a-type"}, ensure_ascii=False) if "设计生成器" in system else ""
+                return json.dumps({"type": "frame", "content": "x"}, ensure_ascii=False) if "设计生成器" in system else ""
 
         result = generate_design("自由生成一个页面", LLMClient(mock_responder=Responder()))
         assert result.fallback is False

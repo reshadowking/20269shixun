@@ -5,6 +5,7 @@
 """
 import json
 import logging
+import os
 from functools import lru_cache
 from pathlib import Path
 
@@ -13,7 +14,11 @@ from .config import get_settings
 logger = logging.getLogger(__name__)
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
-CONFIG_FILE = DATA_DIR / "llm-config.json"
+# T10.2：配置文件路径允许环境变量覆盖（LLM_CONFIG_FILE）——测试/E2E 的 mock 隔离
+# 不再依赖「启动包装器改模块常量」（docs/AI后续优化与测试提示词.md §1 的正确做法），
+# 一句 `LLM_CONFIG_FILE=/tmp/none.json` 即可让运行时配置回到"无文件"状态。
+# 未设置时保持默认 backend/data/llm-config.json。
+CONFIG_FILE = Path(os.environ.get("LLM_CONFIG_FILE") or (DATA_DIR / "llm-config.json"))
 
 # 允许前端覆盖的字段（白名单，防止写入任意键）
 RUNTIME_KEYS = (
@@ -59,6 +64,8 @@ def save_runtime_config(values: dict) -> dict:
             continue
         if value is None or (isinstance(value, str) and not value.strip()):
             continue
+        if key == "llm_api_key" and is_masked_key(str(value)):
+            continue  # 脱敏值回写会覆盖真实 Key（P0-2 防呆），保留旧值
         if key == "llm_timeout_seconds":
             value = float(value)
         elif key == "llm_max_tokens":
@@ -78,6 +85,14 @@ def mask_api_key(key: str) -> str:
     if len(key) <= 8:
         return "*" * len(key)
     return f"{key[:3]}****{key[-4:]}"
+
+
+def is_masked_key(key: str) -> bool:
+    """判断是否为脱敏后的 key（mask_api_key 产物含固定 ****）。
+
+    脱敏值只用于回显，绝不能回写磁盘——否则会覆盖真实 Key（保存/测试接口共用防呆）。
+    """
+    return "****" in key
 
 
 def public_config() -> dict:

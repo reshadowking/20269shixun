@@ -1,7 +1,7 @@
 """模板库（v2.2 §4.3：8 个模板，每个 = DesignNode 骨架 + 默认文案）。
 
 模板是"可渲染的默认稿"：mock 模式直接返回模板；real 模式下 LLM 基于骨架填充参数与文案。
-组件引用必须来自组件注册表（15 个 componentType）。
+组件引用必须来自组件注册表（18 个 componentType，T9 扩充 icon/switch/tabs 后）。
 """
 
 from typing import Any
@@ -38,6 +38,7 @@ def _product_card(id: str, name: str, price: str, original: str, discount: str) 
                  {"id": f"{id}-old", "type": "text", "props": {"text": original}, "style": {"color": "text-light", "fontSize": 12, "textDecoration": "line-through"}},
              ]},
             {"id": f"{id}-tag", "type": "component", "componentType": "tag", "props": {"text": discount, "color": "danger"}},
+            {"id": f"{id}-icon", "type": "component", "componentType": "icon", "props": {"name": "plus", "color": "primary"}},
             {"id": f"{id}-btn", "type": "component", "componentType": "button", "props": {"text": "加入购物车", "variant": "primary"}, "style": {"width": 180, "height": 36}},
         ],
         # background 用白名单内的 #FFFFFF（"card" 不是令牌名，会被合规检查器拉回）
@@ -53,6 +54,7 @@ TEMPLATES: dict[str, dict[str, Any]] = {
             _title("login-title", "欢迎回来", 3),
             {"id": "login-field-user", "type": "component", "componentType": "input", "props": {"label": "账号", "placeholder": "请输入邮箱或手机号"}, "style": {"width": 320}},
             {"id": "login-field-pass", "type": "component", "componentType": "input", "props": {"label": "密码", "placeholder": "请输入密码", "type_": "password"}, "style": {"width": 320}},
+            {"id": "login-remember", "type": "component", "componentType": "switch", "props": {"label": "记住登录状态", "checked": True}},
             {"id": "login-btn", "type": "component", "componentType": "button", "props": {"text": "登 录", "variant": "primary"}, "style": {"width": 320, "height": 44}},
             {"id": "login-links", "type": "text", "props": {"text": "忘记密码 · 注册账号"}, "style": {"align": "center", "color": "text-light", "fontSize": 12}},
         ],
@@ -63,6 +65,7 @@ TEMPLATES: dict[str, dict[str, Any]] = {
         [
             {"id": "landing-nav", "type": "component", "componentType": "navbar", "props": {"title": "产品名", "links": [{"label": "功能", "href": "#"}, {"label": "定价", "href": "#"}, {"label": "关于", "href": "#"}]}},
             {"id": "landing-hero", "type": "component", "componentType": "hero", "props": {"title": "让设计更快一步", "subtitle": "自然语言生成高保真界面，所见即所得", "cta": {"text": "立即开始"}}},
+            {"id": "landing-tabs", "type": "component", "componentType": "tabs", "props": {"items": [{"label": "功能"}, {"label": "价格"}, {"label": "评价"}], "active": 0}},
             _frame("landing-features",
                 [
                     {"id": "landing-feat-1", "type": "component", "componentType": "card", "props": {"title": "AI 生成", "content": "一句话生成完整页面"}},
@@ -113,6 +116,13 @@ TEMPLATES: dict[str, dict[str, Any]] = {
                 ],
                 layout="row", gap=16,
             ),
+            _frame("dash-range",
+                [
+                    {"id": "dash-range-icon", "type": "component", "componentType": "icon", "props": {"name": "calendar", "color": "text-secondary"}},
+                    {"id": "dash-range-tabs", "type": "component", "componentType": "tabs", "props": {"items": [{"label": "近 7 天"}, {"label": "近 30 天"}], "active": 0}},
+                ],
+                layout="row", gap=8, alignItems="center",
+            ),
             {"id": "dash-chart", "type": "component", "componentType": "chart",
              "props": {"chartType": "bar", "title": "近 7 日营收趋势",
                        "data": [{"day": "周一", "value": 45}, {"day": "周二", "value": 68}, {"day": "周三", "value": 52}, {"day": "周四", "value": 82}, {"day": "周五", "value": 60}, {"day": "周六", "value": 92}, {"day": "周日", "value": 74}],
@@ -133,6 +143,7 @@ TEMPLATES: dict[str, dict[str, Any]] = {
             {"id": "form-email", "type": "component", "componentType": "input", "props": {"label": "邮箱", "placeholder": "name@example.com", "type_": "email"}, "style": {"width": 320}},
             {"id": "form-city", "type": "component", "componentType": "select", "props": {"label": "城市", "placeholder": "请选择城市", "options": ["北京", "上海", "广州", "深圳"]}, "style": {"width": 320}},
             {"id": "form-note", "type": "component", "componentType": "input", "props": {"label": "备注", "placeholder": "选填"}, "style": {"width": 320}},
+            {"id": "form-notify", "type": "component", "componentType": "switch", "props": {"label": "同意接收通知", "checked": True}},
             {"id": "form-btn", "type": "component", "componentType": "button", "props": {"text": "提交登记", "variant": "primary"}, "style": {"width": 320, "height": 44}},
         ],
         layout="column", gap=16, background="background", padding=32, width=380, radius=12,
@@ -151,6 +162,7 @@ TEMPLATES: dict[str, dict[str, Any]] = {
                     {"id": "list-page-1", "type": "component", "componentType": "tag", "props": {"text": "1", "color": "primary"}},
                     {"id": "list-page-2", "type": "component", "componentType": "tag", "props": {"text": "2"}},
                     {"id": "list-page-3", "type": "component", "componentType": "tag", "props": {"text": "3"}},
+                    {"id": "list-next", "type": "component", "componentType": "icon", "props": {"name": "chevron-right", "color": "text-light"}},
                 ],
                 layout="row", gap=8,
             ),
@@ -166,6 +178,7 @@ TEMPLATES: dict[str, dict[str, Any]] = {
                     {"id": "profile-name", "type": "component", "componentType": "title-text", "props": {"text": "设计师小王", "level": 3}},
                     {"id": "profile-tags", "type": "frame", "style": {"layout": "row", "gap": 8},
                      "children": [
+                         {"id": "profile-star", "type": "component", "componentType": "icon", "props": {"name": "star", "color": "primary"}},
                          {"id": "profile-tag-1", "type": "component", "componentType": "tag", "props": {"text": "高级设计师", "color": "primary"}},
                          {"id": "profile-tag-2", "type": "component", "componentType": "tag", "props": {"text": "团队负责人"}},
                      ]},
@@ -189,6 +202,7 @@ TEMPLATES: dict[str, dict[str, Any]] = {
         "article-root",
         [
             _title("article-title", "AI 原生产品设计工具：2026 设计趋势解读", 2),
+            {"id": "article-clock", "type": "component", "componentType": "icon", "props": {"name": "clock", "color": "text-light"}},
             {"id": "article-meta", "type": "text", "props": {"text": "发布于 2026-09-01 · 阅读 3 分钟"}, "style": {"color": "text-light", "fontSize": 12}},
             {"id": "article-cover", "type": "component", "componentType": "image", "props": {"alt": "文章封面"}, "style": {"width": 640, "height": 320}},
             {"id": "article-p1", "type": "text", "props": {"text": "2026 年，产品设计工具正经历深刻重构。自然语言驱动的设计流程让设计师从重复劳动中解放，把精力投入真正有创造力的决策。"}, "style": {"color": "text-secondary"}},

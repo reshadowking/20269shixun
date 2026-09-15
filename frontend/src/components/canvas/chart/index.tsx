@@ -1,8 +1,10 @@
 import { Bar, BarChart, CartesianGrid, Cell, Line, LineChart, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 
+import type { ExportElement } from '@/components/canvas/types'
 import { escapeHtml } from '@/design/escape'
-
-const CHART_COLORS = ['#0052D9', '#7C4DFF', '#00A870', '#E5352B', '#FF6B6B']
+import { styleToCss } from '@/design/styleToCss'
+import { CHART_AXIS_COLOR, CHART_COLORS, CHART_DEFAULT_STYLE, CHART_GRID_COLOR, CHART_TITLE_STYLE } from '@/components/canvas/styleTokens'
+import type { DesignNode } from '@/design/types'
 
 interface ChartDatum { [key: string]: unknown }
 
@@ -15,16 +17,16 @@ export function CanvasChart({ props, style }: { props: Record<string, unknown>; 
   const yKey = typeof props.yKey === 'string' ? props.yKey : 'y'
 
   return (
-    <div className="w-full rounded-lg border bg-card p-4" data-testid="canvas-chart" style={style as object}>
-      {title && <div className="mb-4 text-sm font-semibold">{title}</div>}
+    <div data-testid="canvas-chart" style={{ ...CHART_DEFAULT_STYLE, ...(style as object) }}>
+      {title && <div style={CHART_TITLE_STYLE}>{title}</div>}
       <ResponsiveContainer width="100%" height={180}>
         {chartType === 'line' ? (
           <LineChart data={data}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#E5E8EF" />
-            <XAxis dataKey={xKey} tick={{ fontSize: 11 }} />
-            <YAxis tick={{ fontSize: 11 }} />
+            <CartesianGrid strokeDasharray="3 3" stroke={CHART_GRID_COLOR} />
+            <XAxis dataKey={xKey} tick={{ fontSize: 11, fill: CHART_AXIS_COLOR }} />
+            <YAxis tick={{ fontSize: 11, fill: CHART_AXIS_COLOR }} />
             <Tooltip />
-            <Line type="monotone" dataKey={yKey} stroke="#0052D9" strokeWidth={2} />
+            <Line type="monotone" dataKey={yKey} stroke={CHART_COLORS[0]} strokeWidth={2} />
           </LineChart>
         ) : chartType === 'pie' ? (
           <PieChart>
@@ -37,11 +39,11 @@ export function CanvasChart({ props, style }: { props: Record<string, unknown>; 
           </PieChart>
         ) : (
           <BarChart data={data}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#E5E8EF" />
-            <XAxis dataKey={xKey} tick={{ fontSize: 11 }} />
-            <YAxis tick={{ fontSize: 11 }} />
+            <CartesianGrid strokeDasharray="3 3" stroke={CHART_GRID_COLOR} />
+            <XAxis dataKey={xKey} tick={{ fontSize: 11, fill: CHART_AXIS_COLOR }} />
+            <YAxis tick={{ fontSize: 11, fill: CHART_AXIS_COLOR }} />
             <Tooltip />
-            <Bar dataKey={yKey} fill="#0052D9" radius={[4, 4, 0, 0]} />
+            <Bar dataKey={yKey} fill={CHART_COLORS[0]} radius={[4, 4, 0, 0]} />
           </BarChart>
         )}
       </ResponsiveContainer>
@@ -59,6 +61,7 @@ export interface ChartProps {
 }
 
 /** ③ 导出模板：Recharts 代码（含 import 说明；data 序列化为字面量） */
+// 已废弃（B5，B1-2 全量迁移后）：导出统一走下方 buildExport（React/HTML 引擎消费）；本字符串模板函数不再被注册表引用，待二期删除。
 export const exportChartTemplate = (props: Record<string, unknown>): string => {
   const chartType = typeof props.chartType === 'string' ? props.chartType : 'bar'
   const title = escapeHtml(typeof props.title === 'string' ? props.title : '')
@@ -90,5 +93,55 @@ export const chartSchema = [
   { key: 'title', label: '标题', control: 'text' as const },
   { key: 'xKey', label: 'X 轴字段', control: 'text' as const },
   { key: 'yKey', label: 'Y 轴字段', control: 'text' as const },
-  { key: 'data', label: '数据（JSON 数组）', control: 'textarea' as const },
+  { key: 'data', label: '数据（JSON 数组）', control: 'json' as const },
 ]
+
+/** B1：导出语义描述——纯 CSS 柱状示意（与引擎 case 一致；画布为 Recharts 真实渲染）。
+ * T5-0 #2：柱/片颜色与画布共用 CHART_COLORS——bar/line 单序列取首色（=画布 fill），
+ * pie 按序列循环取色（与画布 Cell 一致）。 */
+export const buildChartExport = (node: DesignNode): ExportElement => {
+  const props = node.props ?? {}
+  const chartType = typeof props.chartType === 'string' ? props.chartType : 'bar'
+  const data = (Array.isArray(props.data) ? props.data : []) as ChartDatum[]
+  const xKey = typeof props.xKey === 'string' ? props.xKey : 'name'
+  const yKey = typeof props.yKey === 'string' ? props.yKey : 'value'
+  const max = Math.max(1, ...data.map((d) => Number(d[yKey]) || 0))
+  const children: ExportElement[] = [
+    {
+      tag: 'div',
+      attrs: {},
+      style: { ...CHART_TITLE_STYLE },
+      text: typeof props.title === 'string' ? props.title : '',
+    },
+  ]
+  const seriesColor = (index: number): string =>
+    chartType === 'pie' ? CHART_COLORS[index % CHART_COLORS.length] : CHART_COLORS[0]
+  const bars: ExportElement[] = data.map((d, i) => ({
+    tag: 'div',
+    attrs: { title: `${String(d[xKey] ?? '')}: ${String(d[yKey] ?? '')}` },
+    style: {
+      flex: 1,
+      background: seriesColor(i),
+      borderRadius: '4px 4px 0 0',
+      height: Math.round(((Number(d[yKey]) || 0) / max) * 140),
+    },
+  }))
+  children.push({
+    tag: 'div',
+    attrs: {},
+    style: { display: 'flex', alignItems: 'flex-end', gap: 12, height: 160 },
+    children: bars,
+  })
+  children.push({
+    tag: 'div',
+    attrs: {},
+    style: { display: 'flex', gap: 12, marginTop: 8 },
+    children: data.map((d) => ({
+      tag: 'span',
+      attrs: {},
+      style: { flex: 1, textAlign: 'center', fontSize: 11, color: CHART_AXIS_COLOR },
+      text: String(d[xKey] ?? ''),
+    })),
+  })
+  return { tag: 'div', attrs: {}, style: { ...CHART_DEFAULT_STYLE, ...styleToCss(node.style) }, children }
+}

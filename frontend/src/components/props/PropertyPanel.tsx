@@ -1,3 +1,5 @@
+import { useRef, useState } from 'react'
+
 import { componentRegistry } from '@/components/canvas/registry'
 import type { PropField } from '@/components/canvas/types'
 import { Button } from '@/components/ui/button'
@@ -9,6 +11,139 @@ import { displayLabel } from '@/design/labels'
 import { isAllowedColor, nearestToken } from '@/design/tokens.generated'
 import type { DesignNode } from '@/design/types'
 import ComponentRecommend, { type RecommendItem } from '@/components/props/ComponentRecommend'
+
+/** D2：本地图片上传控件（上传成功把 /api/images URL 写入字段） */
+function ImageUploadControl({ value, onChange }: { value: string; onChange: (v: unknown) => void }) {
+  const fileRef = useRef<HTMLInputElement>(null)
+  const [uploading, setUploading] = useState(false)
+  const [err, setErr] = useState('')
+  const upload = async (file: File | undefined) => {
+    if (!file) return
+    setUploading(true)
+    setErr('')
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      const token = localStorage.getItem('design-tool-token') ?? ''
+      const resp = await fetch('/api/images', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: fd,
+      })
+      if (!resp.ok) throw new Error(`上传失败（${resp.status}）`)
+      const data = (await resp.json()) as { url: string }
+      onChange(data.url)
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : '上传失败')
+    } finally {
+      setUploading(false)
+    }
+  }
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="flex items-center gap-2">
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-7 text-xs"
+          data-testid="upload-image-btn"
+          disabled={uploading}
+          onClick={() => fileRef.current?.click()}
+        >
+          {uploading ? '上传中…' : '上传本地图片'}
+        </Button>
+        {value && (
+          <span className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground" data-testid="prop-src-value">
+            {value}
+          </span>
+        )}
+      </div>
+      <input
+        ref={fileRef}
+        type="file"
+        accept="image/png,image/jpeg,image/webp,image/gif"
+        className="hidden"
+        data-testid="image-file-input"
+        onChange={(e) => {
+          void upload(e.target.files?.[0])
+          e.target.value = ''
+        }}
+      />
+      {err && <p className="text-[11px] text-destructive">{err}</p>}
+    </div>
+  )
+}
+
+/**
+ * T9.1 #21：JSON 字段控件（items/links/columns/rows/data 等数组 props）。
+ * 修复前用 textarea + `String(value)`：显示 `[object Object]`，手改后把字符串写回 props
+ * （字符串进树后会被增量生成路径的 repair 删除）。本控件：
+ * - 显示 JSON.stringify（树值变化——撤销/协作/切换选中——自动同步回文本）；
+ * - 文本经 JSON.parse 校验成功且为数组才写回（非法/非数组不落树，显示可见错误提示）；
+ * - 清空 → 写回空数组（当前全部 json 控件消费方均为数组字段，见各组件 schema）。
+ * 类型写错的合法 JSON（如给数组字段写对象）由各组件容错渲染 + 后端 repair 兜底。
+ */
+function JsonControl({ fieldKey, value, onChange }: { fieldKey: string; value: unknown; onChange: (v: unknown) => void }) {
+  const stringify = (v: unknown) => (v === undefined || v === null ? '' : JSON.stringify(v, null, 2))
+  const [text, setText] = useState(() => stringify(value))
+  const [error, setError] = useState('')
+  const [lastValue, setLastValue] = useState(value)
+
+  // 树值变化（撤销/协作/切换选中）→ 渲染期同步文本缓冲（React 官方 "adjusting state when
+  // props change" 模式，避免 effect 级联渲染）；若文本与树值语义等价（刚由本控件写回），
+  // 保持原文本不打断输入。
+  if (value !== lastValue) {
+    setLastValue(value)
+    setText((current) => {
+      if (current === stringify(value)) return current
+      try {
+        if (JSON.stringify(JSON.parse(current)) === JSON.stringify(value ?? null)) return current
+      } catch {
+        // 文本当前非法：外部值变化视为新真相，覆盖
+      }
+      return stringify(value)
+    })
+    setError('')
+  }
+
+  const handleChange = (next: string) => {
+    setText(next)
+    if (next.trim() === '') {
+      setError('')
+      onChange([])
+      return
+    }
+    try {
+      const parsed: unknown = JSON.parse(next)
+      // T13 #25：当前全部 json 控件消费方均为数组字段（items/links/columns/rows/data）——
+      // 非数组（对象/标量）不落树；将来出现对象字段时需为本控件增加类型参数
+      if (!Array.isArray(parsed)) {
+        setError('必须是 JSON 数组（如 [{"label":"标签一"}]）')
+        return
+      }
+      onChange(parsed)
+      setError('')
+    } catch {
+      setError('JSON 无效，未写入（其余字段不受影响）')
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-1">
+      <Textarea
+        data-testid={`prop-${fieldKey}`}
+        className="min-h-16 font-mono text-xs"
+        value={text}
+        onChange={(e) => handleChange(e.target.value)}
+      />
+      {error && (
+        <p className="text-[11px] text-destructive" data-testid={`json-error-${fieldKey}`}>
+          {error}
+        </p>
+      )}
+    </div>
+  )
+}
 
 /**
  * 属性面板（v2.2 §3.5：文本/颜色/字号/间距/布局 + 组件 schema 控件）。
@@ -27,7 +162,12 @@ interface PropertyPanelProps {
   /** E3-3：当前设计树（推荐接口上下文）+ 推荐项落位回调 */
   design?: DesignNode
   onAddRecommend?: (targetId: string, item: RecommendItem) => void
+  /** 缺陷 3：版面已确认（美化阶段）——只放行颜色/背景/圆角等样式类字段，布局/文本/尺寸锁定 */
+  locked?: boolean
 }
+
+/** 锁定（版面已确认）阶段仍可编辑的样式字段：颜色、背景、圆角（样式类属性） */
+const LOCKED_ALLOWED_STYLE_KEYS = ['color', 'background', 'radius']
 
 const STYLE_FIELDS: PropField[] = [
   { key: 'layout', label: '布局', control: 'select', options: ['row', 'column', 'grid', 'free'] },
@@ -43,7 +183,7 @@ const STYLE_FIELDS: PropField[] = [
 
 const THEME = 'default' as const
 
-export default function PropertyPanel({ node, onUpdate, onDelete, onMoveLayer, onSwitchToFree, design, onAddRecommend }: PropertyPanelProps) {
+export default function PropertyPanel({ node, onUpdate, onDelete, onMoveLayer, onSwitchToFree, design, onAddRecommend, locked = false }: PropertyPanelProps) {
   const def = node.componentType ? componentRegistry[node.componentType] : undefined
 
   const canRecommend = design && onAddRecommend && (node.type === 'frame' || node.type === 'group' || node.type === 'component')
@@ -117,6 +257,10 @@ export default function PropertyPanel({ node, onUpdate, onDelete, onMoveLayer, o
             onCheckedChange={onChange}
           />
         )
+      case 'upload':
+        return <ImageUploadControl value={stringVal} onChange={onChange} />
+      case 'json':
+        return <JsonControl fieldKey={field.key} value={value} onChange={onChange} />
       case 'color':
         return (
           <div className="flex flex-col gap-1">
@@ -162,8 +306,13 @@ export default function PropertyPanel({ node, onUpdate, onDelete, onMoveLayer, o
         />
       )}
 
-      {/* 组件专属 props */}
-      {def && def.schema.length > 0 && (
+      {/* 组件专属 props（锁定阶段属"文本内容"，禁用） */}
+      {locked && def && def.schema.length > 0 && (
+        <p className="rounded-md bg-muted/60 px-2 py-1 text-[11px] text-muted-foreground" data-testid="prop-locked-note">
+          版面已确认：组件参数（文本内容）已锁定，仅颜色 / 背景 / 圆角等样式可改。
+        </p>
+      )}
+      {!locked && def && def.schema.length > 0 && (
         <div className="flex flex-col gap-3">
           <div className="text-xs text-muted-foreground">组件参数</div>
           {def.schema.map((field) => (
@@ -178,7 +327,7 @@ export default function PropertyPanel({ node, onUpdate, onDelete, onMoveLayer, o
       {/* 通用样式 */}
       <div className="flex flex-col gap-3">
         <div className="text-xs text-muted-foreground">样式（建议使用令牌色）</div>
-        {STYLE_FIELDS.map((field) => (
+        {(locked ? STYLE_FIELDS.filter((f) => LOCKED_ALLOWED_STYLE_KEYS.includes(f.key)) : STYLE_FIELDS).map((field) => (
           <div key={field.key} className="flex flex-col gap-1">
             <Label className="text-xs">{field.label}</Label>
             {renderControl(field, node.style?.[field.key], (v) => setStyle(field.key, v))}
@@ -186,18 +335,18 @@ export default function PropertyPanel({ node, onUpdate, onDelete, onMoveLayer, o
         ))}
       </div>
 
-      {/* 图层层级（解决节点互相覆盖） */}
+      {/* 图层层级（解决节点互相覆盖）：锁定阶段属"模块顺序"，禁用 */}
       <div className="flex flex-col gap-2">
         <div className="text-xs text-muted-foreground">图层层级</div>
         <div className="grid grid-cols-4 gap-1">
-          <Button size="sm" variant="outline" className="h-7 px-1 text-xs" data-testid="layer-top" onClick={() => onMoveLayer('top')}>置顶</Button>
-          <Button size="sm" variant="outline" className="h-7 px-1 text-xs" data-testid="layer-up" onClick={() => onMoveLayer('up')}>上移</Button>
-          <Button size="sm" variant="outline" className="h-7 px-1 text-xs" data-testid="layer-down" onClick={() => onMoveLayer('down')}>下移</Button>
-          <Button size="sm" variant="outline" className="h-7 px-1 text-xs" data-testid="layer-bottom" onClick={() => onMoveLayer('bottom')}>置底</Button>
+          <Button size="sm" variant="outline" className="h-7 px-1 text-xs" data-testid="layer-top" disabled={locked} onClick={() => onMoveLayer('top')}>置顶</Button>
+          <Button size="sm" variant="outline" className="h-7 px-1 text-xs" data-testid="layer-up" disabled={locked} onClick={() => onMoveLayer('up')}>上移</Button>
+          <Button size="sm" variant="outline" className="h-7 px-1 text-xs" data-testid="layer-down" disabled={locked} onClick={() => onMoveLayer('down')}>下移</Button>
+          <Button size="sm" variant="outline" className="h-7 px-1 text-xs" data-testid="layer-bottom" disabled={locked} onClick={() => onMoveLayer('bottom')}>置底</Button>
         </div>
       </div>
 
-      <Button variant="destructive" size="sm" data-testid="prop-delete" onClick={onDelete}>
+      <Button variant="destructive" size="sm" data-testid="prop-delete" disabled={locked} onClick={onDelete}>
         删除节点
       </Button>
     </div>

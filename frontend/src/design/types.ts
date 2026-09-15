@@ -2,6 +2,9 @@
  * DesignNode 类型（唯一来源：shared/design-schema.json，v2.2 §3.1）。
  * 手写维护；后端用 jsonschema 运行时校验（backend/app/design/validator.py）。
  * 修改 Schema 时必须同步此文件，并由后端测试覆盖关键字段。
+ * ⚠️ 受契约测试保护（B0：backend/tests/test_contract.py + registry.test.tsx）：
+ * 组件集合与 variant/size/type_ 等枚举不得单独修改——schema / component-library /
+ * 属性面板 / 渲染层四方必须一致，改动先过契约测试。
  */
 export type NodeType = 'frame' | 'text' | 'rect' | 'component' | 'group'
 
@@ -21,6 +24,9 @@ export type ComponentType =
   | 'title-text'
   | 'hero'
   | 'image'
+  | 'icon'
+  | 'switch'
+  | 'tabs'
 
 export type LayoutMode = 'row' | 'column' | 'grid' | 'free'
 
@@ -30,6 +36,7 @@ export interface ComponentProps {
   label?: string
   placeholder?: string
   disabled?: boolean
+  checked?: boolean
   variant?: string
   size?: string
   options?: string[]
@@ -69,6 +76,7 @@ export interface NodeStyle {
   fontSize?: number
   fontWeight?: number
   spacing?: number
+  padding?: number
   layout?: LayoutMode
   gap?: number
   width?: number | string
@@ -97,5 +105,5 @@ export interface DesignNode {
 
 export const COMPONENT_TYPES: ComponentType[] = [
   'button', 'card', 'input', 'select', 'table', 'chart', 'stat-block',
-  'navbar', 'sidebar', 'avatar', 'tag', 'divider', 'title-text', 'hero', 'image',
+  'navbar', 'sidebar', 'avatar', 'tag', 'divider', 'title-text', 'hero', 'image', 'icon', 'switch', 'tabs',
 ]

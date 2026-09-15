@@ -1,4 +1,7 @@
-"""组件智能推荐（E3-3）：分析容器上下文，推荐 3 个组件（component_type / reason / suggested_index / default_props）。
+"""组件智能推荐（E3-3）：分析容器上下文，推荐 3-4 个组件（component_type / reason / suggested_index / default_props）。
+
+T9.1 #22 口径裁定：表单容器（+switch）与商品/详情容器（+tabs）为 **4 条**（追加而非替换，
+信息更全；前端列表渲染不设数量硬约束）；其余语境仍为 3 条。行为由 test_assist 锁定。
 
 确定性规则引擎（不调 LLM）：可单测、可进 CI。
 - 容器（有 children 的 frame/group）：推荐"容器内部子组件"，suggested_index 指向容器 children 末尾
@@ -40,7 +43,7 @@ def _rec(component_type: str, reason: str, index: int, props: dict | None = None
 
 
 def recommend_components(design: dict[str, Any], container_id: str) -> list[dict]:
-    """按容器上下文返回 0-3 条推荐（找不到节点返回空列表）。"""
+    """按容器上下文返回 0-4 条推荐（找不到节点返回空列表；T9 起表单容器追加 switch）。"""
     node = _find_node(design, container_id)
     if node is None:
         return []
@@ -94,11 +97,12 @@ def recommend_components(design: dict[str, Any], container_id: str) -> list[dict
             rec("tag", "角标标签突出重要状态", {"text": "NEW"}),
         ]
     if "input" in types or "select" in types:
-        # 表单容器：提交按钮 + 补充字段
+        # 表单容器：提交按钮 + 补充字段 + 开关确认项（T9）
         return [
             rec("button", "表单提交按钮完成主操作", {"text": "提交", "variant": "primary"}),
             rec("select", "下拉选择收集结构化数据", {"label": "选项", "options": ["选项 A", "选项 B"]}),
             rec("input", "补充录入字段完善表单", {"label": "补充信息", "placeholder": "选填"}),
+            rec("switch", "开关适合订阅/协议类确认项", {"label": "接收通知"}),
         ]
     if "stat-block" in types:
         # 数据容器：图表 + 表格让数据可视化
@@ -108,11 +112,12 @@ def recommend_components(design: dict[str, Any], container_id: str) -> list[dict
             rec("stat-block", "指标块强调关键数字", {"label": "指标", "value": "0"}),
         ]
     if "image" in types and "button" in types:
-        # 商品/卡片容器：补一张卡片
+        # 商品/卡片容器：补一张卡片 + 标签页分组（T9）
         return [
             rec("card", "卡片承接图文内容，结构完整", {"title": "卡片标题", "content": "卡片描述内容"}),
             rec("title-text", "区块标题统一内容分组", {"text": "商品精选", "level": 3}),
             rec("button", "次级按钮补充行动点", {"text": "查看详情"}),
+            rec("tabs", "标签页分组详情/列表内容", {"items": [{"label": "详情"}, {"label": "评价"}], "active": 0}),
         ]
     # 兜底：通用内容增强
     return [

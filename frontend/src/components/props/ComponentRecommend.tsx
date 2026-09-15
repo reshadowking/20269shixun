@@ -1,5 +1,6 @@
 /**
- * 组件智能推荐（E3-3）：按容器上下文推荐 3 个组件（图标 + 组件名 + 理由 + 预览）。
+ * 组件智能推荐（E3-3）：按容器上下文推荐 3-4 个组件（图标 + 组件名 + 理由 + 预览）。
+ * 数量由后端 recommender 按语境决定（T9.1 #22：表单/商品容器 4 条），前端列表不设硬约束。
  * 两种形态：
  * - 内嵌：属性面板顶部"✨推荐组件"按钮，点击展开推荐列表
  * - 浮层：画布右键菜单触发，挂载即加载，绝对定位卡片
@@ -24,7 +25,7 @@ export interface RecommendItem {
 const TYPE_ICONS: Record<string, string> = {
   button: '🔘', card: '🃏', input: '⌨️', select: '🔽', table: '📊', chart: '📈',
   'stat-block': '🔢', navbar: '🧭', sidebar: '📑', avatar: '👤', tag: '🏷️',
-  divider: '➖', 'title-text': '🔤', hero: '🖼️', image: '🖼️',
+  divider: '➖', 'title-text': '🔤', hero: '🖼️', image: '🖼️', icon: '⭐', switch: '🎚️', tabs: '🗂️',
 }
 
 function typeLabel(type: string): string {

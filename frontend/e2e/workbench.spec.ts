@@ -99,3 +99,81 @@ test('双标签页 Yjs 实时同步', async ({ context }) => {
   await expect(noteInB).toHaveCount(0, { timeout: 8000 })
   await expect(noteInA).toHaveCount(0)
 })
+
+test('T6：常驻「代码」面板展示当前设计的 src/App.tsx', async ({ page }) => {
+  ROOM = 'e2e-' + Math.random().toString(36).slice(2, 10)
+  await login(page)
+  await resetDesign(page)
+
+  // 第 7 个活动入口：切到代码面板
+  await page.getByTestId('activity-code').click()
+  await expect(page.getByTestId('code-viewer')).toBeVisible()
+  await expect(page.getByTestId('code-filename')).toHaveText('src/App.tsx')
+  // 产物是当前设计的 TSX：含 React 组件导出与示例稿真实文本
+  const code = await page.getByTestId('code-body').innerText()
+  expect(code).toContain('export default function App')
+  expect(code).toContain('满减优惠券，先到先得，每人限领 3 张')
+})
+
+test('T9：icon 组件面板添加 → 画布渲染 svg 图标 → 可选中改属性', async ({ page }) => {
+  ROOM = 'e2e-' + Math.random().toString(36).slice(2, 10)
+  await login(page)
+  await resetDesign(page)
+
+  // 1) 组件面板添加 icon（palette-icon-* testid 与组件类型一致）
+  await page.getByTestId('palette-icon').click()
+  const iconNode = page.locator('[data-node-id^="icon-"]').last()
+  await expect(iconNode).toBeVisible()
+
+  // 2) lucide 图标数据内联渲染：span > svg > path
+  await expect(iconNode.locator('svg')).toBeVisible()
+  await expect(iconNode.locator('path')).toBeVisible()
+
+  // 3) 选中 → 属性面板出现图标字段（下拉选项来自 shared/icon-library.json 白名单）
+  await iconNode.click()
+  const nameSelect = page.getByTestId('prop-name')
+  await expect(nameSelect).toBeVisible()
+  await nameSelect.selectOption('heart')
+  await expect(iconNode.locator('path')).toHaveAttribute('d', /.+/)
+})
+
+test('T9：switch 组件添加 → 点击切换状态进树（轨道变色）→ 再点切回', async ({ page }) => {
+  ROOM = 'e2e-' + Math.random().toString(36).slice(2, 10)
+  await login(page)
+  await resetDesign(page)
+
+  await page.getByTestId('palette-switch').click()
+  const switchNode = page.locator('[data-node-id^="switch-"]').last()
+  await expect(switchNode).toBeVisible()
+  const track = switchNode.locator('[data-testid="canvas-switch-track"]')
+
+  // 点击切换：写 props.checked（状态进树）→ 轨道变主色（primary #0052D9）
+  await track.click()
+  await expect(track).toHaveAttribute('style', /rgb\(0, 82, 217\)/)
+
+  // 再点切回：轨道不再是主色
+  await track.click()
+  await expect(track).not.toHaveAttribute('style', /rgb\(0, 82, 217\)/)
+
+  // 选中节点（面板新增节点无 label，点轨道右侧空白区；轨道本身 stopPropagation 不选中）→
+  // 属性面板出现 checked 开关控件
+  await switchNode.click({ position: { x: 150, y: 11 } })
+  await expect(page.getByTestId('prop-checked')).toBeVisible()
+})
+
+test('T9：tabs 组件添加 → 空态占位 → 可选中（面板 items/active 字段现形）', async ({ page }) => {
+  ROOM = 'e2e-' + Math.random().toString(36).slice(2, 10)
+  await login(page)
+  await resetDesign(page)
+
+  // 面板新增节点无 items → 渲染占位文本「标签页」（不整块空白）
+  await page.getByTestId('palette-tabs').click()
+  const tabsNode = page.locator('[data-node-id^="tabs-"]').last()
+  await expect(tabsNode).toBeVisible()
+  await expect(tabsNode.getByText('标签页')).toBeVisible()
+
+  // 选中（点节点右侧空白区；标签热区 stopPropagation）→ 属性面板出现 items/active
+  await tabsNode.click({ position: { x: 160, y: 18 } })
+  await expect(page.getByTestId('prop-items')).toBeVisible()
+  await expect(page.getByTestId('prop-active')).toBeVisible()
+})

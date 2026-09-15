@@ -1,13 +1,12 @@
+import { useEffect } from 'react'
 import { Navigate, Route, Routes } from 'react-router-dom'
 
 import ApiConfigPage from '@/pages/ApiConfigPage'
-import DesignsPage from '@/pages/DesignsPage'
 import HomePage from '@/pages/HomePage'
 import LoginPage from '@/pages/LoginPage'
-import PreviewPage from '@/pages/PreviewPage'
 import WorkspacePage from '@/pages/WorkspacePage'
 
-import { getToken } from '@/lib/api'
+import { api, getToken } from '@/lib/api'
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   if (!getToken()) {
@@ -19,14 +18,21 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
 }
 
 export default function App() {
+  // P2-1：启动时校验一次凭证（token 存在但已失效 → 由 api() 的 401 处理清凭证并跳登录），
+  // 消除"看着已登录、实际请求全 401"的中间态
+  useEffect(() => {
+    if (!getToken()) return
+    api('/api/auth/me').catch(() => {
+      /* 401 已由 handleUnauthorized 处理；其它错误（后端未启动）不阻塞使用 */
+    })
+  }, [])
+
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
       <Route path="/" element={<RequireAuth><HomePage /></RequireAuth>} />
       <Route path="/workspace" element={<RequireAuth><WorkspacePage /></RequireAuth>} />
-      <Route path="/designs" element={<RequireAuth><DesignsPage /></RequireAuth>} />
       <Route path="/api-config" element={<RequireAuth><ApiConfigPage /></RequireAuth>} />
-      <Route path="/preview/:id" element={<RequireAuth><PreviewPage /></RequireAuth>} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   )

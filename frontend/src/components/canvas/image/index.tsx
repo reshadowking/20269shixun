@@ -1,6 +1,10 @@
 import { useState } from 'react'
 
-import { escapeHtml } from '@/design/escape'
+import type { ExportElement } from '@/components/canvas/types'
+import { IMAGE_DEFAULT_STYLE, IMAGE_PLACEHOLDER_CANVAS_STYLE, IMAGE_PLACEHOLDER_STYLE } from '@/components/canvas/styleTokens'
+import { escapeHtml, safeSrc } from '@/design/escape'
+import { styleToCss } from '@/design/styleToCss'
+import type { DesignNode } from '@/design/types'
 
 const FIT_CYCLE = ['cover', 'contain', 'fill'] as const
 const FIT_LABEL: Record<string, string> = { cover: '裁剪填充', contain: '完整显示', fill: '拉伸填充' }
@@ -12,8 +16,9 @@ export function CanvasImage({ props, style, onPropsChange }: { props: Record<str
   const fit = typeof props.fit === 'string' ? props.fit : 'cover'
   const [hover, setHover] = useState(false)
   if (!src) {
+    // 空态占位（T12-B：默认观感内联，画布/导出共用 IMAGE_PLACEHOLDER_STYLE；导出为 img 只能复用盒子）
     return (
-      <div className="flex h-40 w-full items-center justify-center rounded-md border border-dashed bg-muted/30 text-xs text-muted-foreground" style={style as object}>
+      <div style={{ ...IMAGE_PLACEHOLDER_STYLE, ...IMAGE_PLACEHOLDER_CANVAS_STYLE, width: '100%', ...(style as object) }}>
         图片组件 · 未设置图片
       </div>
     )
@@ -25,8 +30,8 @@ export function CanvasImage({ props, style, onPropsChange }: { props: Record<str
   }
   return (
     <div
-      className="group relative overflow-visible"
-      style={{ ...(style as object), overflow: 'visible' }}
+      className="group"
+      style={{ position: 'relative', overflow: 'visible', ...(style as object) }}
       onPointerDown={(e) => e.stopPropagation()}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
@@ -34,8 +39,7 @@ export function CanvasImage({ props, style, onPropsChange }: { props: Record<str
       <img
         src={src}
         alt={alt}
-        className="w-full rounded-md"
-        style={{ objectFit: fit as React.CSSProperties['objectFit'], display: 'block' }}
+        style={{ ...IMAGE_DEFAULT_STYLE, objectFit: fit as React.CSSProperties['objectFit'] }}
         draggable={false}
       />
       {(hover || fit !== 'cover') && (
@@ -67,6 +71,7 @@ export interface ImageProps {
 }
 
 /** ③ 导出模板（阶段 4 图片转 base64 内联；当前输出 src） */
+// 已废弃（B5，B1-2 全量迁移后）：导出统一走下方 buildExport（React/HTML 引擎消费）；本字符串模板函数不再被注册表引用，待二期删除。
 export const exportImageTemplate = (props: Record<string, unknown>): string => {
   const src = escapeHtml(typeof props.src === 'string' ? props.src : '')
   const alt = escapeHtml(typeof props.alt === 'string' ? props.alt : '图片')
@@ -75,9 +80,38 @@ export const exportImageTemplate = (props: Record<string, unknown>): string => {
   return `        <img src="${src}" alt="${alt}" className="w-full rounded-md" style={{ objectFit: '${fit}' }} />`
 }
 
-/** ④ 属性面板配置（上传控件阶段 5 接入） */
+/** B1 试点：导出语义描述——src 在此完成协议白名单（safeSrc），引擎负责属性转义。
+ * T12-B：① fit 映射为 objectFit（此前 fit 不影响导出）；② 空 src 口径统一——画布是占位块，
+ * 导出不再是裸 <img src="">，改为同款占位盒（虚线/圆角/muted 底），仍保持 img 标签
+ * （三处标签对齐：eval COMPONENT_TAG=img）。与画布的差异：img 无法承载子文本，画布的
+ * 「图片组件 · 未设置图片」提示在导出侧以浏览器 alt 文本兜底——有意为之。③ hover 切换 fit
+ * 是交互态，静态导出不实现（注释声明，同 button hover 口径）。 */
+export const buildImageExport = (node: DesignNode): ExportElement => {
+  const props = node.props ?? {}
+  const src = typeof props.src === 'string' ? props.src : ''
+  const alt = typeof props.alt === 'string' ? props.alt : '图片'
+  const fit = typeof props.fit === 'string' ? props.fit : 'cover'
+  if (!src) {
+    return {
+      tag: 'img',
+      attrs: { alt },
+      style: { ...IMAGE_PLACEHOLDER_STYLE, width: '100%', ...styleToCss(node.style) },
+    }
+  }
+  return {
+    tag: 'img',
+    attrs: { src: safeSrc(src), alt },
+    style: {
+      ...IMAGE_DEFAULT_STYLE,
+      objectFit: fit as React.CSSProperties['objectFit'],
+      ...styleToCss(node.style),
+    },
+  }
+}
+
+/** ④ 属性面板配置（src 用 upload 控件：D2 本地上传 → URL 写入 props.src） */
 export const imageSchema = [
-  { key: 'src', label: '图片 URL', control: 'text' as const },
+  { key: 'src', label: '图片', control: 'upload' as const },
   { key: 'alt', label: '替代文本', control: 'text' as const },
   { key: 'fit', label: '填充方式', control: 'select' as const, options: ['cover', 'contain', 'fill'] },
 ]

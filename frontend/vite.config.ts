@@ -32,5 +32,13 @@ export default defineConfig({
     globals: true,
     setupFiles: ['./src/test/setup.ts'],
     include: ['src/**/*.test.{ts,tsx}'], // 排除 e2e/（Playwright spec）
+    // T13-A4：覆盖率基线口径——含 src/**，排除工作台 UI 配方层（components/ui，shadcn 配方不外测）
+    // 与测试自身；报告 text（终端）+ json-summary（供验收方机器读取）；产物 coverage/ 已在 .gitignore
+    coverage: {
+      provider: 'v8',
+      include: ['src/**'],
+      exclude: ['src/components/ui/**', 'src/**/*.test.*'],
+      reporter: ['text', 'json-summary'],
+    },
   },
 })

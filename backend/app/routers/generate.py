@@ -20,6 +20,11 @@ class GenerateRequest(BaseModel):
     design_system: str = Field(default="brand-design-token-23v1", max_length=100)
     # P0-1 增量编辑：传入当前画布树时，走"只改指定部分"的增量修改模式
     design: dict | None = None
+    # T4 批2：仅用于增量提示词措辞（锁定阶段追加更严约束段），向后兼容（旧调用方不传即未锁定）。
+    # ⚠️ 不是安全开关：锁定与否的权威判定在服务端闸门（/api/apply-locked-edit 按
+    # design_locks 查表），不读本字段——客户端谎报 locked=false 只会让模型更可能
+    # 产出被闸门拒绝的改动（体验变差），不构成绕过锁的安全漏洞。
+    locked: bool = False
 
 
 class GenerateResponse(BaseModel):
@@ -29,17 +34,24 @@ class GenerateResponse(BaseModel):
     violations: int
     style_attrs: int
     fallback: bool
+    # 演示模式产出（未配置模型 Key：模板稿即演示稿）——前端须与模型产物显式区分
+    mock: bool = False
     error: str = ""
+    # B2-2：逐项合规拉回明细 [{node_id, field, original, corrected}]（前端逐项报告/还原用）
+    violations_detail: list = []
+    # T8：本轮降级明细（["icon@节点id"]）——附加字段，前端聊天面板消费（T8 收尾）
+    degraded: list = []
 
 
 @router.post("/api/generate", response_model=GenerateResponse)
 def generate(req: GenerateRequest, _user: str = Depends(get_current_user)):
     """自然语言生成设计稿（意图解析 + 模板匹配 + 参数填充 + 合规检查）。"""
-    # 缺陷 9：角色边界——无关请求礼貌拒答（防绕过）
-    if not is_design_request(req.prompt):
+    # 缺陷 9 + T10：角色边界分级——带 design 的增量修改不调守卫（「有设计稿且提要求」
+    # 本来就该放行，§4.9 实测「加高级功能」被误拦）；首轮生成保持原有强度。
+    if req.design is None and not is_design_request(req.prompt):
         raise HTTPException(status_code=422, detail=GUARD_REPLY)
     try:
-        result = generate_design(req.prompt, current_design=req.design)
+        result = generate_design(req.prompt, current_design=req.design, locked=req.locked)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"AI 生成失败：{exc}") from exc
     return GenerateResponse(
@@ -49,7 +61,10 @@ def generate(req: GenerateRequest, _user: str = Depends(get_current_user)):
         violations=result.violations,
         style_attrs=result.style_attrs,
         fallback=result.fallback,
+        mock=result.mock,
         error=result.error,
+        violations_detail=result.violations_detail,
+        degraded=result.degraded,
     )
 
 
@@ -117,11 +132,85 @@ class ComplianceRequest(BaseModel):
 
 @router.post("/api/check-compliance")
 def check_compliance(req: ComplianceRequest, _user: str = Depends(get_current_user)):
-    """独立合规检查接口（生成时自动执行，此接口供演示：展示拦截拉回）。"""
-    design, violations, total = enforce_compliance(req.design)
+    """独立合规检查接口（生成时自动执行，此接口供演示：展示拦截拉回与逐项明细）。"""
+    from dataclasses import asdict
+
+    design, fixes, total = enforce_compliance(req.design)
+    violations = len(fixes)
     return {
         "design": design,
         "violations": violations,
         "style_attrs": total,
         "compliance": compliance_rate(violations, total),
+        "violations_detail": [asdict(f) for f in fixes],
     }
+
+
+class ExploreRequest(BaseModel):
+    # 与 GenerateRequest 同约束：超长需求由长提示词摘要兜底
+    prompt: str = Field(min_length=1, max_length=8000)
+    design_system: str = Field(default="brand-design-token-23v1", max_length=100)
+
+
+class ExploreOptionModel(BaseModel):
+    """单个探索方案（T10/§4.10 #19：此前 explore 响应无 schema，机器可读契约盲区）。"""
+
+    label: str
+    design: dict
+    template: str
+    compliance: float
+    violations: int
+    fallback: bool
+    mock: bool
+    # T10 批2（缺口清单 §4.8 #16）：组件能力降级明细（命名避开顶层 degraded: bool）
+    degraded_kinds: list[str] = []
+
+
+class ExploreResponse(BaseModel):
+    options: list[ExploreOptionModel]
+    degraded: bool
+
+
+@router.post("/api/generate/explore", response_model=ExploreResponse)
+async def explore_options(req: ExploreRequest, _user: str = Depends(get_current_user)):
+    """D3 最小版：并行生成 2 份不同风格方案（复用 /api/generate 单段生成链路，不构成两段式）。
+
+    方案二在提示词上附加差异化风格约束；两次调用线程池并行，总耗时接近单次。
+    任一方案降级（mock/失败走模板稿）时标记 degraded；两份都保证合法可保存。
+    若单次生成本身超 30s 预算，降级策略：保留至少一份可用方案并回填 degraded=true。
+    """
+    import asyncio
+
+    if not is_design_request(req.prompt):
+        raise HTTPException(status_code=422, detail=GUARD_REPLY)
+    variants = [
+        ("方案一 · 默认风格", req.prompt),
+        (
+            "方案二 · 差异化风格",
+            (
+                f"{req.prompt}。请使用与默认方案明显不同的配色与布局风格"
+                "（例如深色/高对比主题、不同主色、不同结构组织），内容要点保持一致。"
+            ),
+        ),
+    ]
+    results = await asyncio.gather(*(asyncio.to_thread(generate_design, prompt) for _, prompt in variants))
+    options = []
+    degraded = False
+    for (label, _), result in zip(variants, results):
+        if result.fallback:
+            degraded = True
+        options.append(
+            {
+                "label": label,
+                "design": result.design,
+                "template": result.template,
+                "compliance": result.compliance,
+                "violations": result.violations,
+                # 缺陷 1：逐方案来源标记——降级（fallback）与演示模板稿（mock）都必须能与模型产物区分
+                "fallback": result.fallback,
+                "mock": result.mock,
+                # T10 批2（缺口清单 §4.8 #16）：组件能力降级明细随方案透传（命名避开顶层 degraded: bool）
+                "degraded_kinds": result.degraded,
+            }
+        )
+    return {"options": options, "degraded": degraded}

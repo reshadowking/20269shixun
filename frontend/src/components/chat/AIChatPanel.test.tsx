@@ -5,7 +5,8 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import AIChatPanel from './AIChatPanel'
+import AIChatPanel, { extractPreviewTexts } from './AIChatPanel'
+import type { DesignNode } from '@/design/types'
 
 const DESIGN = { id: 'root', type: 'frame', style: { layout: 'column' } }
 
@@ -13,6 +14,21 @@ function mockFetch(questions: { questions: unknown[] } | null, generate?: unknow
   return vi.fn(async (url: string, options?: RequestInit) => {
     const path = String(url)
     const body = options?.body ? JSON.parse(String(options.body)) : {}
+    if (path.includes('/api/sessions')) {
+      // 缺陷 4：会话 API stub（空消息 + 会话元信息），把面板置于正常会话状态
+      if (path.includes('/messages')) {
+        return { ok: true, status: 200, json: async () => ({ messages: [], pruned: 0 }), body }
+      }
+      if (path.includes('/tool-calls')) {
+        return { ok: true, status: 200, json: async () => ({ ok: true, id: 1 }), body }
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ session_id: 's-test', title: 't', design_id: null, created_at: null, updated_at: null, agent_state: {} }),
+        body,
+      }
+    }
     if (path.includes('/api/generate/questions')) {
       return {
         ok: true,
@@ -38,7 +54,7 @@ function typeAndSend(text: string) {
 }
 
 function renderPanel() {
-  return render(<AIChatPanel onGenerate={() => {}} />)
+  return render(<AIChatPanel sessionKey="s-test" onGenerate={() => {}} />)
 }
 
 describe('AIChatPanel followup flow', () => {
@@ -181,7 +197,7 @@ describe('AIChatPanel followup flow', () => {
       { design: DESIGN, template: 'ecommerce', compliance: 81.8, violations: 4, fallback: true, error: '参数填充未返回有效 JSON（模型限流或超时）' },
     )
     vi.stubGlobal('fetch', fetchMock)
-    render(<AIChatPanel onGenerate={onGenerate} />)
+    render(<AIChatPanel sessionKey="s-test" onGenerate={onGenerate} />)
     typeAndSend('做一个电商产品详情页')
     expect(await screen.findByText(/AI 生成失败/)).toBeInTheDocument()
     expect(screen.getByText(/模型限流或超时/)).toBeInTheDocument()
@@ -218,11 +234,397 @@ describe('AIChatPanel followup flow', () => {
       { design: DESIGN, template: 'ecommerce', compliance: 100, violations: 0, fallback: true, error: '超时' },
     )
     vi.stubGlobal('fetch', fetchMock)
-    render(<AIChatPanel onGenerate={onGenerate} />)
+    render(<AIChatPanel sessionKey="s-test" onGenerate={onGenerate} />)
     typeAndSend('做一个电商产品详情页')
     fireEvent.click(await screen.findByTestId('fallback-use-template'))
     expect(onGenerate).toHaveBeenCalledWith(DESIGN)
     expect(await screen.findByText(/已使用预置模板/)).toBeInTheDocument()
     expect(screen.queryByTestId('fallback-actions')).not.toBeInTheDocument()
+  })
+})
+
+describe('会话隔离：消息只来自当前会话（缺陷 4）', () => {
+  it('挂载时只加载本会话消息；其他会话的历史不会出现', async () => {
+    localStorage.clear()
+    const fetchMock = vi.fn(async (url: string) => {
+      const path = String(url)
+      if (path.includes('/api/sessions/s-a/messages')) {
+        return { ok: true, status: 200, json: async () => ({ messages: [{ id: 1, role: 'assistant', text: '会话 A 的历史' }] }) }
+      }
+      if (path.includes('/api/sessions/s-b/messages')) {
+        return { ok: true, status: 200, json: async () => ({ messages: [{ id: 2, role: 'assistant', text: '会话 B 的历史' }] }) }
+      }
+      if (path.includes('/api/sessions')) {
+        return { ok: true, status: 200, json: async () => ({ session_id: 's-a', title: 't', design_id: null, created_at: null, updated_at: null, agent_state: {} }) }
+      }
+      throw new Error('unexpected fetch: ' + path)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const { unmount } = render(<AIChatPanel sessionKey="s-a" onGenerate={() => {}} />)
+    expect(await screen.findByText('会话 A 的历史')).toBeInTheDocument()
+    expect(screen.queryByText('会话 B 的历史')).not.toBeInTheDocument()
+
+    unmount()
+    render(<AIChatPanel sessionKey="s-b" onGenerate={() => {}} />)
+    expect(await screen.findByText('会话 B 的历史')).toBeInTheDocument()
+    expect(screen.queryByText('会话 A 的历史')).not.toBeInTheDocument()
+  })
+
+  it('新建的空会话：消息列表为空，只显示欢迎语（不继承前一画布历史）', async () => {
+    localStorage.clear()
+    const fetchMock = vi.fn(async (url: string) => {
+      const path = String(url)
+      if (path.includes('/api/sessions')) {
+        return { ok: true, status: 200, json: async () => ({ messages: [], session_id: 's-new', agent_state: {} }) }
+      }
+      throw new Error('unexpected fetch: ' + path)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<AIChatPanel sessionKey="s-new" onGenerate={() => {}} />)
+    expect(await screen.findByTestId('chat-msg-assistant-0')).toHaveTextContent('你好！我是 AI 设计助手')
+    await waitFor(() => expect(screen.getAllByTestId(/^chat-msg-/)).toHaveLength(1))
+  })
+
+  it('历史里存着欢迎语占位（改造前数据）：只显示一条欢迎语', async () => {
+    localStorage.clear()
+    const fetchMock = vi.fn(async (url: string) => {
+      const path = String(url)
+      if (path.includes('/api/sessions') && path.includes('/messages')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            messages: [
+              { id: 1, role: 'assistant', text: '你好！我是 AI 设计助手。输入你的需求，我帮你生成设计稿。' },
+              { id: 2, role: 'user', text: '旧需求' },
+            ],
+          }),
+        }
+      }
+      if (path.includes('/api/sessions')) {
+        return { ok: true, status: 200, json: async () => ({ session_id: 's-legacy', agent_state: {} }) }
+      }
+      throw new Error('unexpected fetch: ' + path)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<AIChatPanel sessionKey="s-legacy" onGenerate={() => {}} />)
+    expect(await screen.findByText('旧需求')).toBeInTheDocument()
+    const welcomes = screen.queryAllByText(/你好！我是 AI 设计助手/)
+    expect(welcomes).toHaveLength(1)
+  })
+
+  it('会话接口不可用：降级为仅本地可见并提示（不阻塞对话）', async () => {
+    localStorage.clear()
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      throw new Error('offline')
+    }))
+    render(<AIChatPanel sessionKey="s-offline" onGenerate={() => {}} />)
+    expect(await screen.findByTestId('session-sync-error')).toHaveTextContent('会话同步失败')
+    expect(screen.getByTestId('chat-msg-assistant-0')).toBeInTheDocument()
+  })
+})
+
+describe('D1 合规逐项报告（B2-2 明细 → UI）', () => {
+  let fetchMock: ReturnType<typeof vi.fn>
+
+  beforeEach(() => {
+    localStorage.clear()
+    fetchMock = mockFetch({ questions: [] })
+  })
+
+  it('生成返回违规明细：报告逐项展示，点还原回调并移除该项，全部接受关闭', async () => {
+    const onRestore = vi.fn()
+    fetchMock = mockFetch(
+      { questions: [] },
+      {
+        design: DESIGN,
+        template: 'login',
+        compliance: 50,
+        violations: 2,
+        fallback: false,
+        violations_detail: [
+          { node_id: 'btn-1', field: 'background', original: '#123456', corrected: 'text-primary' },
+          { node_id: 't-1', field: 'color', original: '#ABCDEF', corrected: 'primary' },
+        ],
+      },
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    render(<AIChatPanel sessionKey="s-test" onGenerate={() => {}} onComplianceRestore={onRestore} />)
+    typeAndSend('设计一个页面')
+    await waitFor(() => expect(screen.getByTestId('compliance-report')).toBeInTheDocument())
+    expect(screen.getByText(/#123456/)).toBeInTheDocument()
+    expect(screen.getByText(/#ABCDEF/)).toBeInTheDocument()
+
+    // 还原第一项：回调携带完整明细，该项从报告消失、另一项保留
+    fireEvent.click(screen.getByTestId('compliance-restore-0'))
+    expect(onRestore).toHaveBeenCalledWith({
+      node_id: 'btn-1',
+      field: 'background',
+      original: '#123456',
+      corrected: 'text-primary',
+    })
+    await waitFor(() => expect(screen.queryByText(/#123456/)).not.toBeInTheDocument())
+    expect(screen.getByText(/#ABCDEF/)).toBeInTheDocument()
+
+    // 全部接受：报告整体关闭
+    fireEvent.click(screen.getByTestId('compliance-accept-all'))
+    await waitFor(() => expect(screen.queryByTestId('compliance-report')).not.toBeInTheDocument())
+  })
+
+  it('无违规明细时不渲染报告块', async () => {
+    fetchMock = mockFetch({ questions: [] }) // 默认 generate 响应无 violations_detail
+    vi.stubGlobal('fetch', fetchMock)
+    render(<AIChatPanel sessionKey="s-test" onGenerate={() => {}} />)
+    typeAndSend('设计一个页面')
+    await waitFor(() => expect(screen.getByText(/已生成设计稿/)).toBeInTheDocument())
+    expect(screen.queryByTestId('compliance-report')).not.toBeInTheDocument()
+  })
+})
+
+describe('演示模式显式标注（未配置模型 Key = 预置模板稿）', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    localStorage.clear()
+  })
+
+  it('mock=true：生成文案明确标注"演示模式…预置模板（非模型生成）"', async () => {
+    localStorage.clear()
+    const fetchMock = mockFetch({ questions: [] }, { design: DESIGN, template: 'login', compliance: 100, violations: 0, fallback: false, mock: true })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<AIChatPanel sessionKey="s-test" onGenerate={() => {}} />)
+    typeAndSend('设计一个页面')
+    await waitFor(() => expect(screen.getByText(/已生成设计稿/)).toBeInTheDocument())
+    const msg = screen.getByText(/已生成设计稿/)
+    expect(msg).toHaveTextContent('演示模式')
+    expect(msg).toHaveTextContent('预置模板（非模型生成）')
+  })
+
+  it('mock 缺省（模型产物）：不出现演示模式标注', async () => {
+    localStorage.clear()
+    const fetchMock = mockFetch({ questions: [] })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<AIChatPanel sessionKey="s-test" onGenerate={() => {}} />)
+    typeAndSend('设计一个页面')
+    await waitFor(() => expect(screen.getByText(/已生成设计稿/)).toBeInTheDocument())
+    expect(screen.getByText(/已生成设计稿/)).not.toHaveTextContent('演示模式')
+  })
+})
+
+describe('D3 方案探索', () => {
+  let fetchMock: ReturnType<typeof vi.fn>
+
+  beforeEach(() => {
+    localStorage.clear()
+    fetchMock = vi.fn(async (url: string, options?: RequestInit) => {
+      const path = String(url)
+      const body = options?.body ? JSON.parse(String(options.body)) : {}
+      if (path.includes('/api/generate/explore')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            options: [
+              { label: '方案一 · 默认风格', design: DESIGN, template: 'login', compliance: 100, violations: 0 },
+              { label: '方案二 · 差异化风格', design: DESIGN, template: 'login', compliance: 95, violations: 1 },
+            ],
+            degraded: false,
+            body,
+          }),
+        }
+      }
+      if (path.includes('/api/generate/questions')) {
+        return { ok: true, status: 200, json: async () => ({ questions: [] }) }
+      }
+      if (path.includes('/api/generate')) {
+        return { ok: true, status: 200, json: async () => ({ design: DESIGN, template: 'login', compliance: 100, violations: 0, fallback: false }) }
+      }
+      throw new Error(`unexpected fetch: ${path}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    localStorage.clear()
+  })
+
+  it('探索返回 2 份方案：点使用回调并关闭面板', async () => {
+    const onUse = vi.fn()
+    render(<AIChatPanel sessionKey="s-test" onGenerate={() => {}} onUseExploreDesign={onUse} />)
+    typeAndSend('设计一个登录页') // lastPrompt 就位
+    await waitFor(() => expect(screen.getByText(/已生成设计稿/)).toBeInTheDocument())
+
+    fireEvent.click(screen.getByTestId('explore-options'))
+    await waitFor(() => expect(screen.getByTestId('explore-result')).toBeInTheDocument())
+    expect(screen.getByText('方案一 · 默认风格')).toBeInTheDocument()
+    expect(screen.getByText('方案二 · 差异化风格')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId('explore-use-0'))
+    expect(onUse).toHaveBeenCalledWith(DESIGN)
+    await waitFor(() => expect(screen.queryByTestId('explore-result')).not.toBeInTheDocument())
+    expect(screen.getByText(/已加载「方案一/)).toBeInTheDocument()
+  })
+
+  it('extractPreviewTexts 抽取树中可见文本', () => {
+    const tree: DesignNode = {
+      id: 'r',
+      type: 'frame',
+      children: [
+        { id: 't1', type: 'text', props: { text: '你好世界' } },
+        { id: 'b1', type: 'component', componentType: 'button', props: { text: '立即购买' } },
+      ],
+    }
+    expect(extractPreviewTexts(tree)).toBe('你好世界 · 立即购买')
+  })
+})
+
+describe('T4 批2：增量编辑请求携带 locked（仅提示词措辞，非安全开关）', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    localStorage.clear()
+  })
+
+  async function sendEditAndCapture(locked?: boolean) {
+    const fetchMock = mockFetch({ questions: [] })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<AIChatPanel sessionKey="s-test" onGenerate={() => {}} design={DESIGN as DesignNode} locked={locked} />)
+    // 「把…」是修改类指令：画布有设计 → 增量编辑（携带当前树）
+    typeAndSend('把标题改成红色')
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some((c) => String(c[0]) === '/api/generate')).toBe(true)
+    })
+    const gen = fetchMock.mock.calls.find((c) => String(c[0]) === '/api/generate')
+    return JSON.parse(String(gen![1]?.body))
+  }
+
+  it('locked=true：增量编辑请求体携带 locked=true', async () => {
+    const body = await sendEditAndCapture(true)
+    expect(body.design).toEqual(DESIGN)
+    expect(body.locked).toBe(true)
+  })
+
+  it('locked 未传（默认未锁定）：请求体 locked=false，行为向后兼容', async () => {
+    const body = await sendEditAndCapture(undefined)
+    expect(body.locked).toBe(false)
+  })
+})
+
+describe('T8 收尾：degraded 降级提示（缺口清单 §4.8）', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    localStorage.clear()
+  })
+
+  it('生成结果带 degraded：聊天消息提示「有 N 项能力暂不支持，已用近似组件表达」', async () => {
+    const fetchMock = mockFetch(
+      { questions: [] },
+      { design: DESIGN, template: 'login', compliance: 100, violations: 0, fallback: false, degraded: ['icon@ic', 'tabs@t2'] },
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    render(<AIChatPanel sessionKey="s-test" onGenerate={() => {}} />)
+    typeAndSend('设计一个页面')
+    await waitFor(() => expect(screen.getByText(/已生成设计稿/)).toBeInTheDocument())
+    expect(screen.getByText(/2 项能力暂不支持，已用近似组件表达/)).toBeInTheDocument()
+  })
+
+  it('无 degraded：不出现该提示（不加空话）', async () => {
+    const fetchMock = mockFetch({ questions: [] })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<AIChatPanel sessionKey="s-test" onGenerate={() => {}} />)
+    typeAndSend('设计一个页面')
+    await waitFor(() => expect(screen.getByText(/已生成设计稿/)).toBeInTheDocument())
+    expect(screen.queryByText(/项能力暂不支持/)).not.toBeInTheDocument()
+  })
+})
+
+describe('T10：守卫分级（增量路径放行，缺口清单 §4.9）', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    localStorage.clear()
+  })
+
+  it('有设计稿 + 「加高级功能」：请求发出、不显示角色拒答', async () => {
+    const fetchMock = mockFetch({ questions: [] })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<AIChatPanel sessionKey="s-test" onGenerate={() => {}} design={DESIGN as DesignNode} />)
+    typeAndSend('加高级功能')
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some((c) => String(c[0]) === '/api/generate')).toBe(true)
+    })
+    expect(screen.queryByText(/只负责 UI/)).not.toBeInTheDocument()
+  })
+
+  it('无设计稿 + 同句：仍被拦（首轮守卫强度保持）', async () => {
+    const fetchMock = mockFetch({ questions: [] })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<AIChatPanel sessionKey="s-test" onGenerate={() => {}} />)
+    typeAndSend('加高级功能')
+    expect(await screen.findByText(/只负责 UI/)).toBeInTheDocument()
+    expect(fetchMock.mock.calls.some((c) => String(c[0]).includes('/api/generate'))).toBe(false)
+  })
+
+  it('有设计稿但无编辑动词（今天天气怎么样）：仍被拦', async () => {
+    const fetchMock = mockFetch({ questions: [] })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<AIChatPanel sessionKey="s-test" onGenerate={() => {}} design={DESIGN as DesignNode} />)
+    typeAndSend('今天天气怎么样')
+    expect(await screen.findByText(/只负责 UI/)).toBeInTheDocument()
+    expect(fetchMock.mock.calls.some((c) => String(c[0]).includes('/api/generate'))).toBe(false)
+  })
+})
+
+describe('T10 批2：方案探索降级可见（缺口清单 §4.8 #16）', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    localStorage.clear()
+  })
+
+  it('方案含 degraded_kinds：方案卡显示「有 N 项能力暂不支持，已用近似组件表达」', async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      const path = String(url)
+      if (path.includes('/api/sessions')) {
+        if (path.includes('/messages')) return { ok: true, status: 200, json: async () => ({ messages: [], pruned: 0 }) }
+        return { ok: true, status: 200, json: async () => ({ session_id: 's-test', title: 't', design_id: null, created_at: null, updated_at: null, agent_state: {} }) }
+      }
+      if (path.includes('/api/generate/explore')) {
+        return {
+          ok: true, status: 200,
+          json: async () => ({
+            options: [
+              { label: '方案一 · 默认风格', design: { id: 'r1', type: 'frame', style: { layout: 'column' } }, template: 'landing', compliance: 100, violations: 0, degraded_kinds: ['icon@ic1'] },
+              { label: '方案二 · 差异化风格', design: { id: 'r2', type: 'frame', style: { layout: 'column' } }, template: 'landing', compliance: 95, violations: 1 },
+            ],
+            degraded: false,
+          }),
+        }
+      }
+      throw new Error(`unexpected fetch: ${path}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<AIChatPanel sessionKey="s-test" onGenerate={() => {}} />)
+    typeAndSend('设计一个页面')
+    fireEvent.click(await screen.findByTestId('explore-options'))
+    await waitFor(() => expect(screen.getByTestId('explore-result')).toBeInTheDocument())
+    expect(screen.getByTestId('explore-degraded-0')).toHaveTextContent(/1 项能力暂不支持，已用近似组件表达/)
+    expect(screen.queryByTestId('explore-degraded-1')).not.toBeInTheDocument()
+  })
+})
+
+describe('T10 批2：增量路径降级提示（缺口清单 §4.8 #15 补测）', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    localStorage.clear()
+  })
+
+  it('增量编辑响应带 degraded：成功消息提示「有 N 项能力暂不支持」', async () => {
+    const fetchMock = mockFetch(
+      { questions: [] },
+      { design: { ...DESIGN, style: { layout: 'column' } }, template: 'edit', compliance: 100, violations: 0, fallback: false, degraded: ['icon@ic'] },
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const onIncrementalEdit = vi.fn(async () => ({ ok: true }))
+    render(<AIChatPanel sessionKey="s-test" onGenerate={() => {}} design={DESIGN as DesignNode} onIncrementalEdit={onIncrementalEdit} />)
+    typeAndSend('把标题改成新文案')
+    await waitFor(() => expect(screen.getByText(/已应用修改 ✓/)).toBeInTheDocument())
+    expect(screen.getByText(/1 项能力暂不支持，已用近似组件表达/)).toBeInTheDocument()
   })
 })

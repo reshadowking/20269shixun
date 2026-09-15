@@ -46,6 +46,24 @@ backend/logs/
 logs/
 tmp_*.txt
 
+# --- 运行/调试产物（防误提交；scripts/precommit.ps1 亦会拦截） ---
+logs_*.txt
+logs_*/
+_defect_content.txt
+scripts/designs/report.json
+
+# --- 逆向文档提示词（工单类，随交付包提供，不入库） ---
+1.md
+
+# --- 文档与材料（按 ADR-005 决策不入库；README.md 为唯一例外） ---
+# 若确需入库，用 git add -f <路径> 显式放行
+docs/
+newdocs/
+lost/
+问题/
+vibecoding-constitution.md
+*.docx
+
 # 前端保存的 LLM 运行时配置（含 API Key，绝不提交）
 backend/data/
 

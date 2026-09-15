@@ -20,5 +20,14 @@ export function safeHref(href: string | undefined): string {
   return '#'
 }
 
+/** img/media src 协议白名单：http/https/data:image/锚点/相对路径；其余一律置空。
+ * 匹配前先 trim 并剥离控制字符，防止 scheme 伪装（如 "java\nscript:"）。 */
+export function safeSrc(src: string | undefined): string {
+  if (!src) return ''
+  const cleaned = src.trim().replace(/[\u0000-\u001f\u007f]/g, '')
+  if (/^(https?:|data:image\/|#|\/|\.\.?\/)/i.test(cleaned)) return cleaned
+  return ''
+}
+
 /** 导出产物里渲染 JSX 字符串属性时的转义（与 escapeHtml 同源，显式别名） */
 export const escapeJsxAttr = escapeHtml

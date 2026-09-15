@@ -1,7 +1,7 @@
 import { useCallback } from 'react'
 import {
   BarChart3, ChevronLeft, ChevronRight, CreditCard, Heading, Image as ImageIcon,
-  ListFilter, Minus, MousePointerClick, PanelLeft, PanelTop, SquarePen, Table as TableIcon,
+  ListFilter, Minus, MousePointerClick, PanelLeft, PanelTop, AppWindow, SquarePen, Star, Table as TableIcon, ToggleLeft,
   Tag as TagIcon, TrendingUp, UserRound, type LucideIcon,
 } from 'lucide-react'
 
@@ -27,6 +27,9 @@ const COMPONENT_ICONS: Record<string, LucideIcon> = {
   'title-text': Heading,
   hero: ImageIcon,
   image: ImageIcon,
+  icon: Star,
+  switch: ToggleLeft,
+  tabs: AppWindow,
 }
 
 /** 组件面板（P2：受控折叠为图标列；点击添加 + 拖拽到画布添加） */

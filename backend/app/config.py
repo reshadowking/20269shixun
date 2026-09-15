@@ -31,6 +31,8 @@ class Settings(BaseSettings):
     # 鉴权（默认值仅本机开发兜底，生产必须 .env 覆盖；≥32 字节防 RFC7518 警告）
     jwt_secret: str = "dev-secret-change-me-please-32bytes-minimum"
     jwt_expire_hours: int = 24
+    # 口令哈希盐（与 jwt_secret 解耦：轮换 JWT 密钥不应该让所有口令失效——见 P1-1 事故）
+    password_salt: str = "design-tool-demo-hash-salt-v1"
     demo_user: str = "demo"
     demo_password: str = "demo123"
 

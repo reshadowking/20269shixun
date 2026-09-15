@@ -3,6 +3,8 @@
 工具：
 - get_design_tokens：完整设计令牌 JSON（colors/typography/spacing/radius/shadow/motion/opacity）
 - get_component_library：15 个组件定义数组（type/name/props 定义/default_style）
+- apply_design_edit（B2-3 轻量过渡版）：自然语言指令 + 当前设计 → 增量编辑后的合法设计树；
+  复用生成链路全部后处理（宽容修复/Schema/令牌合规）。P1-6 正式 patch 版二期，本工具不构成 P1-6 交付。
 
 运行（stdio）：
     python backend/mcp_server.py
@@ -15,23 +17,34 @@
 """
 from mcp.server.mcpserver import MCPServer
 
-from app.mcp_tools import get_component_library, get_design_tokens
+from app.mcp_tools import apply_design_edit, get_component_library, get_design_tokens
 
 mcp = MCPServer("design-skills")
 
 
 @mcp.tool()
-def get_design_tokens_tool() -> dict:
+def get_design_tokens_tool(session_id: str | None = None) -> dict:
     """获取完整设计令牌 JSON（colors / typography / spacing / radius + 合规允许色列表）。
-    生成界面代码时必须使用这些令牌值，禁止自创颜色与字号。"""
-    return get_design_tokens()
+    生成界面代码时必须使用这些令牌值，禁止自创颜色与字号。
+    session_id 可选：传入时会校验会话存在并记入该会话的工具调用记录（缺陷 4）。"""
+    return get_design_tokens(session_id=session_id)
 
 
 @mcp.tool()
-def get_component_library_tool() -> dict:
+def get_component_library_tool(session_id: str | None = None) -> dict:
     """获取组件库：15 个组件定义数组（type / name / props 定义 / default_style）。
-    生成界面代码时只能使用这 15 种组件类型，禁止发明新组件。"""
-    return get_component_library()
+    生成界面代码时只能使用这 15 种组件类型，禁止发明新组件。
+    session_id 可选：传入时会校验会话存在并记入该会话的工具调用记录（缺陷 4）。"""
+    return get_component_library(session_id=session_id)
+
+
+@mcp.tool()
+def apply_design_edit_tool(design: dict, instruction: str, session_id: str | None = None) -> dict:
+    """基于当前设计树执行一次局部修改（增量编辑）：instruction 描述改动（如"把主按钮改成红色"），
+    返回修正后的完整 DesignNode 树（宽容修复/Schema/令牌合规已自动执行）。
+    session_id 可选：传入时会校验会话存在并记入该会话的工具调用记录（缺陷 4）。
+    注意：本工具是轻量过渡版；Mock/未配置 Key 时返回原树（fallback=true）。"""
+    return apply_design_edit(design, instruction, session_id=session_id)
 
 
 if __name__ == "__main__":

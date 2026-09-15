@@ -11,6 +11,7 @@
 import * as Y from 'yjs'
 import { WebsocketProvider } from 'y-websocket'
 
+import { LOCKED_EDITABLE_STYLE_KEYS } from '@/design/beautify'
 import type { DesignNode } from '@/design/types'
 
 const DESIGN_MAP = 'design'
@@ -29,6 +30,7 @@ function plainToY(node: DesignNode): YNode {
   if (node.componentType) yMap.set('componentType', node.componentType)
   if (node.x !== undefined) yMap.set('x', node.x)
   if (node.y !== undefined) yMap.set('y', node.y)
+  if (node.hidden === true) yMap.set('hidden', true)
   if (node.props && Object.keys(node.props).length) {
     const p = new Y.Map<unknown>()
     for (const [k, v] of Object.entries(node.props)) p.set(k, v)
@@ -100,20 +102,49 @@ export class DesignStore {
   /** AI 版本快照栈（E3-2/P0-1）：优化与增量编辑前保存，恢复时整体重置文档 */
   private snapshots: DesignNode[] = []
   private static MAX_SNAPSHOTS = 10
+  /** D5：presence/连接状态订阅集合（provider 重建后自动重挂，调用方无需重新订阅） */
+  private presenceCbs = new Set<() => void>()
+  private statusCbs = new Set<(status: string) => void>()
   /** 操作级撤销/重做（缺陷 13）：只跟踪本地用户操作（LOCAL_ORIGIN） */
   undoManager: Y.UndoManager
+  /** 缺陷 3：美化阶段版面锁定——只有效果白名单的 style 键允许改动（写入层强制，不靠 UI 禁用） */
+  private beautifyLock = false
+  private blockedCbs = new Set<(reason: string) => void>()
+  /** T2：连接端点。构造只记忆、不建立连接——provider 的生灭与 React effect 配对 */
+  private wsEndpoint: string | undefined
+  private roomName: string
+  /** T2：最近一次广播的 presence 昵称，provider 重建（重挂/重连）后自动写回 */
+  private presenceName: string | null = null
+
+  private handleAwareness = (): void => {
+    this.presenceCbs.forEach((cb) => cb())
+  }
+
+  private handleStatus = (s: { status: string }): void => {
+    this.statusCbs.forEach((cb) => cb(s.status))
+  }
+
+  /** 把 awareness/status 事件挂到当前 provider（constructor 与 reconnectRoom 后调用） */
+  private bindProviderEvents(): void {
+    const provider = this.provider
+    if (!provider) return
+    provider.awareness.on('change', this.handleAwareness)
+    provider.on('status', this.handleStatus)
+  }
 
   constructor(wsUrl?: string, initialDesign?: DesignNode, room = 'design-room') {
     this.ydoc = new Y.Doc()
     this.designMap = this.ydoc.getMap(DESIGN_MAP)
+    this.wsEndpoint = wsUrl
+    this.roomName = room
     if (initialDesign && this.designMap.size === 0) {
       this.ydoc.transact(() => {
         this.designMap.set(ROOT_KEY, plainToY(initialDesign))
       }, RESET_ORIGIN)
     }
-    if (wsUrl) {
-      this.provider = new WebsocketProvider(wsUrl, room, this.ydoc)
-    }
+    // T2 presence 泄漏修复：provider 不再在构造期创建（原实现在渲染期建连、
+    // 组件卸载后从不销毁，socket/awareness 残留导致服务端在线人数虚增）。
+    // 连接改由 useDesignStore 的 effect 调 connectProvider 建立、cleanup 调 disconnectProvider 断开。
     // 操作级撤销：绑定整棵设计树（designMap 及其子树），只记录本地用户操作
     this.undoManager = new Y.UndoManager([this.designMap], {
       trackedOrigins: new Set([LOCAL_ORIGIN]),
@@ -128,6 +159,137 @@ export class DesignStore {
   destroy() {
     this.provider?.destroy()
     this.ydoc.destroy()
+  }
+
+  /** T2：按端点确保 provider 存在（幂等）。与 disconnectProvider 配对使用：
+   * StrictMode 的 mount→cleanup→mount 语义下经历断开→重连，ydoc/撤销栈不受影响。 */
+  connectProvider(wsUrl?: string, room?: string): void {
+    if (wsUrl !== undefined) this.wsEndpoint = wsUrl
+    if (room !== undefined) this.roomName = room
+    if (!this.wsEndpoint || this.provider) return
+    this.provider = new WebsocketProvider(this.wsEndpoint, this.roomName, this.ydoc)
+    this.bindProviderEvents()
+    this._reapplyPresence()
+  }
+
+  /** T2：仅销毁协作连接（awareness 从服务端移除、socket 关闭），store 本体保持可用 */
+  disconnectProvider(): void {
+    if (this.provider) {
+      this.provider.destroy()
+      this.provider = null
+    }
+  }
+
+  /** B3-1：room 重建（新建保存为正式设计后迁移到 design-{id} 协作房间）。
+   * destroy 旧 provider 并用同一 ydoc 建新 provider——保留本地编辑、撤销栈与会话状态，
+   * 避免整页导航刷新丢失未保存内容。T2：换房间后 presence 昵称自动写回新 provider。 */
+  reconnectRoom(wsUrl: string | undefined, newRoom: string): void {
+    if (this.provider) {
+      this.provider.destroy()
+      this.provider = null
+    }
+    this.wsEndpoint = wsUrl
+    this.roomName = newRoom
+    if (wsUrl) {
+      this.provider = new WebsocketProvider(wsUrl, newRoom, this.ydoc)
+      this.bindProviderEvents()
+      this._reapplyPresence()
+    }
+  }
+
+  // ---- D5：协作在场感（presence：在线用户/连接状态）----
+
+  /** 广播本地在场状态（用户昵称；URL ?user= 可区分多标签演示）。
+   * T2：昵称被记忆，provider 重建（StrictMode 重挂/room 迁移）后由 _reapplyPresence 写回 */
+  setPresence(userName: string): void {
+    this.presenceName = userName
+    this.provider?.awareness.setLocalStateField('user', { name: userName })
+  }
+
+  /** T2：把最近一次 presence 昵称写回当前 provider（无 provider 时跳过） */
+  private _reapplyPresence(): void {
+    if (this.presenceName !== null && this.provider) {
+      this.provider.awareness.setLocalStateField('user', { name: this.presenceName })
+    }
+  }
+
+  /** 订阅 awareness 变化（他人进出/状态更新）；无 provider（本地模式）时立即回调一次 */
+  subscribePresence(cb: () => void): () => void {
+    this.presenceCbs.add(cb)
+    cb()
+    if (!this.provider) return () => this.presenceCbs.delete(cb)
+    return () => this.presenceCbs.delete(cb)
+  }
+
+  /** 当前房间在线人数（含自己）；无 provider 时视为单人本地会话 */
+  get onlineCount(): number {
+    return this.provider?.awareness.getStates().size ?? 1
+  }
+
+  /** 在线用户昵称列表（无名字的远端状态排除） */
+  get onlineUsers(): string[] {
+    const awareness = this.provider?.awareness
+    if (!awareness) return []
+    const users: string[] = []
+    for (const state of awareness.getStates().values()) {
+      const name = (state as { user?: { name?: unknown } } | undefined)?.user?.name
+      if (typeof name === 'string' && name) users.push(name)
+    }
+    return users
+  }
+
+  /** 订阅 y-websocket 连接状态（connecting/connected/disconnected），断线提示用 */
+  subscribeStatus(cb: (status: string) => void): () => void {
+    this.statusCbs.add(cb)
+    return () => this.statusCbs.delete(cb)
+  }
+
+  // ---- 缺陷 3：美化阶段版面锁定（数据写入层强制）----
+
+  setBeautifyLock(locked: boolean): void {
+    this.beautifyLock = locked
+  }
+
+  get isBeautifyLocked(): boolean {
+    return this.beautifyLock
+  }
+
+  /** 订阅"越权写入被拒"事件（UI 提示用：拖拽/改文本在锁定阶段会被静默拦下） */
+  subscribeBlocked(cb: (reason: string) => void): () => void {
+    this.blockedCbs.add(cb)
+    return () => this.blockedCbs.delete(cb)
+  }
+
+  private _rejectBlocked(reason: string): void {
+    this.blockedCbs.forEach((cb) => cb(reason))
+  }
+
+  /**
+   * 锁定期的单节点改动白名单：只允许效果白名单 style 键变化。
+   * props（文本/内容）、结构（children/type/id）、位置尺寸（x/y/hidden/width/height/layout 等）一律拒绝。
+   */
+  private _allowedWhileLocked(prev: DesignNode, next: DesignNode): boolean {
+    if (!this.beautifyLock) return true
+    if (prev.id !== next.id || prev.type !== next.type || prev.componentType !== next.componentType) return false
+    if (JSON.stringify(prev.props ?? {}) !== JSON.stringify(next.props ?? {})) return false
+    if (prev.x !== next.x || prev.y !== next.y || prev.hidden !== next.hidden) return false
+    const prevIds = (prev.children ?? []).map((c) => c.id).join(',')
+    const nextIds = (next.children ?? []).map((c) => c.id).join(',')
+    if (prevIds !== nextIds) return false
+    const prevStyle = (prev.style ?? {}) as Record<string, unknown>
+    const nextStyle = (next.style ?? {}) as Record<string, unknown>
+    for (const key of new Set([...Object.keys(prevStyle), ...Object.keys(nextStyle)])) {
+      if (LOCKED_EDITABLE_STYLE_KEYS.includes(key)) continue
+      if (prevStyle[key] !== nextStyle[key]) return false
+    }
+    return true
+  }
+
+  /** 锁定期结构/顺序类操作（新增/删除/复制/移动）一律拒绝 */
+  private _blockStructuralWhileLocked(): boolean {
+    if (!this.beautifyLock) return false
+    this._rejectBlocked('版面已确认：模块新增/删除/排序已锁定，请先解除版面锁定')
+    return true
   }
 
   getDesign(): DesignNode {
@@ -173,7 +335,13 @@ export class DesignStore {
         if (!root) return
         const target = findYNode(root, id)
         if (!target) return
-        this._applyUpdate(target, updater(yToPlain(target)))
+        const prev = yToPlain(target)
+        const next = updater(prev)
+        if (!this._allowedWhileLocked(prev, next)) {
+          this._rejectBlocked('版面已确认：仅允许修改样式效果（布局/文本/结构已锁定）')
+          return
+        }
+        this._applyUpdate(target, next)
       },
       LOCAL_ORIGIN,
     )
@@ -185,14 +353,84 @@ export class DesignStore {
       () => {
         const root = this.designMap.get(ROOT_KEY) as YNode | undefined
         if (!root) return
-        ids.forEach((id, index) => {
-          const target = findYNode(root, id)
-          if (!target) return
-          this._applyUpdate(target, updater(yToPlain(target), index))
-        })
+        // 锁定阶段：任一批次含越权改动则整批拒绝（原子语义，避免半应用）
+        const targets = ids
+          .map((id, index) => {
+            const target = findYNode(root, id)
+            if (!target) return null
+            const prev = yToPlain(target)
+            return { target, prev, next: updater(prev, index) }
+          })
+          .filter((t): t is { target: YNode; prev: DesignNode; next: DesignNode } => t !== null)
+        if (targets.some((t) => !this._allowedWhileLocked(t.prev, t.next))) {
+          this._rejectBlocked('版面已确认：仅允许修改样式效果（布局/文本/结构已锁定）')
+          return
+        }
+        for (const t of targets) this._applyUpdate(t.target, t.next)
       },
       LOCAL_ORIGIN,
     )
+  }
+
+  /**
+   * 转自由画布（P1-13 像素级冻结）：父容器 layout 与全部子节点坐标在**同一事务**内提交，
+   * 保证一次 Ctrl+Z 完整还原（此前的 updateNode + updateMany 两次调用会产生两个撤销步，
+   * 撤销后只剩 layout:'free' 而坐标被回滚，子节点会全部堆到左上角）。
+   *
+   * 锁定期直接拒绝：layout 不在效果白名单内，_allowedWhileLocked 也会拦下（双保险）。
+   */
+  convertToFreeLayout(
+    parentId: string,
+    updates: Array<{ id: string; x: number; y: number; width: number; height: number }>,
+  ): { ok: boolean; reason?: string } {
+    if (this.beautifyLock) {
+      this._rejectBlocked('版面已确认：请先解除版面锁定再转自由画布')
+      return { ok: false, reason: 'locked' }
+    }
+    let ok = false
+    this.ydoc.transact(
+      () => {
+        const root = this.designMap.get(ROOT_KEY) as YNode | undefined
+        if (!root) return
+        const parent = findYNode(root, parentId)
+        if (!parent) return
+
+        const prevParent = yToPlain(parent)
+        const nextParent: DesignNode = {
+          ...prevParent,
+          style: { ...(prevParent.style ?? {}), layout: 'free' as const },
+        }
+        if (!this._allowedWhileLocked(prevParent, nextParent)) {
+          this._rejectBlocked('版面已确认：仅允许修改样式效果（布局/文本/结构已锁定）')
+          return
+        }
+
+        // 先收集全部目标，任一越权则整批不落（原子语义）
+        const targets: Array<{ target: YNode; next: DesignNode }> = []
+        for (const u of updates) {
+          const target = findYNode(root, u.id)
+          if (!target) continue
+          const prev = yToPlain(target)
+          const next: DesignNode = {
+            ...prev,
+            x: Math.round(u.x),
+            y: Math.round(u.y),
+            style: { ...(prev.style ?? {}), width: u.width, height: u.height },
+          }
+          if (!this._allowedWhileLocked(prev, next)) {
+            this._rejectBlocked('版面已确认：仅允许修改样式效果（布局/文本/结构已锁定）')
+            return
+          }
+          targets.push({ target, next })
+        }
+
+        this._applyUpdate(parent, nextParent)
+        for (const t of targets) this._applyUpdate(t.target, t.next)
+        ok = true
+      },
+      LOCAL_ORIGIN,
+    )
+    return ok ? { ok: true } : { ok: false, reason: 'blocked' }
   }
 
   /** updateNode/updateMany 共用的 Y 节点写回逻辑 */
@@ -225,6 +463,7 @@ export class DesignStore {
   }
 
   removeNode(id: string) {
+    if (this._blockStructuralWhileLocked()) return
     this.ydoc.transact(
       () => {
         const root = this.designMap.get(ROOT_KEY) as YNode | undefined
@@ -242,6 +481,7 @@ export class DesignStore {
   }
 
   duplicateNode(id: string) {
+    if (this._blockStructuralWhileLocked()) return
     this.ydoc.transact(
       () => {
         const root = this.designMap.get(ROOT_KEY) as YNode | undefined
@@ -287,6 +527,7 @@ export class DesignStore {
 
   /** 在指定父节点 children 末尾插入新节点（组件面板添加）；index 指定插入位置（E3-3 推荐落位） */
   insertChild(parentId: string, node: DesignNode, index?: number) {
+    if (this._blockStructuralWhileLocked()) return
     this.ydoc.transact(
       () => {
         const root = this.designMap.get(ROOT_KEY) as YNode | undefined
@@ -328,6 +569,7 @@ export class DesignStore {
 
   /** 跨父移动（图层管理：拖拽改父级）；目标不能是自己的后代 */
   moveNodeTo(nodeId: string, newParentId: string, index: number) {
+    if (this._blockStructuralWhileLocked()) return
     this.ydoc.transact(
       () => {
         const root = this.designMap.get(ROOT_KEY) as YNode | undefined
@@ -364,6 +606,7 @@ export class DesignStore {
 
   /** flex 布局拖拽重排 */
   moveChild(childId: string, parentId: string, targetIndex: number) {
+    if (this._blockStructuralWhileLocked()) return
     this.ydoc.transact(
       () => {
         const root = this.designMap.get(ROOT_KEY) as YNode | undefined

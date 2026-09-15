@@ -3,16 +3,20 @@
 30 秒预算：意图解析 2-5s（调用 1）→ 模板匹配 <1s → 参数填充 5-10s（调用 2）→ 合规 <1s。
 调用失败/非 JSON/mock 模式 → 返回模板默认稿（断网兜底，v2.2 §1.4）。
 """
+import copy
+import json
 import logging
 import re
 import time
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from typing import Any
 
 from opentelemetry import trace
 
 from ..config import get_settings
 from ..design.validator import SchemaError, validate_design
+from .beautify import preset_value, vocabulary_text
 from .compliance import compliance_rate, enforce_compliance
 from .llm import LLMClient, describe_api_error, to_llm_dict
 from .templates import KEYWORD_MAP, TEMPLATES, free_default_design
@@ -36,8 +40,8 @@ INTENT_SYSTEM = """你是设计意图解析器。把用户的自然语言设计�
 登录/注册 → login；个人/主页/中心 → profile；其余 → landing。"""
 
 FILL_SYSTEM = """你是 AI 设计生成器。基于给定的模板骨架 JSON 与设计令牌，输出一张完整可渲染的 DesignNode 树。
-组件白名单（只能使用这 15 种 componentType，禁止新增其他类型）：
-button, card, input, select, table, chart, stat-block, navbar, sidebar, avatar, tag, divider, title-text, hero, image
+组件白名单（只能使用这 18 种 componentType，禁止新增其他类型）：
+button, card, input, select, table, chart, stat-block, navbar, sidebar, avatar, tag, divider, title-text, hero, image, icon, switch, tabs
 硬约束：
 1. 保持模板的节点结构与布局（layout/组件类型），只填充和优化 props 与 style；不要发明新组件类型。
 2. 颜色：用户明确指定的品牌色 hex 必须原样使用（如 #FF6B35）；未指定时使用令牌名（primary/secondary/danger/success/background/text-primary/text-secondary/text-light/border）。
@@ -58,21 +62,53 @@ button, card, input, select, table, chart, stat-block, navbar, sidebar, avatar, 
     输出前检查每个对象闭合。
 11. 输出体积（严格遵守）：使用紧凑 JSON——嵌套层级之间允许必要换行，但不要为空行、
     不要大段缩进（如每行 16 空格）、不要重复冗余字段；输出越长越容易在尾部出错。
-    目标是整棵树的输出 token 越少越好。"""
+    目标是整棵树的输出 token 越少越好。
+12. 需求里出现分页、弹窗等组件白名单外的元素：禁止自创 componentType
+    （如 pagination/dialog，会导致整稿被拒）；用最接近的合法组件表达——
+    分页→一排 button、弹窗→frame + 按钮。"""
 
 # 用户指定色提取：prompt 中的 hex（品牌色不被合规检查器拉回，v2.2 §4.5）
 HEX_RE = re.compile(r"#[0-9a-fA-F]{3,8}\b")
 
-# 15 种组件类型（与 FILL_SYSTEM/FREE_SYSTEM 白名单一致）
+# 18 种组件类型（与 FILL_SYSTEM/FREE_SYSTEM 白名单一致）
 COMPONENT_TYPE_NAMES = {
     "button", "card", "input", "select", "table", "chart", "stat-block",
     "navbar", "sidebar", "avatar", "tag", "divider", "title-text", "hero", "image",
+    "icon", "switch", "tabs",
 }
+
+# ---- T9：图标库单一来源（shared/icon-library.json，照 beautify-effects.json 的加载方式）----
+# 消费方：① 提示词运行期注入（icon_prompt_section，禁止手抄进 FILL/FREE/INCREMENTAL 正文）；
+# ② repair_design 对 icon 未知名记 gen_logger（渲染层兜底，不降级）。前端从同一 JSON import。
+ROOT = Path(__file__).resolve().parent.parent.parent.parent
+ICON_LIBRARY_FILE = ROOT / "shared" / "icon-library.json"
+with ICON_LIBRARY_FILE.open(encoding="utf-8") as _f:
+    ICON_LIBRARY: dict[str, Any] = json.load(_f)
+
+
+def icon_names() -> frozenset[str]:
+    """可用图标名集合（每次从 ICON_LIBRARY 现算——单一来源防漂移测试依赖可观测变化）。"""
+    return frozenset(i["name"] for i in ICON_LIBRARY["icons"])
+
+
+def icon_names_text() -> str:
+    """运行期从 shared/icon-library.json 现算可用图标名清单（照 beautify.vocabulary_text 模式）。"""
+    return "、".join(i["name"] for i in ICON_LIBRARY["icons"])
+
+
+def icon_prompt_section() -> str:
+    """三段 system 共用的 icon 提示词段：注入可用图标名（模型逐字取用，清单外渲染兜底）。"""
+    return (
+        "\n\n## 可用图标（icon 组件的 props.name 只能从中逐字选）\n"
+        + icon_names_text()
+        + "\n不在上列的名字会被渲染为兜底占位（不会导致整稿被拒），所以禁止编造图标名。"
+    )
 
 # 样式数值边界（与 shared/design-schema.json 一致；超界自动 clamp，不整树回退）
 STYLE_BOUNDS = {
     "fontSize": (8, 96),
     "spacing": (0, 200),
+    "padding": (0, 200),
     "gap": (0, 100),
     "radius": (0, 64),
     "fontWeight": (100, 900),
@@ -85,7 +121,7 @@ PROPS_STRING_FIELDS = {
     "backgroundImage", "type_",
 }
 PROPS_NUMBER_FIELDS = {"level": (1, 6)}
-PROPS_BOOL_FIELDS = {"disabled"}
+PROPS_BOOL_FIELDS = {"disabled", "checked"}
 PROPS_ARRAY_FIELDS = {"options", "columns", "rows", "items", "links", "data"}
 # 对象字段（Schema 要求 object）：模型常误写成字符串（如 action: "立即学习"）→ 转 {"text": ...}
 PROPS_OBJECT_FIELDS = {"cta", "action"}
@@ -101,6 +137,11 @@ STYLE_ENUMS = {
 PROPS_ENUMS = {
     "chartType": {"line", "bar", "pie"},
     "fit": {"cover", "contain", "fill"},
+    # P14 决策卡收敛后与 schema/组件库/面板四方一致：非法值删除（组件默认值渲染），
+    # 避免 LLM 偶发输出 'orange' 这类值导致整树 Schema 校验失败回退模板
+    "variant": {"default", "primary", "secondary", "outline", "ghost", "destructive"},
+    "size": {"sm", "default", "lg"},
+    "type_": {"text", "password", "email", "number"},
 }
 
 
@@ -132,7 +173,14 @@ def _repair_props(node: dict) -> None:
     if not isinstance(props, dict):
         return
     for key, value in list(props.items()):
-        if key in PROPS_STRING_FIELDS and not isinstance(value, str):
+        if key in PROPS_ENUMS:
+            # 枚举字段（P14 收敛后含 variant/size/type_）：仅接受合法枚举字符串，其余删除（组件默认渲染）。
+            # 必须最先判断——避免数字 28 先被转成字符串 "28" 逃过枚举校验。
+            if isinstance(value, str) and value in PROPS_ENUMS[key]:
+                continue
+            del props[key]
+            gen_logger.debug("修复 props.%s 非法枚举 %r 已删除", key, value)
+        elif key in PROPS_STRING_FIELDS and not isinstance(value, str):
             props[key] = str(value)
             gen_logger.debug("修复 props.%s %r→%r", key, value, props[key])
         elif key in PROPS_NUMBER_FIELDS:
@@ -183,17 +231,55 @@ def _repair_props(node: dict) -> None:
             elif not isinstance(value, dict):
                 del props[key]
                 gen_logger.debug("修复 props.%s 非对象 %r 已删除", key, value)
-        elif key in PROPS_ENUMS and isinstance(value, str) and value not in PROPS_ENUMS[key]:
-            del props[key]
-            gen_logger.debug("修复 props.%s 非法枚举 %r 已删除", key, value)
 
 
-def repair_design(node: dict) -> dict:
-    """宽容化修复 LLM 产物的常见格式错误（不认识的节点原样保留，仍非法则回退模板）。
+# T8：已知节点类型（schema type 枚举）与节点级键白名单——降级/裁剪的判定依据
+KNOWN_NODE_TYPES = frozenset({"frame", "text", "rect", "component", "group"})
+NODE_KEYS = frozenset({"id", "type", "componentType", "props", "style", "x", "y", "hidden", "children"})
 
-    常见错误：模型把组件名直接写进 type（如 {"type": "divider"}），
-    或样式数值超界（如 radius: 100 超出 0-64）。
+
+def _salvage_text_child(node: dict) -> dict | None:
+    """降级前抢救可见文本：props.text/label/name 的第一个非空字符串 → text 子节点。"""
+    props = node.get("props")
+    if not isinstance(props, dict):
+        return None
+    for key in ("text", "label", "name"):
+        value = props.get(key)
+        if isinstance(value, str) and value.strip():
+            return {"id": f"{node.get('id', 'n')}-salvaged", "type": "text", "props": {"text": value}}
+    return None
+
+
+def _degrade_to_frame(node: dict, reason: str, degraded: list[str] | None) -> None:
+    """T8：未知组件/未知节点类型降级为 frame——保留 id/style/x/y/hidden/children；
+    可见文本（props.text/label/name）抢救为 text 子节点追加末尾，其余 props 删除
+    （避免把未知组件的语义塞进 frame）。每次降级写生成日志（评测脚本消费生成日志）。"""
+    salvaged = _salvage_text_child(node)
+    node["type"] = "frame"
+    node.pop("componentType", None)
+    node.pop("props", None)
+    children = node.get("children")
+    if salvaged is not None:
+        if not isinstance(children, list):
+            children = []
+        children.append(salvaged)
+        node["children"] = children
+    if degraded is not None:
+        degraded.append(f"{reason}@{node.get('id', '?')}")
+    gen_logger.info("未知节点降级为 frame：%s（id=%s，可见文本%s）", reason, node.get("id"), "已抢救" if salvaged else "无")
+
+
+def repair_design(node: dict, degraded: list[str] | None = None) -> dict:
+    """宽容化修复 LLM 产物的常见格式错误（T8：未知组件/未知类型降级 frame、未知键裁剪，
+    不再原样放行拖垮整棵树；仍无法修复的形态交由 Schema 校验回退兜底）。
+
+    修复范围：组件名误写进 type（如 {"type": "divider"}）转正；样式数值超界 clamp；
+    未知 componentType（如自创 "icon"）与裸未知 type（如 "tabs"）降级 frame；
+    节点级未知键（如 "content"，Additional properties 报错来源）裁剪。
     这类错误只占整棵树的少数节点，修复后可保留 LLM 的其余成果，避免整棵回退。
+
+    degraded：可选降级清单累积器（generate_design 传入以向 API 外显降级明细，
+    形如 ["icon@节点id"]）；直接调用方（测试等）不传则不收集。
     """
     node = dict(node)
     t = node.get("type")
@@ -205,6 +291,22 @@ def repair_design(node: dict) -> dict:
         node["componentType"] = t
     elif ct is not None and t is None:
         node["type"] = "component"
+    # T8：先转正再判合法性（{"type":"button"} 已在上面转成合法组件，不会被误伤）。
+    # componentType 缺失的 component 节点 Schema 本就合法，不在降级之列。
+    if node.get("type") == "component" and isinstance(node.get("componentType"), str) and node["componentType"] not in COMPONENT_TYPE_NAMES:
+        _degrade_to_frame(node, node["componentType"], degraded)
+    elif node.get("type") not in KNOWN_NODE_TYPES:
+        _degrade_to_frame(node, str(node.get("type")), degraded)
+    # T9：icon 合法化后不再降级；未知名 Schema 不拒（渲染层兜底占位），这里只记日志便于排查
+    if node.get("type") == "component" and node.get("componentType") == "icon":
+        props = node.get("props")
+        name = props.get("name") if isinstance(props, dict) else None
+        if isinstance(name, str) and name and name not in icon_names():
+            gen_logger.warning("icon 组件未知图标名 %r（id=%s）→ 渲染层将兜底为 help-circle", name, node.get("id"))
+    # T8：节点级未知键裁剪（"Additional properties are not allowed" 历史报错的来源）
+    for key in [k for k in node if k not in NODE_KEYS]:
+        node.pop(key)
+        gen_logger.debug("裁剪节点级未知键 %s（id=%s）", key, node.get("id"))
     _clamp_style(node)
     _repair_props(node)
     children = node.get("children")
@@ -220,7 +322,7 @@ def repair_design(node: dict) -> dict:
                         child = dict(child)
                         child["id"] = f"{node.get('id', 'n')}-c{i}"
                         gen_logger.debug("修复 children 元素缺 id → %s", child["id"])
-                    child = repair_design(child)
+                    child = repair_design(child, degraded)
                 else:
                     # 字符串等非对象元素 → text 节点（模型把菜单项/标签直接写进 children）
                     child = {"id": f"{node.get('id', 'n')}-c{i}", "type": "text", "props": {"text": str(child)}}
@@ -233,8 +335,8 @@ def repair_design(node: dict) -> dict:
 FREE_TRIGGER_KEYWORDS = ("自由生成", "不用模板", "不要模板", "自由发挥", "随意发挥")
 
 FREE_SYSTEM = """你是 AI 设计生成器。直接根据用户需求生成一张完整可渲染的 DesignNode 树（不使用任何预置模板）。
-组件白名单（只能使用这 15 种 componentType，禁止新增其他类型）：
-button, card, input, select, table, chart, stat-block, navbar, sidebar, avatar, tag, divider, title-text, hero, image
+组件白名单（只能使用这 18 种 componentType，禁止新增其他类型）：
+button, card, input, select, table, chart, stat-block, navbar, sidebar, avatar, tag, divider, title-text, hero, image, icon, switch, tabs
 硬约束：
 1. 页面结构合理：用 frame 组织层级（layout 用 row/column/grid；需要自由摆放时用 free + x/y 坐标），
    典型结构：顶部导航 → 内容区 → 行动点；不要只输出一个扁平容器。
@@ -248,7 +350,10 @@ button, card, input, select, table, chart, stat-block, navbar, sidebar, avatar, 
 8. 节点格式（严格遵守）：容器用 {"type":"frame"}；组件必须用 {"type":"component","componentType":"组件类型"}，
    禁止把组件名直接写在 type 字段（例如 {"type":"divider"} 或 {"type":"button"} 都是错的）。
 9. 输出体积（严格遵守）：使用紧凑 JSON——嵌套层级之间允许必要换行，不要空行、不要大段缩进；
-   输出越长越容易在尾部出错，整棵树输出 token 越少越好。"""
+   输出越长越容易在尾部出错，整棵树输出 token 越少越好。
+10. 需求里出现分页、弹窗等组件白名单外的元素：禁止自创 componentType
+    （如 pagination/dialog，会导致整稿被拒）；用最接近的合法组件表达——
+    分页→一排 button、弹窗→frame + 按钮。"""
 
 
 def extract_user_colors(prompt: str) -> list[str]:
@@ -273,7 +378,53 @@ INCREMENTAL_SYSTEM = """你是 AI 设计修改器。基于给定的 DesignNode �
 4. 组件类型必须用 {"type":"component","componentType":"xxx"}；样式颜色优先令牌名
    （primary/secondary/danger/success/background/text-primary/text-secondary/text-light/border），用户指定 hex 原样。
 5. 字号 fontSize 用数字（8-96）；间距 gap/圆角 radius 用数字。
-6. 输出必须是合法 JSON（完整 DesignNode 树），不要输出任何其他内容；JSON 语法必须正确（属性间逗号、对象闭合）。"""
+6. 输出必须是合法 JSON（完整 DesignNode 树），不要输出任何其他内容；JSON 语法必须正确（属性间逗号、对象闭合）。
+7. 需求里出现分页、弹窗等组件白名单外的元素：禁止自创 componentType
+   （如 pagination/dialog，会导致整稿被拒）；用最接近的合法组件表达——
+   分页→一排 button、弹窗→frame + 按钮。
+8. 若用户要求与界面设计无关（例如写诗、算术、闲聊），保持 current_design 原样不变，不要为了
+   "完成指令"去改动任何节点。"""
+
+# T4 批2：锁定阶段的额外约束段（仅 locked=True 时追加到增量提示词末尾）
+LOCKED_STAGE_SECTION = """
+
+## 版面锁定阶段（locked=true 时生效）
+1. 只允许施加/移除上列预置效果，禁止改动布局、模块顺序、结构、文案与尺寸；
+2. 效果值必须与预置值逐字一致；
+3. 用户说"整个页面/所有卡片/全部模块"时，对全部符合语义的节点施加效果。"""
+
+
+def incremental_system(locked: bool = False) -> str:
+    """组装增量修改 system 提示词（T4 批2）：既有约束 + 效果词典 + 图标清单 +（locked 时）锁定约束段。
+
+    - INCREMENTAL_SYSTEM 既有约束文本逐字保留（多处测试断言依赖），词典为追加式拼装；
+    - 词典由 shared/beautify-effects.json 运行时生成（beautify.vocabulary_text），
+      未锁定时也注入——让模型始终优先用预置值，降低自由 CSS 进树的概率；
+    - 图标清单由 shared/icon-library.json 运行时注入（T9，icon_prompt_section）；
+    - ⚠️ locked 不是安全开关，只影响提示词措辞：安全判定由服务端闸门
+      （apply_locked_edit / design_locks，按会话查表）负责。客户端谎报
+      locked=false 的后果只是提示词缺少锁定约束段，模型可能产出越权改动，
+      闸门仍会拒绝（画布原样）——体验变差，但没有安全漏洞。
+    """
+    text = (
+        INCREMENTAL_SYSTEM
+        + "\n\n## 可用美化效果（只能从中选，禁止自创 CSS 值）\n"
+        + vocabulary_text()
+        + icon_prompt_section()
+    )
+    if locked:
+        text += LOCKED_STAGE_SECTION
+    return text
+
+
+def fill_system_text() -> str:
+    """FILL_SYSTEM + 运行期注入段（图标清单，T9）。generate_design 实际发送的文本。"""
+    return FILL_SYSTEM + icon_prompt_section()
+
+
+def free_system_text() -> str:
+    """FREE_SYSTEM + 运行期注入段（图标清单，T9）。generate_design 实际发送的文本。"""
+    return FREE_SYSTEM + icon_prompt_section()
 
 SUMMARY_SYSTEM = """你是需求摘要器。把用户的长篇设计需求压缩为简洁的结构化需求描述（200 字以内），供下游生成设计稿。
 硬约束：
@@ -331,12 +482,84 @@ class GenerateResult:
     style_attrs: int = 0
     time_ms: dict[str, float] = field(default_factory=dict)
     fallback: bool = False  # 是否走了兜底（mock/失败）
+    mock: bool = False  # 是否演示模式产出（未配置模型 Key：模板稿即"演示稿"，须与模型产物区分）
     error: str = ""  # LLM 失败原因（限流/超时等），供前端展示与排查
+    # B2-2：逐项合规拉回明细（node_id/field/original/corrected），供逐项报告 UI
+    violations_detail: list = field(default_factory=list)
+    # T8：本轮降级明细（["icon@节点id"]，无降级为空）——前端聊天面板消费（T8 收尾）
+    degraded: list[str] = field(default_factory=list)
 
 
-def generate_design(prompt: str, client: LLMClient | None = None, current_design: dict[str, Any] | None = None) -> GenerateResult:
+# ---- T4 前置：mock 模式增量修改（确定性关键词规则，无 LLM）----
+
+# mock 文案改写的固定新值（E2E/pytest 断言依赖其确定性）
+MOCK_EDIT_TEXT = "已按你的要求修改文案（演示模式）"
+
+# prompt 关键词 → (效果 key, 预置值 label)。值经 preset_value 运行时取自
+# shared/beautify-effects.json 单一来源，禁止在此写死效果值（防第二份真相漂移）。
+_MOCK_EDIT_EFFECTS: list[tuple[tuple[str, ...], str, str]] = [
+    (("阴影", "投影"), "shadow", "轻"),
+    (("渐变", "背景"), "backgroundImage", "品牌渐变"),
+    (("圆角",), "radius", "大圆角"),
+    (("动效", "动画"), "animation", "淡入"),
+]
+_MOCK_EDIT_TEXT_KEYWORDS = ("文案", "文字", "标题", "改成")
+
+
+def _mock_first_node(tree: dict, pred) -> dict | None:
+    """前序遍历找第一个满足条件的节点。"""
+    if pred(tree):
+        return tree
+    for child in tree.get("children") or []:
+        hit = _mock_first_node(child, pred)
+        if hit is not None:
+            return hit
+    return None
+
+
+def _mock_apply_style(tree: dict, key: str, value: Any) -> dict:
+    """把效果写到第一个 component 节点（无则根节点）；不增删/重排/改父级。"""
+    node = _mock_first_node(tree, lambda n: n.get("type") == "component") or tree
+    node.setdefault("style", {})[key] = value
+    return tree
+
+
+def mock_edited_design(prompt: str, tree: dict[str, Any]) -> dict[str, Any]:
+    """mock 模式增量修改：按关键词规则产出确定性改写树（纯规则、无 LLM）。
+
+    规则顺序（命中即返回）：效果关键词（阴影/渐变/圆角/动效）→ 文案改写
+    （改第一个 type=text 节点的 props.text）→ 默认施加"极轻"阴影（无害效果）。
+    硬约束：绝不产生结构变更（不增删/重排/改父级）；效果值一律经
+    preset_value 取自 beautify-effects.json（运行时单一来源）。
+    """
+    new_tree = copy.deepcopy(tree)
+    for keywords, key, label in _MOCK_EDIT_EFFECTS:
+        if any(k in prompt for k in keywords):
+            value = preset_value(key, label)
+            if value is not None:
+                return _mock_apply_style(new_tree, key, value)
+    if any(k in prompt for k in _MOCK_EDIT_TEXT_KEYWORDS):
+        node = _mock_first_node(new_tree, lambda n: n.get("type") == "text")
+        if node is not None:
+            node.setdefault("props", {})["text"] = MOCK_EDIT_TEXT
+            return new_tree
+    gentle = preset_value("shadow", "极轻")
+    if gentle is not None:
+        return _mock_apply_style(new_tree, "shadow", gentle)
+    return new_tree
+
+
+def generate_design(
+    prompt: str,
+    client: LLMClient | None = None,
+    current_design: dict[str, Any] | None = None,
+    locked: bool = False,
+) -> GenerateResult:
     """生成设计稿。current_design 非空时走【增量修改】模式（P0-1）：
     基于当前树只改用户指定部分，其他节点保持不变；失败兜底返回原树。
+
+    locked（T4 批2）只影响增量提示词措辞（是否注入锁定约束段），不参与任何
+    安全判定——锁定与否的权威是服务端闸门按 design_locks 查表的结果。
     """
     settings = get_settings()
     client = client or LLMClient()
@@ -344,6 +567,7 @@ def generate_design(prompt: str, client: LLMClient | None = None, current_design
     fallback = False
     error = ""
     is_edit = current_design is not None
+    degraded: list[str] = []  # T8：本轮降级明细（["icon@节点id"]），随结果外显
     start_all = time.perf_counter()
     gen_logger.info("生成开始 prompt=%d字符 mode=%s", len(prompt), "edit" if is_edit else "full")
 
@@ -387,27 +611,36 @@ def generate_design(prompt: str, client: LLMClient | None = None, current_design
         if is_edit:
             default = current_design  # 增量失败兜底：返回原树（画布不变，不丢用户调整）
             user_payload = {"user_request": fill_prompt, "current_design": current_design}
-            fill_system = INCREMENTAL_SYSTEM
+            fill_system = incremental_system(locked)
         else:
             is_free = template_name == "free"
             default = free_default_design(prompt) if is_free else TEMPLATES.get(template_name, TEMPLATES["landing"])
             user_payload = {"user_request": fill_prompt, "intent": intent}
             if not is_free:
                 user_payload["template_skeleton"] = default
-            fill_system = FREE_SYSTEM if is_free else FILL_SYSTEM
-        try:
-            filled = client.chat_json(fill_system, to_llm_dict(user_payload), settings.llm_temperature_fill)
-        except Exception as exc:  # noqa: BLE001
-            error = f"参数填充调用失败：{describe_api_error(exc)}"
-            filled = None
+            fill_system = free_system_text() if is_free else fill_system_text()
+        if is_edit and client.is_mock and client.mock_responder is None:
+            # T4 前置：mock 模式增量修改产出确定性改写树（关键词规则、无 LLM），
+            # 与下方真实链路共用 repair → validate → compliance 流水线；
+            # 与 :443 附近非编辑路径的 mock 特判对称——否则「AI 修改 → 落地闸门」
+            # 在无 Key 环境永远走 fallback，E2E/CI 无法覆盖闸门。
+            # 注入 mock_responder 的调用方（测试模拟真实 LLM）不走本分支。
+            filled = mock_edited_design(prompt, current_design or {})
+        else:
+            try:
+                filled = client.chat_json(fill_system, to_llm_dict(user_payload), settings.llm_temperature_fill)
+            except Exception as exc:  # noqa: BLE001
+                error = f"参数填充调用失败：{describe_api_error(exc)}"
+                filled = None
         if filled is None or not isinstance(filled, dict):
             fallback = True
             if not error:
                 error = "参数填充未返回有效 JSON（模型限流或超时）"
             filled = default
         else:
-            # LLM 产物先宽容修复常见格式错误（type 误写/数值超界/枚举非法/props 类型），再过 Schema
-            filled = repair_design(filled)
+            # LLM 产物先宽容修复常见格式错误（type 误写/数值超界/枚举非法/props 类型），
+            # T8 起未知组件/未知类型降级、未知键裁剪（不再整树回退），再过 Schema
+            filled = repair_design(filled, degraded)
             try:
                 validate_design(filled)
             except SchemaError as exc:
@@ -422,7 +655,7 @@ def generate_design(prompt: str, client: LLMClient | None = None, current_design
     t0 = time.perf_counter()
     with tracer.start_as_current_span("compliance_check"):
         user_colors = extract_user_colors(prompt)
-        design, violations, total = enforce_compliance(filled, allowed_extra=user_colors)
+        design, fixes, total = enforce_compliance(filled, allowed_extra=user_colors)
     times["compliance_check"] = time.perf_counter() - t0
 
     # Mock 模式（未配 Key 的演示/测试）：模板稿即"模型输出"，不标记降级；
@@ -431,6 +664,7 @@ def generate_design(prompt: str, client: LLMClient | None = None, current_design
         fallback = False
         error = ""
 
+    violations = len(fixes)
     rate = compliance_rate(violations, total)
     times["total"] = time.perf_counter() - start_all
     gen_logger.info(
@@ -447,5 +681,8 @@ def generate_design(prompt: str, client: LLMClient | None = None, current_design
         style_attrs=total,
         time_ms=times,
         fallback=fallback,
+        mock=client.is_mock,
         error=error,
+        violations_detail=[asdict(f) for f in fixes],
+        degraded=degraded,
     )

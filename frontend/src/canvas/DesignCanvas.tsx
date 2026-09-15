@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react'
 
 import { DEFAULT_VIEW, ZOOM_LEVELS, nearestZoomLevel, viewportToCanvas, zoomAt, type ViewTransform } from '@/canvas/geometry'
 import { NodeRenderer } from '@/canvas/NodeRenderer'
 import { Button } from '@/components/ui/button'
+import { measureChildren, type FreezeMeasureResult } from '@/canvas/freeze'
 import { findNode, findParent } from '@/design/tree'
 import type { DesignNode } from '@/design/types'
 import type { DesignStore } from '@/yjs/designStore'
@@ -50,14 +51,34 @@ interface DesignCanvasProps {
   onContextMenu?: (nodeId: string | null, x: number, y: number) => void
   /** P0-1 增量编辑：被修改节点高亮 */
   highlightIds?: Set<string>
+  /** 转自由画布（P1-13）：由画布自己持有 DOM 与缩放状态，向父组件暴露测量能力 */
+  ref?: React.Ref<DesignCanvasHandle>
 }
 
-export default function DesignCanvas({ design, store, selectedIds, onSelectionChange, onDropComponent, showGrid = true, onContextMenu, highlightIds }: DesignCanvasProps) {
+/** 画布对外能力（转自由画布用）：测量直接子节点的真实位置与尺寸 */
+export interface DesignCanvasHandle {
+  measureFreeze(parentId: string, childIds: string[]): FreezeMeasureResult
+}
+
+export default function DesignCanvas({ design, store, selectedIds, onSelectionChange, onDropComponent, showGrid = true, onContextMenu, highlightIds, ref }: DesignCanvasProps) {
   const [view, setView] = useState<ViewTransform>(DEFAULT_VIEW)
   const dragRef = useRef<DragState | null>(null)
   const resizeRef = useRef<ResizeState | null>(null)
   const panRef = useRef<{ x: number; y: number } | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
+
+  // 转自由画布：测量必须走画布自己的 DOM 与缩放（屏幕像素 ÷ view.scale）
+  useImperativeHandle(
+    ref,
+    () => ({
+      measureFreeze(parentId: string, childIds: string[]): FreezeMeasureResult {
+        const el = containerRef.current
+        if (!el) return { measurements: [], missing: [...childIds] }
+        return measureChildren(el, parentId, childIds, view.scale)
+      },
+    }),
+    [view.scale],
+  )
 
   // ---- 视图：缩放与平移 ----
   const setZoomLevel = useCallback((level: number) => {
@@ -369,7 +390,7 @@ export default function DesignCanvas({ design, store, selectedIds, onSelectionCh
         data-testid="canvas-world"
       >
         <div
-          className="bg-white shadow-md"
+          className="bg-white shadow-[0_12px_32px_rgba(29,33,41,0.16)] ring-1 ring-black/5"
           style={{ width: sheetW, height: sheetH, borderRadius: 8 }}
           data-testid="canvas-sheet"
         >

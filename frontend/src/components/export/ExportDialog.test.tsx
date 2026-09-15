@@ -86,4 +86,59 @@ describe('ExportDialog', () => {
     fireEvent.click(screen.getByTestId('export-close'))
     expect(onClose).toHaveBeenCalled()
   })
+
+  /**
+   * 代码产物展示（需求「Web管理控制台 · 代码产物展示」）：
+   * 默认 Tab 必须是 React 代码，且展示内容与 ZIP 内容同源。
+   */
+  it('默认展示 React 代码（而非 HTML 预览）', () => {
+    render(<ExportDialog design={DESIGN} onClose={() => {}} />)
+    const panel = screen.getByTestId('export-code-panel')
+    expect(panel).toBeInTheDocument()
+    expect(screen.getByTestId('code-filename')).toHaveTextContent('src/App.tsx')
+    expect(screen.getByTestId('code-body')).toHaveTextContent('export default function App')
+    expect(screen.getByTestId('code-body')).toHaveTextContent('立即购买')
+    // 默认不应出现 HTML 预览
+    expect(screen.queryByTestId('export-preview')).not.toBeInTheDocument()
+  })
+
+  it('展示的代码与提交给 /api/export 的 src/App.tsx 完全一致（单一同源）', async () => {
+    render(<ExportDialog design={DESIGN} onClose={() => {}} />)
+    const shown = screen.getByTestId('code-body').textContent ?? ''
+    fireEvent.click(screen.getByTestId('export-download'))
+    await waitFor(() => expect(clickSpy).toHaveBeenCalled())
+    const body = JSON.parse(String(fetchMock.mock.calls[0][1].body))
+    // 行号列是 aria-hidden 且单独渲染，正文 block 的 textContent 即代码本身
+    expect(body.files['src/App.tsx'].trim()).toBe(shown.trim())
+  })
+
+  it('文件树列出工程实际文件（含 preview.html），点击可查看该文件', () => {
+    render(<ExportDialog design={DESIGN} onClose={() => {}} />)
+    fireEvent.click(screen.getByTestId('export-tab-files'))
+    expect(screen.getByTestId('export-files-panel')).toBeInTheDocument()
+    for (const p of ['package.json', 'src/App.tsx', 'index.html', 'preview.html', 'README.md']) {
+      expect(screen.getByTestId(`export-file-${p}`)).toBeInTheDocument()
+    }
+    fireEvent.click(screen.getByTestId('export-file-preview.html'))
+    expect(screen.getByTestId('code-filename')).toHaveTextContent('preview.html')
+    expect(screen.getByTestId('code-body')).toHaveTextContent('<!doctype html>')
+  })
+
+  it('ZIP 内含自包含 preview.html，且成功提示写明两种查看方式', async () => {
+    render(<ExportDialog design={DESIGN} onClose={() => {}} />)
+    fireEvent.click(screen.getByTestId('export-download'))
+    await waitFor(() => expect(clickSpy).toHaveBeenCalled())
+    const body = JSON.parse(String(fetchMock.mock.calls[0][1].body))
+    expect(body.files['preview.html']).toContain('<!doctype html>')
+    const success = await screen.findByTestId('export-success')
+    expect(success).toHaveTextContent('preview.html')
+    expect(success).toHaveTextContent('src/App.tsx')
+  })
+
+  it('不再出现会误导产物格式的「静态 HTML 预览」措辞', () => {
+    render(<ExportDialog design={DESIGN} onClose={() => {}} />)
+    fireEvent.click(screen.getByTestId('export-tab-preview'))
+    expect(screen.queryByText('静态 HTML 预览')).not.toBeInTheDocument()
+    expect(screen.getByText(/仅预览用，导出物为 React 工程/)).toBeInTheDocument()
+  })
 })

@@ -1,0 +1,66 @@
+{
+  "$comment": "缺陷 3 美化阶段的效果白名单（单一来源）：前后端与契约测试都读本文件。只允许这里的 key/value 组合进入设计树；布局/结构/文本/尺寸字段不在名单内，写入层必须拒绝。",
+  "version": 1,
+  "keys": [
+    {
+      "key": "backgroundImage",
+      "label": "背景渐变",
+      "changesSize": false,
+      "values": [
+        { "value": "linear-gradient(135deg, #0052D9 0%, #7C4DFF 100%)", "label": "品牌渐变" },
+        { "value": "linear-gradient(135deg, #FF6B6B 0%, #FF8E53 100%)", "label": "暖色渐变" },
+        { "value": "linear-gradient(160deg, #14161A 0%, #2A2E36 100%)", "label": "深色渐变" },
+        { "value": "radial-gradient(circle at 30% 20%, #E8F0FF 0%, #F5F5F5 70%)", "label": "柔和光晕" }
+      ]
+    },
+    {
+      "key": "shadow",
+      "label": "投影阴影",
+      "changesSize": false,
+      "values": [
+        { "value": "0 1px 2px rgba(29,33,41,0.06)", "label": "极轻" },
+        { "value": "0 4px 12px rgba(29,33,41,0.10)", "label": "轻" },
+        { "value": "0 10px 30px rgba(29,33,41,0.16)", "label": "中" },
+        { "value": "0 18px 48px rgba(0,82,217,0.24)", "label": "强调" }
+      ]
+    },
+    {
+      "key": "animation",
+      "label": "入场动效",
+      "changesSize": false,
+      "values": [
+        { "value": "fade-in", "label": "淡入" },
+        { "value": "rise-in", "label": "上浮" },
+        { "value": "pulse-soft", "label": "轻脉冲" }
+      ]
+    },
+    {
+      "key": "radius",
+      "label": "圆角",
+      "changesSize": false,
+      "values": [
+        { "value": 8, "label": "小圆角" },
+        { "value": 16, "label": "大圆角" },
+        { "value": 24, "label": "胶囊圆角" }
+      ]
+    },
+    {
+      "key": "border",
+      "label": "描边",
+      "changesSize": true,
+      "values": [
+        { "value": "1px solid #E5E8EF", "label": "细描边" },
+        { "value": "2px solid #0052D9", "label": "强调描边" }
+      ]
+    },
+    {
+      "key": "transform",
+      "label": "强调变换",
+      "changesSize": true,
+      "values": [
+        { "value": "scale(1.04)", "label": "放大 4%" },
+        { "value": "translateY(-4px)", "label": "上移 4px" }
+      ]
+    }
+  ]
+}

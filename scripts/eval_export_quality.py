@@ -4,7 +4,7 @@
 指标（三指标之一：一键转代码前端还原度 ≥70%）：
   还原度 = 0.4×组件数一致率 + 0.4×文本一致率 + 0.2×结构一致率
 
-- 组件数一致率：设计树中 15 种组件类型的出现次数 vs 导出代码中对应标签的出现次数
+- 组件数一致率：设计树中 18 种组件类型的出现次数 vs 导出代码中对应标签的出现次数
 - 文本一致率：设计树中的用户文本出现在导出代码中的比例（含 HTML 转义还原）
 - 结构一致率：容器（frame）嵌套深度比 与 容器数量比 的平均
 
@@ -40,6 +40,9 @@ COMPONENT_TAG = {
     "title-text": "h",
     "hero": "section",
     "image": "img",
+    "icon": "span",  # T9：icon 导出为 span > svg > path（与 tag 同为 span，按出现次数计数）
+    "switch": "div",  # T9：开关导出为 div > span(轨道) > span(滑块) + label
+    "tabs": "div",  # T9：标签页导出为 div[role=tablist] > button(每项)
 }
 
 TAG_RE = re.compile(r"<(/?)([a-zA-Z][a-zA-Z0-9-]*)[^>]*>")
