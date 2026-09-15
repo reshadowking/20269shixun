@@ -779,7 +779,7 @@ def generate_design(
                     intent = None
                 if intent is None and not error:
                     # 意图解析失败：仅记录原因，不视为降级（模板选择仍可走关键词/自由生成，填充由 LLM 完成）
-                    error = "意图解析未返回有效 JSON（模型限流或超时）"
+                    error = f"意图解析未返回合法 JSON：{client.last_json_error[:120]}"
     times["intent_parse"] = time.perf_counter() - t0
     gen_logger.info("意图解析 ok=%s 耗时=%.2fs error=%s", intent is not None, times["intent_parse"], error or "-")
 
@@ -857,7 +857,13 @@ def generate_design(
         if filled is None or not isinstance(filled, dict):
             fallback = True
             if not error:
-                error = "参数填充未返回有效 JSON（模型限流或超时）"
+                # T28：区分"限流/超时"与"模型输出的不是合法 JSON"——后者才是最常见的真实原因
+                detail = client.last_json_error[:140]
+                error = (
+                    f"模型返回的内容不是合法 JSON（已自动重试 1 次）：{detail}"
+                    if detail
+                    else "模型未返回内容（限流或超时）"
+                )
             filled = default
         else:
             # T23：编辑模式优先按 ops 落地（显式增量）；返回整树时走下方兼容路径

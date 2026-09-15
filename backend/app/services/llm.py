@@ -150,6 +150,8 @@ class LLMClient:
         self.mock_responder = mock_responder
         # T21：本次生成的全部模型调用记录（由调用方落库；不外发、不含用户文本）
         self.calls: list[dict] = []
+        # T28：最近一次 JSON 解析失败的定位信息（供上层给出可排查的失败原因）
+        self.last_json_error = ""
         # 运行时配置（前端 API 配置页保存）优先于 .env，立即生效
         from ..llm_runtime import get_runtime_config
 
@@ -314,12 +316,14 @@ class LLMClient:
     ) -> dict | None:
         """输出 JSON；解析失败重试 1 次，重试时把错误定位回传模型让其自纠（v2.2 §4.4）。"""
         clean_history = _sanitize_history(history)
+        self.last_json_error = ""
         for attempt in range(2):
             text = self.chat_text(system, user, temperature, clean_history, deadline, kind)
             parsed = _extract_json(text)
             if parsed is not None:
                 return parsed
             hint = _json_error_hint(text)
+            self.last_json_error = hint
             logger.warning("LLM 输出非 JSON（第 %s 次）: %s", attempt + 1, hint)
             logger.warning("LLM 输出完整内容（%d 字符）: %s", len(text), text[:3000])
             if attempt == 1:

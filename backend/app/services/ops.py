@@ -19,6 +19,21 @@ OP_TYPES = {
     "move": ("id", "parent", "index"),
 }
 MAX_OPS = 20
+# T28：单条 insert 的子树规模上限——防止"用一条 insert 插入整页"变相整树重写（长而脆的 JSON）
+MAX_INSERT_NODES = 20
+MAX_INSERT_DEPTH = 4
+
+
+def _subtree_size(node: Any, depth: int = 1) -> tuple[int, int]:
+    """返回 (节点数, 最大深度)；用于 insert 护栏。"""
+    if not isinstance(node, dict):
+        return 0, depth
+    count, deepest = 1, depth
+    for child in node.get("children") or []:
+        child_count, child_depth = _subtree_size(child, depth + 1)
+        count += child_count
+        deepest = max(deepest, child_depth)
+    return count, deepest
 
 
 def _find(node: dict, node_id: str) -> tuple[dict, list | None, int] | None:
@@ -74,6 +89,17 @@ def apply_ops(tree: dict[str, Any], ops: Any) -> tuple[dict[str, Any], list[str]
             node = op["node"]
             if not isinstance(node, dict):
                 return tree, [], set(), "insert.node 必须是对象"
+            size, depth = _subtree_size(node)
+            if size > MAX_INSERT_NODES or depth > MAX_INSERT_DEPTH:
+                return (
+                    tree,
+                    [],
+                    set(),
+                    (
+                        f"单条 insert 的子树过大（{size} 个节点 / 深度 {depth}）——请拆成多条 insert，"
+                        "或改用 set_* 只改必要节点（不要用一条 op 插入整页）"
+                    ),
+                )
             node = copy.deepcopy(node)
             if not node.get("id"):
                 node["id"] = f"{op['parent']}-c{len(children)}"  # 与 repair_design 的派生规则一致

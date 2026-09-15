@@ -8,7 +8,7 @@ import type { DesignNode } from '@/design/types'
 import { api } from '@/lib/api'
 import { GUARD_HINT, isDesignRequest } from '@/lib/designGuard'
 import { diffDesign } from '@/design/diff'
-import { isNewDesignIntent } from '@/lib/editIntent'
+import { isFullPageRequest, isNewDesignIntent } from '@/lib/editIntent'
 import {
   loadExploreArchive,
   saveExploreArchive,
@@ -580,6 +580,16 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
       return
     }
     const prompt = stripCommandWords(raw)
+    // T28：长文 + 整页要素 → 先确认"重做还是继续改"，避免整页需求被当增量（超长 ops 输出必崩）
+    if (Boolean(design) && !isNewDesignIntent(raw) && isFullPageRequest(prompt)) {
+      const redesign = window.confirm(
+        '这段需求看起来是「重新做一个页面」：\n【确定】从头重新设计（推荐）\n【取消】在当前设计上继续修改',
+      )
+      if (redesign) {
+        await runGenerate(prompt)
+        return
+      }
+    }
     const quick = detectQuickCommands(raw)
     // P0-1：修改类指令且画布有设计 → 增量编辑（跳过追问，携带当前树）
     if (incremental) {

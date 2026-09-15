@@ -3,7 +3,7 @@ import json
 
 from app.services.generate import generate_design
 from app.services.llm import LLMClient
-from app.services.ops import apply_ops
+from app.services.ops import MAX_INSERT_NODES, apply_ops
 
 CURRENT = {
     "id": "root",
@@ -26,6 +26,34 @@ def _responder(ops):
 
 
 class TestApplyOps:
+    def test_oversized_insert_rejected(self):
+        """T28：一条 insert 塞整页（节点数超限）→ 整批拒绝，提示拆成多条 op。"""
+        big = {
+            "op": "insert",
+            "parent": "root",
+            "index": 0,
+            "node": {
+                "id": "huge",
+                "type": "frame",
+                "children": [{"id": f"c{i}", "type": "text", "props": {"text": "x"}} for i in range(MAX_INSERT_NODES)],
+            },
+        }
+        tree, _, _, reason = apply_ops(CURRENT, [big])
+        assert tree == CURRENT
+        assert "子树过大" in reason and "拆成多条" in reason
+
+    def test_deep_insert_rejected(self):
+        """T28：深度超限同样拒绝。"""
+        deep: dict = {"id": "d0", "type": "frame"}
+        cur = deep
+        for i in range(1, 6):
+            child = {"id": f"d{i}", "type": "frame"}
+            cur["children"] = [child]
+            cur = child
+        tree, _, _, reason = apply_ops(CURRENT, [{"op": "insert", "parent": "root", "index": 0, "node": deep}])
+        assert tree == CURRENT
+        assert "深度" in reason
+
     def test_each_op_type(self):
         tree, affected, removed, reason = apply_ops(
             CURRENT,
@@ -60,6 +88,13 @@ class TestApplyOps:
 
 
 class TestOpsEndToEnd:
+    def test_invalid_json_error_message_is_actionable(self):
+        """T28：两次都解析失败时，错误文案要指出'不是合法 JSON'而不是误导性的'限流或超时'。"""
+        result = generate_design("改点东西", LLMClient(mock_responder=lambda s, u: "不是 JSON 的一段解释文字"), current_design=CURRENT)
+        assert result.fallback is True
+        assert "不是合法 JSON" in result.error
+        assert "限流或超时" not in result.error
+
     def test_ops_path_changes_only_target(self):
         result = generate_design(
             "把购买按钮改成红色",
