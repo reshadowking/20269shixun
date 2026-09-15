@@ -58,15 +58,28 @@ def _is_duplicate_column(exc: Exception) -> bool:
     return "duplicate column" in message or "already exists" in message
 
 
+def _add_column(conn, table: str, column: str, ddl: str) -> None:
+    """补列（幂等）：ALTER 必须包在 SAVEPOINT 里，光认报错文案不够。
+
+    P0（2026-09-15 实测）：Postgres 上失败的 DDL 会把**整个事务**打成 aborted；
+    异常被守卫吞掉也没用——同一事务里紧随其后的 `CREATE INDEX` 会抛
+    `InFailedSqlTransaction` → 启动照样崩（全新库第一次就崩，老库第二次崩）。
+    SAVEPOINT 让失败只回滚这一条语句，外层事务继续可用；SQLite 同样支持，
+    所以这层保护在两个库上都能跑（`ADD COLUMN IF NOT EXISTS` 是 Postgres 专有，会挂 SQLite 单测）。
+    """
+    try:
+        with conn.begin_nested():
+            conn.execute(text(ddl))
+    except Exception as exc:
+        if not _is_duplicate_column(exc):
+            logger.error("%s.%s 迁移失败：%s", table, column, exc)
+            raise
+
+
 def _ensure_collab_room_column() -> None:
     """T46a-3：给既有库的 designs 补 collab_room（幂等）。"""
     with engine.begin() as conn:
-        try:
-            conn.execute(text("ALTER TABLE designs ADD COLUMN collab_room VARCHAR(64)"))
-        except Exception as exc:
-            if not _is_duplicate_column(exc):
-                logger.error("designs.collab_room 迁移失败：%s", exc)
-                raise
+        _add_column(conn, "designs", "collab_room", "ALTER TABLE designs ADD COLUMN collab_room VARCHAR(64)")
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_designs_collab_room ON designs (collab_room)"))
 
 
@@ -74,12 +87,7 @@ def _ensure_workspace_columns() -> None:
     """T46a：给既有库的 designs/images 补 workspace_id（幂等）。"""
     with engine.begin() as conn:
         for table in ("designs", "images"):
-            try:
-                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN workspace_id INTEGER"))
-            except Exception as exc:
-                if not _is_duplicate_column(exc):
-                    logger.error("%s.workspace_id 迁移失败：%s", table, exc)
-                    raise
+            _add_column(conn, table, "workspace_id", f"ALTER TABLE {table} ADD COLUMN workspace_id INTEGER")
             conn.execute(text(f"CREATE INDEX IF NOT EXISTS ix_{table}_workspace_id ON {table} (workspace_id)"))
 
 
@@ -104,12 +112,7 @@ def _ensure_image_owner_column() -> None:
     幂等：列已存在的报错被吞掉；其它错误显式暴露（不静默失守）。
     """
     with engine.begin() as conn:
-        try:
-            conn.execute(text("ALTER TABLE images ADD COLUMN owner_id INTEGER DEFAULT 0"))
-        except Exception as exc:
-            if not _is_duplicate_column(exc):
-                logger.error("images.owner_id 迁移失败：%s", exc)
-                raise
+        _add_column(conn, "images", "owner_id", "ALTER TABLE images ADD COLUMN owner_id INTEGER DEFAULT 0")
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_images_owner_id ON images (owner_id)"))
 
 
