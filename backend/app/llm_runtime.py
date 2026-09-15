@@ -6,6 +6,7 @@
 import json
 import logging
 import os
+import time
 from functools import lru_cache
 from pathlib import Path
 
@@ -31,6 +32,10 @@ RUNTIME_KEYS = (
     "llm_max_tokens",
 )
 
+# T34：档案（profile）里每个档案可覆盖的字段（不含 llm_mode / llm_max_tokens，它们是全局设置）
+PROFILE_KEYS = ("llm_base_url", "llm_api_key", "llm_model", "llm_backup_model", "llm_timeout_seconds")
+DEFAULT_PROFILE_ID = "default"
+
 # 供应商预设（前端下拉快捷填充）
 PROVIDERS = {
     "deepseek": {"name": "DeepSeek", "base_url": "https://api.deepseek.com/v1", "model": "deepseek-chat"},
@@ -40,42 +45,143 @@ PROVIDERS = {
 
 
 @lru_cache(maxsize=1)
-def _load_from_disk() -> dict:
+def _read_raw() -> dict:
+    """读原始文件（兼容旧扁平结构与新 profiles 结构）。"""
     try:
         if CONFIG_FILE.exists():
             data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
             if isinstance(data, dict):
-                return {k: v for k, v in data.items() if k in RUNTIME_KEYS and v not in (None, "")}
+                return data
     except (OSError, json.JSONDecodeError) as exc:
         logger.warning("读取 llm-config.json 失败: %s", exc)
     return {}
 
 
+def _normalize(raw: dict) -> dict:
+    """归一为 {active, profiles[], llm_mode, llm_max_tokens}。
+
+    T34 向后兼容：旧文件是**扁平**的（llm_base_url/llm_model/... 直接在顶层），
+    这里自动包装成单个档案（id=default，名称「默认配置」）并设为 active——老用户零迁移。
+    """
+    global_keys = {k: v for k, v in raw.items() if k in ("llm_mode", "llm_max_tokens") and v not in (None, "")}
+    profiles = raw.get("profiles")
+    if isinstance(profiles, list) and profiles:
+        cleaned = []
+        for item in profiles:
+            if not isinstance(item, dict):
+                continue
+            pid = str(item.get("id") or "").strip()
+            if not pid:
+                continue
+            profile = {"id": pid, "name": str(item.get("name") or pid)}
+            for key in PROFILE_KEYS:
+                value = item.get(key)
+                if value not in (None, ""):
+                    profile[key] = value
+            cleaned.append(profile)
+        if cleaned:
+            active = str(raw.get("active") or cleaned[0]["id"])
+            if active not in {p["id"] for p in cleaned}:
+                active = cleaned[0]["id"]
+            return {**global_keys, "active": active, "profiles": cleaned}
+
+    legacy = {k: v for k, v in raw.items() if k in PROFILE_KEYS and v not in (None, "")}
+    return {
+        **global_keys,
+        "active": DEFAULT_PROFILE_ID,
+        "profiles": [{"id": DEFAULT_PROFILE_ID, "name": "默认配置", **legacy}],
+    }
+
+
 def get_runtime_config() -> dict:
-    """返回当前生效的运行时配置（脱敏由调用方处理）。"""
-    return dict(_load_from_disk())
+    """返回当前生效的运行时配置（扁平结构，脱敏由调用方处理）。
+
+    T34：内部改为"档案"存储，但对上层仍是**扁平键**——`LLMClient.cfg("llm_model")` 等调用方
+    一字未改；`llm_mode` / `llm_max_tokens` 为全局设置，不随档案切换。
+    """
+    data = _normalize(_read_raw())
+    active = data["active"]
+    profile = next((p for p in data["profiles"] if p["id"] == active), data["profiles"][0])
+    flat = {k: v for k, v in data.items() if k in ("llm_mode", "llm_max_tokens")}
+    flat.update({k: v for k, v in profile.items() if k in PROFILE_KEYS})
+    return flat
+
+
+# 兼容别名（T34）：测试与既有调用方会访问 `_load_from_disk.cache_clear()`，
+# 重命名为 `_read_raw` 后必须保留同名引用，否则夹具直接 AttributeError（曾导致全量 ERROR）。
+_load_from_disk = _read_raw
+
+
+def list_profiles() -> dict:
+    """T34：全部档案 + 当前生效 id（Key 由调用方脱敏）。"""
+    data = _normalize(_read_raw())
+    return {"active": data["active"], "profiles": data["profiles"]}
+
+
+def _write(data: dict) -> None:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    CONFIG_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    _read_raw.cache_clear()
+
+
+def save_profile(values: dict, profile_id: str | None = None, name: str | None = None) -> dict:
+    """T34：保存/新建一个档案，并把它设为当前生效。返回归一后的全量数据。"""
+    data = _normalize(_read_raw())
+    pid = (profile_id or "").strip() or f"p-{int(time.time() * 1000) % 10**8}"
+    current = next((p for p in data["profiles"] if p["id"] == pid), None)
+    if current is None:
+        current = {"id": pid, "name": (name or "自定义配置").strip() or "自定义配置"}
+        data["profiles"].append(current)
+    if name and name.strip():
+        current["name"] = name.strip()
+    for key in PROFILE_KEYS:
+        if key not in values:
+            continue
+        value = values[key]
+        if value is None or (isinstance(value, str) and not value.strip()):
+            continue
+        if key == "llm_api_key" and is_masked_key(str(value)):
+            continue  # 脱敏回写会覆盖真实 Key（P0-2 防呆）
+        current[key] = float(value) if key == "llm_timeout_seconds" else value
+    for key in ("llm_mode", "llm_max_tokens"):
+        value = values.get(key)
+        if value in (None, ""):
+            continue
+        data[key] = int(value) if key == "llm_max_tokens" else value
+    data["active"] = pid
+    _write(data)
+    logger.info("LLM 档案已保存：%s（active=%s）", current.get("name"), pid)
+    return data
+
+
+def activate_profile(profile_id: str) -> dict | None:
+    """切换当前生效档案；档案不存在返回 None。"""
+    data = _normalize(_read_raw())
+    if profile_id not in {p["id"] for p in data["profiles"]}:
+        return None
+    data["active"] = profile_id
+    _write(data)
+    return data
+
+
+def delete_profile(profile_id: str) -> bool:
+    """删除档案（至少保留一个；删除当前生效档案时自动切到第一个）。"""
+    data = _normalize(_read_raw())
+    remaining = [p for p in data["profiles"] if p["id"] != profile_id]
+    if not remaining or len(remaining) == len(data["profiles"]):
+        return False
+    data["profiles"] = remaining
+    if data["active"] == profile_id:
+        data["active"] = remaining[0]["id"]
+    _write(data)
+    return True
 
 
 def save_runtime_config(values: dict) -> dict:
     """保存运行时配置（只保留白名单字段，空值不覆盖已存值）。返回保存后的完整配置。"""
-    data = get_runtime_config()
-    for key, value in values.items():
-        if key not in RUNTIME_KEYS:
-            continue
-        if value is None or (isinstance(value, str) and not value.strip()):
-            continue
-        if key == "llm_api_key" and is_masked_key(str(value)):
-            continue  # 脱敏值回写会覆盖真实 Key（P0-2 防呆），保留旧值
-        if key == "llm_timeout_seconds":
-            value = float(value)
-        elif key == "llm_max_tokens":
-            value = int(value)
-        data[key] = value
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    CONFIG_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    _load_from_disk.cache_clear()
-    logger.info("LLM 运行时配置已更新（%s）", ", ".join(data.keys()))
-    return dict(data)
+    # T34：老入口（POST /api/llm-config）语义不变——写入**当前生效档案**（不新建档案）
+    active = _normalize(_read_raw())["active"]
+    return save_profile(values, profile_id=active, name=values.get("name"))
 
 
 def mask_api_key(key: str) -> str:

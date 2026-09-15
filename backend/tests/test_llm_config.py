@@ -34,8 +34,10 @@ class TestLLMConfigApi:
 
         assert CONFIG_FILE.exists()
         data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
-        assert data.get("llm_model") == "disk-model"
-        assert data.get("llm_api_key") == "sk-disk-key-1"
+        # T34：文件改为"档案"结构——断言当前生效档案里的字段（旧扁平结构会被自动迁移到 default 档案）
+        active = next(p for p in data["profiles"] if p["id"] == data["active"])
+        assert active.get("llm_model") == "disk-model"
+        assert active.get("llm_api_key") == "sk-disk-key-1"
 
     def test_empty_values_do_not_overwrite(self, client, auth_headers):
         client.post("/api/llm-config", json={"llm_base_url": "https://api.example.com/v1"}, headers=auth_headers)
@@ -73,8 +75,9 @@ class TestLLMConfigApi:
         from app.llm_runtime import CONFIG_FILE
 
         data = _json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
-        assert data.get("llm_api_key") == "sk-real-key-111"  # 未被脱敏值覆盖
-        assert data.get("llm_model") == "m2"  # 非 key 字段照常保存
+        active = next(p for p in data["profiles"] if p["id"] == data["active"])
+        assert active.get("llm_api_key") == "sk-real-key-111"  # 未被脱敏值覆盖
+        assert active.get("llm_model") == "m2"  # 非 key 字段照常保存
 
     def test_test_connection_not_persist_and_masked_ignored(self, client, auth_headers, monkeypatch):
         """测试连接不落盘；请求中脱敏 key 忽略，仅真实新 key 参与本次测试。"""
@@ -107,14 +110,16 @@ class TestLLMConfigApi:
         assert seen["api_key"] == "sk-real-key-777"
         # 磁盘未被请求值污染
         data = _json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
-        assert data.get("llm_api_key") == "sk-real-key-777"
+        active = next(p for p in data["profiles"] if p["id"] == data["active"])
+        assert active.get("llm_api_key") == "sk-real-key-777"
 
         # 请求带真实新 key：参与本次测试，但仍不落盘
         resp2 = client.post("/api/llm-config/test", json={"llm_api_key": "sk-temp-key-888"}, headers=auth_headers)
         assert resp2.status_code == 200
         assert seen["api_key"] == "sk-temp-key-888"
         data2 = _json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
-        assert data2.get("llm_api_key") == "sk-real-key-777"
+        active2 = next(p for p in data2["profiles"] if p["id"] == data2["active"])
+        assert active2.get("llm_api_key") == "sk-real-key-777"
 
 
 class TestRuntimeTakesPrecedence:
