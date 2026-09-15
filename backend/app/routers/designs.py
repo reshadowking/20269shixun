@@ -118,6 +118,7 @@ def _design_meta(design: Design) -> dict:
 def list_designs(
     limit: int | None = Query(default=None, ge=1, le=200, description="返回条数上限；缺省返回全部"),
     offset: int = Query(default=0, ge=0, description="跳过的条数"),
+    with_preview: bool = Query(default=False, description="T36：为列表项附带设计树，用于缩略图预览"),
     _user: str = Depends(get_current_user),
     db=Depends(get_db),
 ):
@@ -125,6 +126,8 @@ def list_designs(
 
     缺陷 2：新增可选 limit/offset 分页参数（缺省不传 = 返回全部，既有调用方行为不变）；
     响应新增 total（当前用户设计总数），既有字段不变。排序按 updated_at 倒序，id 倒序作稳定分页的次级键。
+    T36：`with_preview=true` 时额外返回 `design`（解析 design_json）——首页/我的项目用它渲染缩略图；
+    缺省 false，既有调用方的响应形状逐字不变。
     """
     owner = _owner_id(db, _user)
     total = db.execute(
@@ -139,7 +142,16 @@ def list_designs(
     if limit is not None:
         stmt = stmt.limit(limit)
     designs = db.execute(stmt).scalars().all()
-    return {"designs": [_design_meta(d) for d in designs], "total": total}
+    rows = []
+    for d in designs:
+        meta = _design_meta(d)
+        if with_preview:
+            try:
+                meta["design"] = json.loads(d.design_json or "{}")
+            except json.JSONDecodeError:
+                meta["design"] = {}
+        rows.append(meta)
+    return {"designs": rows, "total": total}
 
 
 @router.post("/api/designs")
