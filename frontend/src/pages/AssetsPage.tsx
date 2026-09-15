@@ -186,9 +186,9 @@ export default function AssetsPage() {
                 <button
                   className="ml-auto text-[11px] text-primary hover:underline"
                   data-testid={`asset-use-${row.id}`}
-                  onClick={() => navigate('/workspace')}
+                  onClick={() => navigate(`/workspace?asset=${row.id}`)}
                 >
-                  去画布插入 →
+                  插入到画布 →
                 </button>
               </div>
             </div>

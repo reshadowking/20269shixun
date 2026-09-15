@@ -153,6 +153,29 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // T43：从资产库一键插入——`/workspace?asset=<id>` 时，把图片写进"当前选中的图片组件"。
+  // 没选中 / 选中的不是图片组件时，给出明确提示（不静默丢弃，也不猜用户想插到哪）。
+  useEffect(() => {
+    const assetId = searchParams.get('asset')
+    if (!assetId || !loaded) return
+    const selected = [...selectedIds]
+    const targetId = selected.find((id) => {
+      const node = findNode(design, id)
+      return node?.type === 'component' && node.componentType === 'image'
+    })
+    if (!targetId) {
+      setLockHint('已从资产库带回图片：请先选中一个「图片」组件，再点资产库的「插入到画布」。')
+      window.setTimeout(() => setLockHint(''), 6000)
+      return
+    }
+    const src = `/api/images/${assetId}`
+    store.pushSnapshot()
+    store.updateNode(targetId, (node) => ({ ...node, props: { ...node.props, src } }))
+    setLockHint('已把资产库图片插入选中的图片组件（可撤销）')
+    window.setTimeout(() => setLockHint(''), 6000)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loaded, searchParams])
+
   // P1 草稿自动保存（缺陷 5/8 + 缺陷 4：按会话分片，300ms 防抖）
   useEffect(() => {
     if (!loaded) return
