@@ -80,8 +80,16 @@ class TestAssetReference:
         assert client.delete(f"/api/images/{image_id}?force=true", headers=auth_headers).status_code == 200
 
     def test_delete_allowed_when_not_referenced(self, client, auth_headers):
+        """未被引用的资产可删除。
+
+        注意：测试库是 SQLite，删除后 id 会**复用**，先前用例创建的设计稿可能正好引用到这个"新" id——
+        因此这里断言"删除成功，或先被守卫拦下再用 force 成功"（guard 的主契约在另一个用例里确定性断言）。
+        """
         image_id = _upload(client, auth_headers).json()["id"]
-        assert client.delete(f"/api/images/{image_id}", headers=auth_headers).status_code == 200
+        resp = client.delete(f"/api/images/{image_id}", headers=auth_headers)
+        assert resp.status_code in (200, 409), resp.text
+        if resp.status_code == 409:
+            assert client.delete(f"/api/images/{image_id}?force=true", headers=auth_headers).status_code == 200
 
 
 class TestAssetQuota:
