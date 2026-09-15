@@ -70,7 +70,7 @@
         "width": 240,
         "height": 160,
         "radius": 12,
-        "background": "card",
+        "background": "#FFFFFF",
         "padding": 16
       }
     },
@@ -171,7 +171,7 @@
       "default_style": {
         "width": 640,
         "radius": 8,
-        "background": "card"
+        "background": "#FFFFFF"
       }
     },
     {
@@ -215,7 +215,7 @@
         "width": 480,
         "height": 240,
         "radius": 12,
-        "background": "card",
+        "background": "#FFFFFF",
         "padding": 16
       }
     },
@@ -244,7 +244,7 @@
         "width": 180,
         "height": 96,
         "radius": 12,
-        "background": "card",
+        "background": "#FFFFFF",
         "padding": 16
       }
     },

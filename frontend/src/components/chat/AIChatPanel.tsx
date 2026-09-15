@@ -444,11 +444,13 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
       const degradedNote = resp.degraded?.length
         ? `\n⚠️ 有 ${resp.degraded.length} 项能力暂不支持，已用近似组件表达。`
         : ''
+      // T19：合规文案降调——把检查器"自动对齐了几处颜色"说清楚，而不是甩一个"规范兼容率 23.6%"
+      const alignmentNote = resp.violations > 0 ? `✓ 已按设计规范自动对齐 ${resp.violations} 处颜色` : '✓'
       setMessages((m) => [
         ...m,
         {
           role: 'assistant',
-          text: `已生成设计稿（模板：${resp.template === 'free' ? '自由生成' : resp.template}）✓ 规范兼容率 ${resp.compliance}%${sourceNote}${freeNote}${degradedNote}\n可在右侧属性面板继续编辑，或输入新需求重新生成。`,
+          text: `已生成设计稿（模板：${resp.template === 'free' ? '自由生成' : resp.template}）${alignmentNote}${sourceNote}${freeNote}${degradedNote}\n可在右侧属性面板继续编辑，或输入新需求重新生成。`,
         },
       ])
     } catch (err) {
@@ -475,7 +477,7 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
       ...m,
       {
         role: 'assistant',
-        text: `已使用预置模板（规范兼容率 ${fallbackResult.compliance}%，未调用模型）。可在右侧属性面板继续编辑，或「↻ 重试上次需求」再生成一次。`,
+        text: `已使用预置模板（未调用模型）。可在右侧属性面板继续编辑，或「↻ 重试上次需求」再生成一次。`,
       },
     ])
     setFallbackResult(null)
