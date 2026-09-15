@@ -19,6 +19,7 @@ from .routers import (
     llm_config,
     sessions,
     tokens,
+    workspaces,
 )
 
 
@@ -51,6 +52,7 @@ app.include_router(export.router)
 app.include_router(designs.router)
 app.include_router(sessions.router)
 app.include_router(images.router)
+app.include_router(workspaces.router)
 
 
 @app.get("/")

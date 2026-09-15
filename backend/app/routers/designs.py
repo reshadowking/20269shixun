@@ -48,7 +48,22 @@ def _owner_id(db, username: str) -> int:
 
 def _own_design(db, design_id: int, username: str) -> Design:
     design = db.get(Design, design_id)
-    if design is None or design.owner_id != _owner_id(db, username):
+    if design is None:
+        raise HTTPException(status_code=404, detail="设计稿不存在或无权访问")
+    # T46a：可见性从"我是拥有者"改为"我是该稿所属工作区的成员"（无归属的老数据按创建人兜底）
+    from ..services.workspaces import role_of
+
+    me = _owner_id(db, username)
+    if design.workspace_id is None:
+        # 兼容期：稿件还没归属工作区时按"创建人"兜底——但创建人的**个人工作区成员**同样可见，
+        # 否则刚注册的第二个账号即便被邀请也读不到新稿（等启动迁移补上 workspace_id 后走上面那条分支）
+        from ..services.workspaces import personal_workspace_of
+
+        ws = personal_workspace_of(db, design.owner_id)
+        if design.owner_id != me and (ws is None or role_of(db, ws.id, me) is None):
+            raise HTTPException(status_code=404, detail="设计稿不存在或无权访问")
+        return design
+    if role_of(db, design.workspace_id, me) is None:
         raise HTTPException(status_code=404, detail="设计稿不存在或无权访问")
     return design
 
