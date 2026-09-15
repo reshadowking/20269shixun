@@ -27,14 +27,19 @@ export function frameSync(sub, payload) {
 }
 
 /**
- * 造一条**真** update：往 doc 里插一段带标记的文本。
+ * 造一条**真** update 的原始字节：往 doc 里插一段带标记的文本。
  * 只有合法 update 才会被上游 y-websocket 广播；假 payload（例如 `[0,2,9,9,9]`）
  * 会让上游解码抛错、消息根本不扩散，于是"网关漏写"也测不出来。
  */
-export function realUpdate(marker) {
+export function realUpdateBytes(marker) {
   const doc = new Y.Doc()
   doc.getText('t').insert(0, marker)
-  return frameSync(2, Y.encodeStateAsUpdate(doc))
+  return Y.encodeStateAsUpdate(doc)
+}
+
+/** 把真 update 封成 sync update 帧（`[0,2,…]`）——网关必须把它当写消息丢掉。*/
+export function realUpdate(marker) {
+  return frameSync(2, realUpdateBytes(marker))
 }
 
 /** 从收到的帧里解出 sync update 的 payload；不是 update 帧就返回 null。*/

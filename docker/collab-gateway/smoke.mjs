@@ -1,7 +1,7 @@
 /**
  * T46a-3b：协作 WS 鉴权网关冒烟脚本。
  *
- * 覆盖 7 项断言：
+ * 覆盖 9 项断言：
  *   (1) 合法成员能连上并**保持**连接（不是"握手成功后再被 4403"）；
  *   (2) 无 token → 4403；
  *   (3) 非法 token → 4403；
@@ -9,6 +9,8 @@
  *   (5) 阳性对照 A：owner 的真 Yjs update **必须**到达 viewer（证明链路通、viewer 真在房内）；
  *   (6) 阳性对照 B：viewer 的 sync step1 **必须**拿到上游 step2 应答（证明 viewer 出站消息没被整体吞掉）；
  *   (7) viewer 的真 Yjs update **不得**到达 owner（真·只读）。
+ *   (8) 服务端签发的随机房间（`GET /api/designs/{id}/collab`）同样可授权，非成员仍被拒；
+ *   (9) viewer 的 sync step2 也**不得**到达 owner（写路径不止 update 一条）。
  *
  * 为什么这么写（前两版"全绿假象"的教训）：
  *   - 只看 `open` 事件判"成员可连接"没用：网关是先完成握手、再 close(4403)，
@@ -39,7 +41,7 @@
  */
 import * as Y from 'yjs'
 import { WebSocket } from 'ws'
-import { frameSync, gotUpdateWith, realUpdate } from './yjs-frames.mjs'
+import { frameSync, gotUpdateWith, realUpdate, realUpdateBytes } from './yjs-frames.mjs'
 
 const args = Object.fromEntries(
   process.argv.slice(2).flatMap((a, i, arr) => (a.startsWith('--') ? [[a.slice(2), arr[i + 1]]] : [])),
@@ -202,6 +204,24 @@ async function setUpViewer(token) {
 }
 
 const VIEWER_GAP = '未能准备 viewer 账号，只读结论不可信'
+// viewer 相关断言必须成组出现：早退分支里也要把它们全部判红，否则"没连上"会静默少报几项
+const [
+  CHECK_POSITIVE_A,
+  CHECK_POSITIVE_B,
+  CHECK_READONLY_UPDATE,
+  CHECK_READONLY_STEP2,
+] = [
+  '阳性对照 A：owner 的 update 到达 viewer',
+  '阳性对照 B：viewer 的 sync step1 得到上游 step2 应答',
+  'viewer 只读：viewer 的 update 被丢弃',
+  'viewer 只读：sync step2（同样携带 update 的写路径）也被丢弃',
+]
+
+function failViewerChecks(detail) {
+  for (const name of [CHECK_POSITIVE_A, CHECK_POSITIVE_B, CHECK_READONLY_UPDATE, CHECK_READONLY_STEP2]) {
+    check(name, false, detail)
+  }
+}
 
 // ---------- (1) 合法成员可连接且保持连接 ----------
 
@@ -225,17 +245,12 @@ check('非成员被拒（4403）', outsider.denied, `close=${outsider.code}`)
 const viewerSetup = await setUpViewer(ownerToken)
 if (viewerSetup.error) {
   console.log(`\n${VIEWER_GAP}：${viewerSetup.error}`)
-  check('阳性对照 A：owner 的 update 到达 viewer', false, VIEWER_GAP)
-  check('阳性对照 B：viewer 的 sync step1 得到上游 step2 应答', false, VIEWER_GAP)
-  check('viewer 只读：viewer 的 update 被丢弃', false, VIEWER_GAP)
+  failViewerChecks(VIEWER_GAP)
 } else {
   const viewerState = await open(room, viewerSetup.token).done
   await sleep(ALIVE_WAIT)
   if (!(viewerState.opened && viewerState.closeCode === null)) {
-    const detail = `viewer 未能连上：opened=${viewerState.opened} close=${viewerState.closeCode}`
-    check('阳性对照 A：owner 的 update 到达 viewer', false, detail)
-    check('阳性对照 B：viewer 的 sync step1 得到上游 step2 应答', false, detail)
-    check('viewer 只读：viewer 的 update 被丢弃', false, detail)
+    failViewerChecks(`viewer 未能连上：opened=${viewerState.opened} close=${viewerState.closeCode}`)
   } else {
     const ownerMarker = `frm-owner-${suffix}`
     const viewerMarker = `frm-viewer-${suffix}`
@@ -245,7 +260,7 @@ if (viewerSetup.error) {
     await sleep(600)
     const viewerSawOwner = gotUpdateWith(viewerState.messages, ownerMarker)
     check(
-      '阳性对照 A：owner 的 update 到达 viewer',
+      CHECK_POSITIVE_A,
       viewerSawOwner,
       viewerSawOwner ? '' : 'owner→viewer 链路不通，下面的只读结论不可信',
     )
@@ -256,14 +271,22 @@ if (viewerSetup.error) {
     viewerState.ws.send(frameSync(0, Y.encodeStateVector(new Y.Doc())))
     await sleep(600)
     const viewerGotStep2 = viewerState.messages.some((m) => m.length >= 2 && m[0] === 0 && m[1] === 1)
-    check('阳性对照 B：viewer 的 sync step1 得到上游 step2 应答', viewerGotStep2, viewerGotStep2 ? '' : 'viewer 出站消息疑似被整体吞掉')
+    check(CHECK_POSITIVE_B, viewerGotStep2, viewerGotStep2 ? '' : 'viewer 出站消息疑似被整体吞掉')
 
     // (7) 关键断言：viewer 发真 update → owner 不得收到。
     ownerState.messages.length = 0
     viewerState.ws.send(realUpdate(viewerMarker))
     await sleep(600)
     const ownerSawViewer = gotUpdateWith(ownerState.messages, viewerMarker)
-    check('viewer 只读：viewer 的 update 被丢弃', !ownerSawViewer, ownerSawViewer ? 'owner 收到了 viewer 的写消息（网关漏写）' : '')
+    check(CHECK_READONLY_UPDATE, !ownerSawViewer, ownerSawViewer ? 'owner 收到了 viewer 的写消息（网关漏写）' : '')
+
+    // (7b) 写路径不止 sync update：sync step2 同样携带 update（上游会 apply 后广播给其他人）。
+    //      只固定 update 一条路径的话，以后改 isWriteMessage 会静默退化。
+    ownerState.messages.length = 0
+    viewerState.ws.send(frameSync(1, realUpdateBytes(`${viewerMarker}-step2`)))
+    await sleep(600)
+    const ownerSawStep2 = gotUpdateWith(ownerState.messages, `${viewerMarker}-step2`)
+    check(CHECK_READONLY_STEP2, !ownerSawStep2, ownerSawStep2 ? 'owner 收到了 viewer 的 step2 写消息' : '')
 
     viewerState.ws.close()
   }

@@ -15,7 +15,7 @@ import * as encoding from 'lib0/encoding'
 import * as Y from 'yjs'
 import * as syncProtocol from 'y-protocols/sync'
 
-import { frameSync, gotUpdateWith, realUpdate, updatePayload } from './yjs-frames.mjs'
+import { frameSync, gotUpdateWith, realUpdate, realUpdateBytes, updatePayload } from './yjs-frames.mjs'
 
 const MESSAGE_SYNC = 0
 
@@ -71,15 +71,25 @@ ok('step1 帧与官方 writeSyncStep1 一致', () => {
   )
 })
 
+ok('step2 帧与官方 writeSyncStep2 一致', () => {
+  const doc = new Y.Doc()
+  doc.getText('t').insert(0, 'hello-marker')
+  assert.deepEqual(
+    bytes(frameSync(1, Y.encodeStateAsUpdate(doc))),
+    bytes(official((enc) => syncProtocol.writeSyncStep2(enc, doc))),
+  )
+})
+
 ok('realUpdate 造的帧能被上游 readSyncMessage 真正应用', () => {
   const upstream = new Y.Doc()
   readAsUpstream(realUpdate('hello-marker'), upstream)
   assert.equal(upstream.getText('t').toString(), 'hello-marker')
 })
 
-ok('网关的写判定（同 server.js）把 update 判为写、把 step1 判为非写', () => {
+ok('网关的写判定（同 server.js）把 update/step2 判为写、把 step1 判为非写', () => {
   const isWriteMessage = (buf) => (buf.length >= 2 && buf[0] === 0 ? buf[1] !== 0 : false)
   assert.equal(isWriteMessage(realUpdate('x')), true)
+  assert.equal(isWriteMessage(frameSync(1, realUpdateBytes('x'))), true)
   assert.equal(isWriteMessage(frameSync(0, Y.encodeStateVector(new Y.Doc()))), false)
 })
 
@@ -107,4 +117,4 @@ ok('gotUpdateWith 命中自己的标记、不误认别人的 update', () => {
   assert.equal(gotUpdateWith(msgs, 'marker-b'), false)
 })
 
-console.log(`\n${passed}/8 项自检通过`)
+console.log(`\n${passed}/9 项自检通过`)
