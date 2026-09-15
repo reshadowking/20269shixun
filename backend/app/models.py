@@ -142,6 +142,7 @@ class AiCall(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     session_key: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    user: Mapped[str] = mapped_column(String(64), default="", index=True)  # T22：按用户统计日配额
     kind: Mapped[str] = mapped_column(String(16), default="")
     model: Mapped[str] = mapped_column(String(64), default="")
     prompt_version: Mapped[str] = mapped_column(String(16), default="")

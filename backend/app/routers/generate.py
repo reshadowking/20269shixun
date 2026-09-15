@@ -9,12 +9,14 @@ from ..config import get_settings
 from ..db import get_db
 from ..security import get_current_user
 from ..services.ai_gateway import GatewayBusy, GenerationDeadline, run_generation
-from ..services.ai_ledger import record_calls
+from ..services.ai_ledger import quota_exceeded, record_calls
 from ..services.compliance import compliance_rate, enforce_compliance
 from ..services.design_guard import GUARD_REPLY, is_design_request
 from ..services.generate import generate_design
 from ..services.history import recent_turns
 from ..services.questions import FOLLOWUP_MODES, analyze_questions
+from ..services.rate_limit import RateLimited
+from ..services.rate_limit import check as rate_check
 from ..services.templates import TEMPLATE_KEYS
 
 router = APIRouter(tags=["generate"])
@@ -59,6 +61,13 @@ async def generate(req: GenerateRequest, _user: str = Depends(get_current_user),
     # 本来就该放行，§4.9 实测「加高级功能」被误拦）；首轮生成保持原有强度。
     if req.design is None and not is_design_request(req.prompt):
         raise HTTPException(status_code=422, detail=GUARD_REPLY)
+    try:
+        rate_check(_user)
+    except RateLimited as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    quota_reason = quota_exceeded(_user)
+    if quota_reason:
+        raise HTTPException(status_code=429, detail=quota_reason)
     history = recent_turns(db, req.session_key, _user)
     deadline = GenerationDeadline(get_settings().llm_deadline_seconds)
     try:
@@ -75,7 +84,7 @@ async def generate(req: GenerateRequest, _user: str = Depends(get_current_user),
         raise HTTPException(status_code=503, detail="当前生成任务较多，请稍后重试") from exc
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"AI 生成失败：{exc}") from exc
-    record_calls(result.ai_calls, req.session_key)  # T21：记账（内部吞异常，不影响返回）
+    record_calls(result.ai_calls, req.session_key, _user)  # T21：记账（内部吞异常，不影响返回）
     return GenerateResponse(
         design=result.design,
         template=result.template,
@@ -207,6 +216,13 @@ async def explore_options(req: ExploreRequest, _user: str = Depends(get_current_
 
     if not is_design_request(req.prompt):
         raise HTTPException(status_code=422, detail=GUARD_REPLY)
+    try:
+        rate_check(_user, cost=2)  # explore 实际发起两条链路
+    except RateLimited as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    quota_reason = quota_exceeded(_user)
+    if quota_reason:
+        raise HTTPException(status_code=429, detail=quota_reason)
     variants = [
         ("方案一 · 默认风格", req.prompt),
         (
@@ -229,7 +245,7 @@ async def explore_options(req: ExploreRequest, _user: str = Depends(get_current_
     options = []
     degraded = False
     for result in results:
-        record_calls(result.ai_calls, req.session_key)  # T21：两方案各自记账
+        record_calls(result.ai_calls, req.session_key, _user)  # T21：两方案各自记账
     for (label, _), result in zip(variants, results):
         if result.fallback:
             degraded = True

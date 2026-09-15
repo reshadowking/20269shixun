@@ -16,6 +16,7 @@ from opentelemetry import trace
 
 from ..config import get_settings
 from ..design.validator import SchemaError, validate_design
+from . import ai_breaker
 from .ai_gateway import GenerationDeadline
 from .beautify import preset_value, vocabulary_text
 from .compliance import compliance_rate, enforce_compliance
@@ -721,6 +722,11 @@ def generate_design(
     start_all = time.perf_counter()
     gen_logger.info("生成开始 prompt=%d字符 mode=%s", len(prompt), "edit" if is_edit else "full")
 
+    # T22：熔断打开时不再调用模型（返回 200 + 模板/原树兜底，而不是 5xx——保"画布可用"）
+    circuit_open = not client.is_mock and ai_breaker.is_open()
+    if circuit_open:
+        gen_logger.warning("熔断打开（state=%s）：跳过模型调用，直接兜底", ai_breaker.state())
+
     min_call_budget = float(settings.llm_min_call_budget_seconds)
 
     def budget_short() -> bool:
@@ -731,7 +737,7 @@ def generate_design(
     t0 = time.perf_counter()
     intent: dict[str, Any] | None = None
     if not is_edit:
-        if budget_short():
+        if circuit_open or budget_short():
             gen_logger.warning("剩余时间预算不足，跳过意图解析（按关键词选模板）")
         else:
             with tracer.start_as_current_span("intent_parse"):
@@ -767,7 +773,13 @@ def generate_design(
     summarized = False
     with tracer.start_as_current_span("prompt_summary"):
         # T24：编辑模式禁用摘要——"你原话怎么说的"必须原样进模型（首轮生成仍按阈值压缩）
-        if len(prompt) > SUMMARY_THRESHOLD and not client.is_mock and not is_edit and not budget_short():
+        if (
+            len(prompt) > SUMMARY_THRESHOLD
+            and not client.is_mock
+            and not is_edit
+            and not circuit_open
+            and not budget_short()
+        ):
             fill_prompt, summarized = summarize_prompt(prompt, client)
     times["prompt_summary"] = time.perf_counter() - t0
     gen_logger.info("模板=%s 摘要=%s 摘要后%d字符", template_name, summarized, len(fill_prompt))
@@ -786,7 +798,12 @@ def generate_design(
             if not is_free:
                 user_payload["template_skeleton"] = default
             fill_system = free_system_text() if is_free else fill_system_text()
-        if not client.is_mock and budget_short():
+        if circuit_open:
+            fallback = True
+            error = "AI 服务暂时不可用（已自动降级）"
+            client.note_skipped("fill", "circuit_open")
+            filled = None
+        elif not client.is_mock and budget_short():
             # T20：预算不足以再发起一次调用 → 直接兜底，不再打模型（也不重试/切备用）
             fallback = True
             error = "已超出生成时间预算（未发起本次调用）"
@@ -870,6 +887,10 @@ def generate_design(
     # T21：一次生成的多条记录共享同一兜底状态；span 上挂业务属性（Jaeger 里能直接看出是否降级）
     for call in client.calls:
         call["fallback"] = fallback
+    if not client.is_mock:
+        for call in client.calls:
+            if call["model"]:  # 只把"真正调用过模型"的结果喂给熔断器
+                ai_breaker.record(bool(call["ok"]))
     span = trace.get_current_span()
     span.set_attribute("template", template_name)
     span.set_attribute("fallback", fallback)

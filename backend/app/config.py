@@ -26,6 +26,14 @@ class Settings(BaseSettings):
     llm_queue_timeout_seconds: float = 5.0
     llm_deadline_seconds: float = 45.0
     llm_min_call_budget_seconds: float = 5.0
+    # T22：熔断与限流/配额（进程内实现；0 表示不限制）
+    ai_breaker_fail_ratio: float = 0.6
+    ai_breaker_min_samples: int = 5
+    ai_breaker_open_seconds: float = 30.0
+    ai_rate_limit_per_minute: int = 10
+    ai_global_rate_limit_per_minute: int = 60
+    ai_daily_token_quota: int = 200000
+    ai_daily_token_quota_per_user: int = 50000
 
     # 数据库（测试用 sqlite 覆盖此值）
     pg_url: str = "postgresql+psycopg://postgres:postgres@localhost:5432/design"

@@ -62,6 +62,28 @@ def _isolate_llm_runtime_config(tmp_path_factory):
 
 
 @pytest.fixture(autouse=True)
+def _relax_ai_limits(monkeypatch):
+    """T22：限流/熔断是进程内全局状态——测试里放宽阈值并逐用例清零。
+
+    既有用例（尤其批量打 /api/generate 的）不应撞限流；阈值行为由
+    test_ai_rate_limit.py / test_ai_breaker.py 用 monkeypatch 单独压低验证。
+    """
+    from app.config import get_settings
+    from app.services import ai_breaker, rate_limit
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "ai_rate_limit_per_minute", 100000)
+    monkeypatch.setattr(settings, "ai_global_rate_limit_per_minute", 100000)
+    monkeypatch.setattr(settings, "ai_daily_token_quota", 0)
+    monkeypatch.setattr(settings, "ai_daily_token_quota_per_user", 0)
+    rate_limit._reset_for_tests()
+    ai_breaker._reset_for_tests()
+    yield
+    rate_limit._reset_for_tests()
+    ai_breaker._reset_for_tests()
+
+
+@pytest.fixture(autouse=True)
 def _clean_llm_runtime_config():
     """每个测试后清理**测试用**运行时配置（隔离测试，避免互相污染）。"""
     yield
