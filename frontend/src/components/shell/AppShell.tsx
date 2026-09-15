@@ -8,6 +8,8 @@
 import { useRef, useState, type ReactNode } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 
+import { getTheme, toggleTheme, type AppTheme } from '@/lib/theme'
+
 import './appShell.css'
 
 const COLLAPSE_KEY = 'app-shell-collapsed'
@@ -47,6 +49,8 @@ export default function AppShell({ children }: { children: ReactNode }) {
     }
   })
   const [wallpaper, setWallpaper] = useState<string | null>(() => readWallpaper())
+  // T31：主题切换入口（令牌与持久化在 lib/theme.ts，这里只负责 UI 与回显）
+  const [theme, setTheme] = useState<AppTheme>(() => getTheme())
   const fileRef = useRef<HTMLInputElement>(null)
 
   const toggleCollapsed = () => {
@@ -147,6 +151,15 @@ export default function AppShell({ children }: { children: ReactNode }) {
               恢复默认壁纸
             </button>
           )}
+          <button
+            className="app-shell__foot-btn"
+            data-testid="theme-toggle"
+            aria-pressed={theme === 'dark'}
+            title={theme === 'dark' ? '切换为浅色' : '切换为深色'}
+            onClick={() => setTheme(toggleTheme())}
+          >
+            {theme === 'dark' ? '☀' : '🌙'} {!collapsed && (theme === 'dark' ? '浅色模式' : '深色模式')}
+          </button>
           <button className="app-shell__foot-btn" data-testid="sidebar-collapse" onClick={toggleCollapsed}>
             {collapsed ? '⇥' : '⇤'} {!collapsed && '收起侧边栏'}
           </button>

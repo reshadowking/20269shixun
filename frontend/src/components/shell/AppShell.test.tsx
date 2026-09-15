@@ -52,4 +52,22 @@ describe('AppShell', () => {
     expect(screen.queryByTestId('app-wallpaper')).toBeNull()
     expect(localStorage.getItem('home-wallpaper')).toBeNull()
   })
+
+  it('主题切换：点击即切换 <html class="dark"> 并持久化（T31）', () => {
+    localStorage.setItem('design-tool-theme', 'light')
+    renderShell()
+    const button = screen.getByTestId('theme-toggle')
+    expect(button).toHaveAttribute('aria-pressed', 'false')
+    expect(button).toHaveTextContent('深色模式')
+
+    fireEvent.click(button)
+    expect(document.documentElement.classList.contains('dark')).toBe(true)
+    expect(localStorage.getItem('design-tool-theme')).toBe('dark')
+    expect(screen.getByTestId('theme-toggle')).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByTestId('theme-toggle')).toHaveTextContent('浅色模式')
+
+    fireEvent.click(screen.getByTestId('theme-toggle'))
+    expect(document.documentElement.classList.contains('dark')).toBe(false)
+    expect(localStorage.getItem('design-tool-theme')).toBe('light')
+  })
 })
