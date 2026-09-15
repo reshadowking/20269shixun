@@ -144,16 +144,11 @@ export default function HomePage() {
   return (
     <div className="min-h-screen bg-gradient-to-b from-muted/60 via-background to-background">
       <header className="sticky top-0 z-20 flex h-14 items-center justify-between border-b bg-background/85 px-6 backdrop-blur">
-        <div className="flex items-center gap-3">
-          <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-primary to-secondary text-sm font-bold text-primary-foreground shadow-sm">
-            A
-          </span>
-          <span className="text-base font-semibold tracking-tight">AI 原生设计工作台</span>
-          <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">v0.2</span>
-        </div>
+        {/* T36：品牌区已由全局侧边栏承担（避免双标题）；此栏保留用户/退出操作与 testid 不变 */}
+        <div className="text-sm text-muted-foreground">让 AI 从一句话开始，产出可编辑、可交付的设计稿</div>
         <div className="flex items-center gap-4 text-sm text-muted-foreground">
           <span data-testid="home-user" className="font-medium text-foreground/80">{username}</span>
-          <Link to="/api-config" className="transition hover:text-foreground">API 配置</Link>
+          <Link to="/settings" className="transition hover:text-foreground">设置</Link>
           <button
             className="flex items-center gap-1 transition hover:text-foreground"
             data-testid="home-logout"
@@ -168,11 +163,13 @@ export default function HomePage() {
       </header>
 
       <main className="mx-auto flex max-w-5xl flex-col gap-10 px-6 py-10">
-        {/* 首屏主张：一句话说明产品价值（纯视觉层，不承载交互） */}
-        <section className="rounded-2xl border bg-gradient-to-br from-primary/[0.07] via-background to-secondary/[0.07] px-6 py-5">
-          <h1 className="text-xl font-semibold tracking-tight">用一句话，生成可运行的 UI 设计稿</h1>
-          <p className="mt-1.5 max-w-2xl text-sm text-muted-foreground">
-            自然语言 → 高保真设计稿 → 可编辑画布 → React 工程代码。内置 8 套模板、合规检查、多人协作与一键导出。
+        {/* 首屏主张（T36：按样张 v2 提升为 Hero——渐变大标题 + 留白节奏，不承载交互） */}
+        <section className="pt-2">
+          <h1 className="bg-gradient-to-r from-foreground via-primary/80 to-secondary bg-clip-text text-[34px] font-semibold leading-tight tracking-tight text-transparent">
+            用一句话，生成可运行的界面
+          </h1>
+          <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
+            描述需求即可得到可编辑的高保真设计稿；支持协作、规范校验与一键导出 React 工程。
           </p>
         </section>
 
