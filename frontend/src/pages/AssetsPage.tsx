@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 
+import { ASSET_VIEWS, ASSET_VIEW_LABEL, readAssetView, writeAssetView, type AssetView } from '@/lib/assetView'
 import { api } from '@/lib/api'
 
 interface AssetRow {
@@ -47,6 +48,96 @@ const VISIBILITY_LABEL: Record<string, string> = {
   'public-link': '公开链接（凭链接可读）',
 }
 
+/** T45：各视图的网格密度（大图标=现有卡片；小图标更密；平铺居中） */
+const GRID_CLASS: Record<Exclude<AssetView, 'details'>, string> = {
+  small: 'grid grid-cols-[repeat(auto-fill,minmax(140px,1fr))] gap-2',
+  large: 'grid grid-cols-[repeat(auto-fill,minmax(196px,1fr))] gap-3',
+  tiles: 'grid grid-cols-[repeat(auto-fill,minmax(168px,1fr))] gap-2.5',
+}
+
+/**
+ * T45：可见性 / 文件夹两个下拉在**所有视图**里复用。
+ * 换视图不能把功能换没了——这是"展示方式"这类改动的第一约束。
+ */
+function AssetSelectors({
+  row,
+  folders,
+  compact = false,
+  onVisibility,
+  onFolder,
+}: {
+  row: AssetRow
+  folders: FolderRow[]
+  compact?: boolean
+  onVisibility: (value: string) => void
+  onFolder: (value: string) => void
+}) {
+  const cls = `w-full rounded border border-input bg-background px-1 ${
+    compact ? 'h-6 text-[10px]' : 'h-7 text-[11px]'
+  }`
+  return (
+    <div className="mt-1 flex flex-col gap-1">
+      <select
+        className={cls}
+        data-testid={`asset-visibility-${row.id}`}
+        value={row.visibility}
+        title="谁能读到这张图"
+        onChange={(e) => onVisibility(e.target.value)}
+      >
+        <option value="private">私有（仅自己）</option>
+        <option value="workspace">工作区可见</option>
+        <option value="public-link">公开链接</option>
+      </select>
+      <select
+        className={cls}
+        data-testid={`asset-folder-${row.id}`}
+        value={row.folder_id === null || row.folder_id === undefined ? '' : String(row.folder_id)}
+        title="移动到文件夹"
+        onChange={(e) => onFolder(e.target.value)}
+      >
+        <option value="">未分组</option>
+        {folders.map((f) => (
+          <option key={f.id} value={f.id}>
+            {f.name}
+          </option>
+        ))}
+      </select>
+    </div>
+  )
+}
+
+/** T45：操作按钮组（所有视图复用：复制链接 / 删除 / 插入到画布） */
+function AssetActions({
+  row,
+  onCopy,
+  onDelete,
+  onUse,
+}: {
+  row: AssetRow
+  onCopy: () => void
+  onDelete: () => void
+  onUse: () => void
+}) {
+  const btn = 'rounded border border-border px-1.5 py-0.5 text-[11px] hover:bg-accent'
+  return (
+    <div className="mt-1.5 flex items-center gap-1">
+      <button className={btn} data-testid={`asset-copy-${row.id}`} onClick={onCopy}>
+        复制链接
+      </button>
+      <button
+        className={`${btn} text-muted-foreground hover:text-destructive`}
+        data-testid={`asset-delete-${row.id}`}
+        onClick={onDelete}
+      >
+        删除
+      </button>
+      <button className="ml-auto text-[11px] text-primary hover:underline" data-testid={`asset-use-${row.id}`} onClick={onUse}>
+        插入 →
+      </button>
+    </div>
+  )
+}
+
 interface AssetList {
   images: AssetRow[]
   used_bytes: number
@@ -68,6 +159,8 @@ export default function AssetsPage() {
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
   const [scope, setScope] = useState<Scope>('all')
+  /** T45：展示方式（记住上次选择） */
+  const [view, setView] = useState<AssetView>(() => readAssetView())
   const [folders, setFolders] = useState<FolderList>({ folders: [], ungrouped: 0, limit_folders: 0 })
 
   /**
@@ -338,13 +431,33 @@ export default function AssetsPage() {
           }}
         />
         <button
-          className="ml-auto rounded-md border border-border px-3 py-1.5 text-xs hover:bg-accent disabled:opacity-50"
+          className="rounded-md border border-border px-3 py-1.5 text-xs hover:bg-accent disabled:opacity-50"
           data-testid="asset-upload"
           disabled={busy}
           onClick={() => fileRef.current?.click()}
         >
           {busy ? '上传中…' : '⬆ 上传图片'}
         </button>
+        {/* T45：展示方式切换（记住选择，见 lib/assetView.ts） */}
+        <div className="ml-auto flex items-center gap-1" data-testid="asset-view-switch">
+          {ASSET_VIEWS.map((v) => (
+            <button
+              key={v}
+              className={`rounded border px-2 py-1 text-[11px] ${
+                view === v ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted-foreground hover:bg-accent'
+              }`}
+              data-testid={`view-${v}`}
+              aria-pressed={view === v}
+              title={`展示方式：${ASSET_VIEW_LABEL[v]}`}
+              onClick={() => {
+                setView(v)
+                writeAssetView(v)
+              }}
+            >
+              {ASSET_VIEW_LABEL[v]}
+            </button>
+          ))}
+        </div>
       </div>
       <p className="mb-3 text-xs text-muted-foreground">
         支持 png / jpg / webp / gif，单文件 ≤2MB；导出时图片会内联进工程（不会丢图）。
@@ -369,80 +482,90 @@ export default function AssetsPage() {
         </div>
       )}
 
-      <div className="grid grid-cols-[repeat(auto-fill,minmax(196px,1fr))] gap-3">
-        {(data?.images ?? []).map((row) => (
-          <div
-            key={row.id}
-            className="overflow-hidden rounded-xl border border-border bg-card"
-            data-testid={`asset-card-${row.id}`}
-          >
-            <div className="flex h-[122px] items-center justify-center bg-muted/40 p-2">
-              <img src={row.url} alt={row.filename} className="max-h-full max-w-full object-contain" />
-            </div>
-            <div className="border-t border-border px-3 py-2">
-              <div className="truncate text-[13px] font-medium" title={row.filename}>
-                {row.filename}
+      {/* T45：四种展示方式。details 是"文件信息"列表，其余三种共用卡片结构，只改缩略图尺寸与网格密度 */}
+      <div data-testid="asset-view" data-view={view}>
+        {view === 'details' ? (
+          <div className="divide-y divide-border rounded-xl border border-border" data-testid="asset-details">
+            {(data?.images ?? []).map((row) => (
+              <div key={row.id} className="flex items-center gap-3 px-3 py-2" data-testid={`asset-row-${row.id}`}>
+                <img src={row.url} alt={row.filename} className="h-9 w-9 shrink-0 rounded object-cover" />
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-[13px] font-medium" title={row.filename}>
+                    {row.filename}
+                  </div>
+                  <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+                    <span>{humanSize(row.size)}</span>
+                    <span>{row.created_at ? new Date(row.created_at).toLocaleDateString() : ''}</span>
+                    <span>{VISIBILITY_LABEL[row.visibility] ?? row.visibility}</span>
+                    {row.referenced_by > 0 && (
+                      <span data-testid={`asset-refs-${row.id}`}>被 {row.referenced_by} 份稿件引用</span>
+                    )}
+                  </div>
+                </div>
+                <div className="w-36 shrink-0">
+                  <AssetSelectors
+                    row={row}
+                    folders={folders.folders}
+                    compact
+                    onVisibility={(v) => void changeVisibility(row, v)}
+                    onFolder={(v) => void moveAsset(row, v)}
+                  />
+                </div>
+                <div className="w-64 shrink-0">
+                  <AssetActions
+                    row={row}
+                    onCopy={() => void copyUrl(row)}
+                    onDelete={() => void remove(row)}
+                    onUse={() => navigate(`/workspace?asset=${row.id}`)}
+                  />
+                </div>
               </div>
-              <div className="mt-0.5 flex items-center gap-2 text-[11px] text-muted-foreground">
-                <span>{humanSize(row.size)}</span>
-                <span>{row.created_at ? new Date(row.created_at).toLocaleDateString() : ''}</span>
-                {row.referenced_by > 0 && (
-                  <span data-testid={`asset-refs-${row.id}`}>被 {row.referenced_by} 份稿件引用</span>
-                )}
-              </div>
-              {/* T46b：可见性（private / workspace / public-link） */}
-              <select
-                className="mt-1.5 h-7 w-full rounded border border-input bg-background px-1 text-[11px]"
-                data-testid={`asset-visibility-${row.id}`}
-                value={row.visibility}
-                title="谁能读到这张图"
-                onChange={(e) => void changeVisibility(row, e.target.value)}
-              >
-                <option value="private">私有（仅自己）</option>
-                <option value="workspace">工作区可见</option>
-                <option value="public-link">公开链接</option>
-              </select>
-              {/* T44：移动到文件夹 */}
-              <select
-                className="mt-1 h-7 w-full rounded border border-input bg-background px-1 text-[11px]"
-                data-testid={`asset-folder-${row.id}`}
-                value={row.folder_id === null || row.folder_id === undefined ? '' : String(row.folder_id)}
-                title="移动到文件夹"
-                onChange={(e) => void moveAsset(row, e.target.value)}
-              >
-                <option value="">未分组</option>
-                {folders.folders.map((f) => (
-                  <option key={f.id} value={f.id}>
-                    {f.name}
-                  </option>
-                ))}
-              </select>
-              <div className="mt-1.5 flex items-center gap-2">
-                <button
-                  className="rounded border border-border px-2 py-0.5 text-[11px] hover:bg-accent"
-                  data-testid={`asset-copy-${row.id}`}
-                  onClick={() => copyUrl(row)}
-                >
-                  复制链接
-                </button>
-                <button
-                  className="rounded border border-border px-2 py-0.5 text-[11px] text-muted-foreground hover:text-destructive"
-                  data-testid={`asset-delete-${row.id}`}
-                  onClick={() => remove(row)}
-                >
-                  删除
-                </button>
-                <button
-                  className="ml-auto text-[11px] text-primary hover:underline"
-                  data-testid={`asset-use-${row.id}`}
-                  onClick={() => navigate(`/workspace?asset=${row.id}`)}
-                >
-                  插入到画布 →
-                </button>
-              </div>
-            </div>
+            ))}
           </div>
-        ))}
+        ) : (
+          <div className={GRID_CLASS[view]}>
+            {(data?.images ?? []).map((row) => (
+              <div
+                key={row.id}
+                className="overflow-hidden rounded-xl border border-border bg-card"
+                data-testid={`asset-card-${row.id}`}
+              >
+                <div
+                  className={`flex items-center justify-center bg-muted/40 p-2 ${
+                    view === 'small' ? 'h-16' : view === 'tiles' ? 'h-[88px]' : 'h-[122px]'
+                  }`}
+                >
+                  <img src={row.url} alt={row.filename} className="max-h-full max-w-full object-contain" />
+                </div>
+                <div className="border-t border-border px-3 py-2">
+                  <div className="truncate text-[13px] font-medium" title={row.filename}>
+                    {row.filename}
+                  </div>
+                  <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+                    <span>{humanSize(row.size)}</span>
+                    <span>{row.created_at ? new Date(row.created_at).toLocaleDateString() : ''}</span>
+                    {row.referenced_by > 0 && (
+                      <span data-testid={`asset-refs-${row.id}`}>被 {row.referenced_by} 份稿件引用</span>
+                    )}
+                  </div>
+                  <AssetSelectors
+                    row={row}
+                    folders={folders.folders}
+                    compact={view === 'small'}
+                    onVisibility={(v) => void changeVisibility(row, v)}
+                    onFolder={(v) => void moveAsset(row, v)}
+                  />
+                  <AssetActions
+                    row={row}
+                    onCopy={() => void copyUrl(row)}
+                    onDelete={() => void remove(row)}
+                    onUse={() => navigate(`/workspace?asset=${row.id}`)}
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
       </div>
     </div>

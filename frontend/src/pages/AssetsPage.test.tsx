@@ -4,6 +4,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import AssetsPage from './AssetsPage'
+import { readAssetView, writeAssetView } from '@/lib/assetView'
 
 const IMAGE = {
   id: 7,
@@ -242,5 +243,64 @@ describe('AssetsPage（T44 文件夹）', () => {
       expect(fetchMock.mock.calls.some((c) => String(c[0]) === '/api/asset-folders/1' && c[1]?.method === 'DELETE')).toBe(true)
     })
     expect(String(confirm.mock.calls[0][0])).toContain('未分组')
+  })
+})
+
+describe('AssetsPage（T45 展示方式）', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    localStorage.clear()
+  })
+
+  const LIST = { images: [{ ...IMAGE, folder_id: null }], used_bytes: 2048, limit_count: 50, limit_bytes: 20971520 }
+
+  it('默认大图标；切到小图标后写入记忆', async () => {
+    vi.stubGlobal('fetch', mockFetch(LIST, { folders: [] }))
+    renderPage()
+
+    const container = await screen.findByTestId('asset-view')
+    expect(container).toHaveAttribute('data-view', 'large')
+    expect(screen.getByTestId('view-large')).toHaveAttribute('aria-pressed', 'true')
+
+    fireEvent.click(screen.getByTestId('view-small'))
+    await waitFor(() => expect(screen.getByTestId('asset-view')).toHaveAttribute('data-view', 'small'))
+    expect(screen.getByTestId('view-small')).toHaveAttribute('aria-pressed', 'true')
+    // 存储走 @/lib/storage 适配器（测试里是注入的内存实现），所以用同一个读接口断言
+    expect(readAssetView()).toBe('small')
+  })
+
+  it('记住选择：下次进入直接是文件信息视图', async () => {
+    writeAssetView('details')
+    vi.stubGlobal('fetch', mockFetch(LIST, { folders: [] }))
+    renderPage()
+
+    expect(await screen.findByTestId('asset-row-7')).toBeInTheDocument()
+    expect(screen.queryByTestId('asset-card-7')).not.toBeInTheDocument()
+    expect(screen.getByTestId('view-details')).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  it('文件信息视图下功能不丢：能删除、能移动文件夹、能看到大小与可见性', async () => {
+    writeAssetView('details')
+    const fetchMock = mockFetch(LIST, { folders: [{ id: 1, name: '图标', count: 0 }] })
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('confirm', () => true)
+    renderPage()
+
+    const row = await screen.findByTestId('asset-row-7')
+    expect(row).toHaveTextContent('2.0 KB')
+    expect(row).toHaveTextContent('私有')
+
+    fireEvent.change(screen.getByTestId('asset-folder-7'), { target: { value: '1' } })
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some((c) => String(c[0]) === '/api/images/7/folder' && c[1]?.method === 'PATCH'),
+      ).toBe(true),
+    )
+    fireEvent.click(screen.getByTestId('asset-delete-7'))
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some((c) => String(c[0]) === '/api/images/7' && c[1]?.method === 'DELETE'),
+      ).toBe(true),
+    )
   })
 })
