@@ -103,6 +103,8 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
   const { design, store } = useDesignStore(connectUrl, DEMO_DESIGNS[0], connectRoom)
   /** 转自由画布（P1-13）：测量需要画布的 DOM 与缩放状态，因此由画布暴露能力 */
   const canvasRef = useRef<DesignCanvasHandle>(null)
+  /** T42：几何体检只在本页自己的画布子树里量（见 handleAudit 注释） */
+  const pageRef = useRef<HTMLDivElement>(null)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
 
   // P1 文件系统（缺陷 5/8/11）：打开保存的设计 / 模板起手 / 草稿 / 空白
@@ -762,7 +764,10 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
   // T26：几何体检（纯只读）——结果面板 + 复用 highlightIds 高亮相关节点
   const [auditIssues, setAuditIssues] = useState<AuditIssue[] | null>(null)
   const handleAudit = () => {
-    const sheet = document.querySelector<HTMLElement>('[data-testid="canvas-sheet"]')
+    // T42：原来用 document.querySelector 全局找画布——一旦文档里还有别的 canvas-sheet
+    // （预览层 / 缩略图 / 测试里上一个用例的残留树），量的就是别人的 DOM，结果时对时错。
+    // 改成只在本页子树里找。
+    const sheet = pageRef.current?.querySelector<HTMLElement>('[data-testid="canvas-sheet"]')
     if (!sheet) return
     const issues = auditGeometry(sheet)
     setAuditIssues(issues)
@@ -835,7 +840,7 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
   }
 
   return (
-    <div className="flex h-screen flex-col" data-testid="workspace-page">
+    <div className="flex h-screen flex-col" data-testid="workspace-page" ref={pageRef}>
       <header className="z-20 flex h-12 items-center justify-between border-b bg-background/85 px-4 shadow-sm backdrop-blur">
         <div className="flex items-center gap-3">
           <span className="flex items-center gap-2 font-semibold">

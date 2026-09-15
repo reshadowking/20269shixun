@@ -1,8 +1,12 @@
 /**
  * T26：几何体检用例。jsdom 没有真实布局，按 freeze.test.ts 的既有做法手工 stub
  * getBoundingClientRect / scrollHeight / clientHeight。
+ *
+ * T42 隔离加固：所有用例都在**离屏树**上跑（自己建 root，不挂 document.body），
+ * 并补了三条"确定性/隔离/容差"断言——这几条正是过去偶发红的地方：
+ * 全量并行时若测量依赖了全局 DOM 或残留节点，断言就会时对时错。
  */
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 
 import { auditGeometry } from './geometryAudit'
 
@@ -35,6 +39,11 @@ function setText(el: HTMLElement, text: string) {
 }
 
 describe('auditGeometry', () => {
+  afterEach(() => {
+    // 用例自带清理：即便某条断言失败，也不把噪声节点留给下一个用例
+    document.querySelectorAll('[data-noisy]').forEach((el) => el.remove())
+  })
+
   it('溢出：子节点超出父容器 → overflow', () => {
     const parent = node('root', { left: 0, top: 0, width: 200, height: 100 })
     const child = node('big', { left: 10, top: 10, width: 400, height: 40 })
@@ -101,5 +110,59 @@ describe('auditGeometry', () => {
     card.appendChild(title)
     expect(auditGeometry(canvas(card), { contrastRatio: 4.5 }).some((i) => i.kind === 'low-contrast')).toBe(true)
     expect(auditGeometry(canvas(card), { contrastRatio: 3 }).some((i) => i.kind === 'low-contrast')).toBe(false)
+  })
+
+  it('T42：溢出容差是"闭区间"——正好等于 slack 不算问题，超过 1px 才算', () => {
+    const build = (childWidth: number) => {
+      const parent = node('root', { left: 0, top: 0, width: 200, height: 100 })
+      const child = node('big', { left: 0, top: 0, width: childWidth, height: 40 })
+      setText(parent, '标题')
+      setText(child, '内容')
+      parent.appendChild(child)
+      return canvas(parent)
+    }
+    // 默认 overflowSlackPx = 2：200 + 2 恰好不算溢出
+    expect(auditGeometry(build(202)).some((i) => i.kind === 'overflow')).toBe(false)
+    expect(auditGeometry(build(203)).some((i) => i.kind === 'overflow')).toBe(true)
+    // 显式放宽容差后，203 也放行（容差可配）
+    expect(auditGeometry(build(203), { overflowSlackPx: 3 }).some((i) => i.kind === 'overflow')).toBe(false)
+  })
+
+  it('T42：文档里存在同 id 的噪声树 / 另一块 canvas-sheet 时，结果不变', () => {
+    const parent = node('root', { left: 0, top: 0, width: 200, height: 100 })
+    const child = node('big', { left: 10, top: 10, width: 400, height: 40 })
+    setText(parent, '标题')
+    setText(child, '很长的内容')
+    parent.appendChild(child)
+    const root = canvas(parent)
+
+    const baseline = auditGeometry(root)
+    expect(baseline.some((i) => i.kind === 'overflow')).toBe(true)
+
+    const noise = document.createElement('div')
+    noise.setAttribute('data-noisy', '1')
+    // 同样的 data-node-id + 一个假的 canvas-sheet（模拟预览层/缩略图场景）
+    noise.innerHTML =
+      '<div data-testid="canvas-sheet"><div data-node-id="root"><div data-node-id="big">别的文本</div></div></div>'
+    document.body.append(noise)
+
+    expect(auditGeometry(root)).toEqual(baseline)
+  })
+
+  it('T42：同一输入重复体检 50 次，输出完全一致（顺序与内容都不漂）', () => {
+    const card = node('card', { left: 0, top: 0, width: 200, height: 100 }, { backgroundColor: '#FFFFFF' })
+    const bad = node('label', { left: 10, top: 10, width: 100, height: 20 }, { color: '#CCCCCC' })
+    const overlap = node('other', { left: 50, top: 5, width: 100, height: 20 })
+    setText(bad, '浅色说明')
+    setText(overlap, '另一段')
+    setText(card, '浅色说明 另一段')
+    card.append(bad, overlap)
+    const root = canvas(card)
+
+    const first = auditGeometry(root)
+    expect(first.length).toBeGreaterThan(0)
+    for (let i = 0; i < 50; i++) {
+      expect(auditGeometry(root)).toEqual(first)
+    }
   })
 })

@@ -3,6 +3,10 @@
  *
  * 注意：jsdom 没有真实布局，getBoundingClientRect 默认全 0，
  * 因此测量用例必须**注入矩形**（spyOn），不要依赖真实渲染。
+ *
+ * T42 隔离加固：测量用例**不再把容器挂到 document.body**（挂上去又不清理会污染后续用例，
+ * 也让"测量是否只作用于传入容器"变得无法验证）。`measureChildren` 只用
+ * getBoundingClientRect（注入）与 getComputedStyle，两者对 detached 元素同样有效。
  */
 import { describe, expect, it, vi } from 'vitest'
 
@@ -66,7 +70,7 @@ describe('measureChildren（公式：÷scale、只减 border）', () => {
     kidB.setAttribute('data-node-id', 'b')
     parent.append(kidA, kidB)
     container.append(parent)
-    document.body.append(container)
+    // 故意不 append 到 document.body：保持用例自包含（见文件头 T42 说明）
     return { container, parent, kidA, kidB }
   }
 
@@ -134,5 +138,43 @@ describe('measureChildren（公式：÷scale、只减 border）', () => {
     const { measurements } = measureChildren(container, 'root', ['a', 'b'], 0)
     expect(measurements[0].x).toBe(10)
     spy.mockRestore()
+  })
+
+  it('T42：测量只作用于传入容器——body 里有同名 data-node-id 也不受影响', () => {
+    const { container, parent, kidA, kidB } = setup()
+    parent.getBoundingClientRect = () => ({ left: 100, top: 50, width: 800, height: 600 }) as DOMRect
+    kidA.getBoundingClientRect = () => ({ left: 124, top: 74, width: 300, height: 80 }) as DOMRect
+    kidB.getBoundingClientRect = () => ({ left: 124, top: 174, width: 300, height: 80 }) as DOMRect
+
+    // 噪声：挂在 body 上、id 完全相同的另一棵树（模拟页面里存在缩略图/预览副本的极端情况）
+    const noise = document.createElement('div')
+    noise.innerHTML = '<div data-node-id="root"><div data-node-id="a"></div><div data-node-id="b"></div></div>'
+    document.body.append(noise)
+    try {
+      const { measurements, missing } = measureChildren(container, 'root', ['a', 'b'], 1)
+      expect(missing).toEqual([])
+      expect(measurements).toEqual([
+        { id: 'a', x: 24, y: 24, width: 300, height: 80 },
+        { id: 'b', x: 24, y: 124, width: 300, height: 80 },
+      ])
+    } finally {
+      noise.remove()
+    }
+  })
+
+  it('T42：小数缩放（1.5）按公式收敛，且重复测量结果一致', () => {
+    const { container, parent, kidA, kidB } = setup()
+    parent.getBoundingClientRect = () => ({ left: 0, top: 0, width: 1200, height: 900 }) as DOMRect
+    kidA.getBoundingClientRect = () => ({ left: 30, top: 45, width: 450, height: 120 }) as DOMRect
+    kidB.getBoundingClientRect = () => ({ left: 30, top: 165, width: 450, height: 120 }) as DOMRect
+
+    const first = measureChildren(container, 'root', ['a', 'b'], 1.5)
+    expect(first.measurements).toEqual([
+      { id: 'a', x: 20, y: 30, width: 300, height: 80 },
+      { id: 'b', x: 20, y: 110, width: 300, height: 80 },
+    ])
+    for (let i = 0; i < 20; i++) {
+      expect(measureChildren(container, 'root', ['a', 'b'], 1.5)).toEqual(first)
+    }
   })
 })

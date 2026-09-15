@@ -38,6 +38,16 @@ afterEach(() => {
     /* 忽略 */
   }
   document.documentElement.classList.remove('dark')
+  // T42：清掉用例自己手动 append 的残留节点。
+  // 背景：几何/测量类用例（freeze）曾把容器挂到 document.body 且从不清理，
+  // 于是"测量是否只作用于传入容器"无法被验证，全局查询（document.querySelector）
+  // 也可能命中上一个用例的树。RTL 的卸载由它自己的 cleanup 负责（先于本钩子执行），
+  // 这里兜住直连 DOM 的用例。
+  try {
+    document.body.replaceChildren()
+  } catch {
+    /* 忽略 */
+  }
   // T41：还原被 stub 的全局对象与 mock，避免泄漏到下一个用例/文件
   try {
     vi.unstubAllGlobals()
