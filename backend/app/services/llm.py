@@ -94,11 +94,17 @@ def _extract_json_from(text: str) -> dict | None:
 
 def describe_api_error(exc: Exception) -> str:
     """把 openai SDK 异常转成可排查的错误码描述（HTTP 状态码优先）。"""
+    if isinstance(exc, LLMDeadlineExceeded):
+        return "已超出生成时间预算"
     if isinstance(exc, APIStatusError):
         return f"HTTP {exc.status_code} {exc.message[:120]}"
     if isinstance(exc, APITimeoutError):
         return "请求超时（超过 LLM_TIMEOUT_SECONDS）"
     return f"{type(exc).__name__} {str(exc)[:120]}"
+
+
+class LLMDeadlineExceeded(RuntimeError):
+    """T20：本次调用开始前时间预算已耗尽（调用方据此走兜底，不再发请求）。"""
 
 
 def _json_error_hint(text: str) -> str:
@@ -152,11 +158,25 @@ class LLMClient:
     def is_mock(self) -> bool:
         return self.cfg("llm_mode") != "real" or not self.cfg("llm_api_key")
 
-    def _real_chat(self, system: str, user: str, temperature: float, history: list[dict] | None = None) -> str:
+    def _real_chat(
+        self,
+        system: str,
+        user: str,
+        temperature: float,
+        history: list[dict] | None = None,
+        deadline: Any | None = None,
+    ) -> str:
+        # T20：单次调用超时不得超过剩余时间预算（预算耗尽则直接抛错，不再发请求）
+        timeout = float(self.cfg("llm_timeout_seconds"))
+        if deadline is not None:
+            left = deadline.remaining()
+            if left <= 0:
+                raise LLMDeadlineExceeded("时间预算已耗尽")
+            timeout = min(timeout, left)
         client = OpenAI(
             base_url=self.cfg("llm_base_url"),
             api_key=self.cfg("llm_api_key"),
-            timeout=self.cfg("llm_timeout_seconds"),
+            timeout=timeout,
         )
         try:
             return self._create(client, self.cfg("llm_model"), system, user, temperature, history)
@@ -212,10 +232,17 @@ class LLMClient:
         )
         return choice.message.content or ""
 
-    def chat_text(self, system: str, user: str, temperature: float | None = None, history: list[dict] | None = None) -> str:
+    def chat_text(
+        self,
+        system: str,
+        user: str,
+        temperature: float | None = None,
+        history: list[dict] | None = None,
+        deadline: Any | None = None,
+    ) -> str:
         if self.is_mock:
             return self.mock_responder(system, user) if self.mock_responder else ""
-        return self._real_chat(system, user, temperature or 0.3, _sanitize_history(history))
+        return self._real_chat(system, user, temperature or 0.3, _sanitize_history(history), deadline)
 
     def chat_json(
         self,
@@ -223,11 +250,12 @@ class LLMClient:
         user: str,
         temperature: float | None = None,
         history: list[dict] | None = None,
+        deadline: Any | None = None,
     ) -> dict | None:
         """输出 JSON；解析失败重试 1 次，重试时把错误定位回传模型让其自纠（v2.2 §4.4）。"""
         clean_history = _sanitize_history(history)
         for attempt in range(2):
-            text = self.chat_text(system, user, temperature, clean_history)
+            text = self.chat_text(system, user, temperature, clean_history, deadline)
             parsed = _extract_json(text)
             if parsed is not None:
                 return parsed

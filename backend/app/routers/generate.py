@@ -5,8 +5,10 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session as DbSession
 
+from ..config import get_settings
 from ..db import get_db
 from ..security import get_current_user
+from ..services.ai_gateway import GatewayBusy, GenerationDeadline, run_generation
 from ..services.compliance import compliance_rate, enforce_compliance
 from ..services.design_guard import GUARD_REPLY, is_design_request
 from ..services.generate import generate_design
@@ -50,15 +52,26 @@ class GenerateResponse(BaseModel):
 
 
 @router.post("/api/generate", response_model=GenerateResponse)
-def generate(req: GenerateRequest, _user: str = Depends(get_current_user), db: DbSession = Depends(get_db)):
-    """自然语言生成设计稿（意图解析 + 模板匹配 + 参数填充 + 合规检查）。"""
+async def generate(req: GenerateRequest, _user: str = Depends(get_current_user), db: DbSession = Depends(get_db)):
+    """自然语言生成设计稿（T20：专用线程池执行 + 并发闸门 + 整链路时间预算）。"""
     # 缺陷 9 + T10：角色边界分级——带 design 的增量修改不调守卫（「有设计稿且提要求」
     # 本来就该放行，§4.9 实测「加高级功能」被误拦）；首轮生成保持原有强度。
     if req.design is None and not is_design_request(req.prompt):
         raise HTTPException(status_code=422, detail=GUARD_REPLY)
     history = recent_turns(db, req.session_key, _user)
+    deadline = GenerationDeadline(get_settings().llm_deadline_seconds)
     try:
-        result = generate_design(req.prompt, current_design=req.design, locked=req.locked, history=history)
+        result = await run_generation(
+            generate_design,
+            req.prompt,
+            current_design=req.design,
+            locked=req.locked,
+            history=history,
+            deadline=deadline,
+        )
+    except GatewayBusy as exc:
+        # 取不到槽位 = 没开始干活：503（与"干了但降级"的 200+fallback 语义区分）
+        raise HTTPException(status_code=503, detail="当前生成任务较多，请稍后重试") from exc
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"AI 生成失败：{exc}") from exc
     return GenerateResponse(
@@ -203,9 +216,14 @@ async def explore_options(req: ExploreRequest, _user: str = Depends(get_current_
         ),
     ]
     history = recent_turns(db, req.session_key, _user)
-    results = await asyncio.gather(
-        *(asyncio.to_thread(generate_design, prompt, history=history) for _, prompt in variants)
-    )
+    deadline = GenerationDeadline(get_settings().llm_deadline_seconds)
+    try:
+        # 两方案各占一个生成槽位（专用池 ≥2 才能真并行；见 config.llm_max_concurrency 默认 4）
+        results = await asyncio.gather(
+            *(run_generation(generate_design, prompt, history=history, deadline=deadline) for _, prompt in variants)
+        )
+    except GatewayBusy as exc:
+        raise HTTPException(status_code=503, detail="当前生成任务较多，请稍后重试") from exc
     options = []
     degraded = False
     for (label, _), result in zip(variants, results):

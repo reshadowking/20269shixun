@@ -40,7 +40,7 @@ def _real_mode(monkeypatch, recorder: list) -> None:
     monkeypatch.setattr(
         LLMClient,
         "_real_chat",
-        lambda self, system, user, temperature, history=None: (
+        lambda self, system, user, temperature, history=None, deadline=None: (
             recorder.append({"system": system, "user": user, "history": history}) or json.dumps(CURRENT)
         ),
     )

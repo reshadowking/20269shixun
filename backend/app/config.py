@@ -21,6 +21,11 @@ class Settings(BaseSettings):
     llm_temperature_parse: float = 0.2
     llm_temperature_fill: float = 0.6  # 0.3 太死板（相同提示词结果雷同），0.6 平衡多样与稳定
     llm_history_max_chars: int = 1200  # T24：会话历史进提示词的字符预算（超出丢最旧一轮）
+    # T20：生成网关——专用池大小 / 排队等待 / 整链路时间预算 / 单次调用最低预算
+    llm_max_concurrency: int = 4
+    llm_queue_timeout_seconds: float = 5.0
+    llm_deadline_seconds: float = 45.0
+    llm_min_call_budget_seconds: float = 5.0
 
     # 数据库（测试用 sqlite 覆盖此值）
     pg_url: str = "postgresql+psycopg://postgres:postgres@localhost:5432/design"

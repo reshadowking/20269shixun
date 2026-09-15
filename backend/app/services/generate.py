@@ -16,6 +16,7 @@ from opentelemetry import trace
 
 from ..config import get_settings
 from ..design.validator import SchemaError, validate_design
+from .ai_gateway import GenerationDeadline
 from .beautify import preset_value, vocabulary_text
 from .compliance import compliance_rate, enforce_compliance
 from .edit_guard import structure_loss_reason
@@ -694,6 +695,7 @@ def generate_design(
     current_design: dict[str, Any] | None = None,
     locked: bool = False,
     history: list[dict] | None = None,
+    deadline: GenerationDeadline | None = None,
 ) -> GenerateResult:
     """生成设计稿。current_design 非空时走【增量修改】模式（P0-1）：
     基于当前树只改用户指定部分，其他节点保持不变；失败兜底返回原树。
@@ -703,6 +705,9 @@ def generate_design(
 
     history（T24）：会话最近若干轮（[{"role","content"}]），仅作背景，
     **以本次 user_request 为准**；为空时行为与改造前逐字相同。
+
+    deadline（T20）：整条链路的时间预算；每次发起真实调用前检查剩余量，
+    不足以再跑一次时直接走兜底（不再发请求、不再重试/切备用模型）。mock 模式不受其约束。
     """
     settings = get_settings()
     client = client or LLMClient()
@@ -714,19 +719,30 @@ def generate_design(
     start_all = time.perf_counter()
     gen_logger.info("生成开始 prompt=%d字符 mode=%s", len(prompt), "edit" if is_edit else "full")
 
+    min_call_budget = float(settings.llm_min_call_budget_seconds)
+
+    def budget_short() -> bool:
+        """T20：剩余预算不足以再发起一次真实调用（含重试/切备用）时为真。"""
+        return deadline is not None and deadline.remaining() < min_call_budget
+
     # ---- 调用 1：意图解析（增量修改跳过——基于当前树修改，无需模板意图）----
     t0 = time.perf_counter()
     intent: dict[str, Any] | None = None
     if not is_edit:
-        with tracer.start_as_current_span("intent_parse"):
-            try:
-                intent = client.chat_json(INTENT_SYSTEM, prompt, settings.llm_temperature_parse, history=history)
-            except Exception as exc:  # noqa: BLE001 - 网络/限流等异常 → 兜底并记录原因
-                error = f"意图解析调用失败：{type(exc).__name__} {str(exc)[:120]}"
-                intent = None
-            if intent is None and not error:
-                # 意图解析失败：仅记录原因，不视为降级（模板选择仍可走关键词/自由生成，填充由 LLM 完成）
-                error = "意图解析未返回有效 JSON（模型限流或超时）"
+        if budget_short():
+            gen_logger.warning("剩余时间预算不足，跳过意图解析（按关键词选模板）")
+        else:
+            with tracer.start_as_current_span("intent_parse"):
+                try:
+                    intent = client.chat_json(
+                        INTENT_SYSTEM, prompt, settings.llm_temperature_parse, history=history, deadline=deadline
+                    )
+                except Exception as exc:  # noqa: BLE001 - 网络/限流等异常 → 兜底并记录原因
+                    error = f"意图解析调用失败：{describe_api_error(exc)}"
+                    intent = None
+                if intent is None and not error:
+                    # 意图解析失败：仅记录原因，不视为降级（模板选择仍可走关键词/自由生成，填充由 LLM 完成）
+                    error = "意图解析未返回有效 JSON（模型限流或超时）"
     times["intent_parse"] = time.perf_counter() - t0
     gen_logger.info("意图解析 ok=%s 耗时=%.2fs error=%s", intent is not None, times["intent_parse"], error or "-")
 
@@ -744,7 +760,7 @@ def generate_design(
     summarized = False
     with tracer.start_as_current_span("prompt_summary"):
         # T24：编辑模式禁用摘要——"你原话怎么说的"必须原样进模型（首轮生成仍按阈值压缩）
-        if len(prompt) > SUMMARY_THRESHOLD and not client.is_mock and not is_edit:
+        if len(prompt) > SUMMARY_THRESHOLD and not client.is_mock and not is_edit and not budget_short():
             fill_prompt, summarized = summarize_prompt(prompt, client)
     times["prompt_summary"] = time.perf_counter() - t0
     gen_logger.info("模板=%s 摘要=%s 摘要后%d字符", template_name, summarized, len(fill_prompt))
@@ -763,7 +779,12 @@ def generate_design(
             if not is_free:
                 user_payload["template_skeleton"] = default
             fill_system = free_system_text() if is_free else fill_system_text()
-        if is_edit and client.is_mock and client.mock_responder is None:
+        if not client.is_mock and budget_short():
+            # T20：预算不足以再发起一次调用 → 直接兜底，不再打模型（也不重试/切备用）
+            fallback = True
+            error = "已超出生成时间预算（未发起本次调用）"
+            filled = None
+        elif is_edit and client.is_mock and client.mock_responder is None:
             # T4 前置：mock 模式增量修改产出确定性改写树（关键词规则、无 LLM），
             # 与下方真实链路共用 repair → validate → compliance 流水线；
             # 与 :443 附近非编辑路径的 mock 特判对称——否则「AI 修改 → 落地闸门」
@@ -772,7 +793,13 @@ def generate_design(
             filled = mock_edited_design(prompt, current_design or {})
         else:
             try:
-                filled = client.chat_json(fill_system, to_llm_dict(user_payload), settings.llm_temperature_fill, history=history)
+                filled = client.chat_json(
+                    fill_system,
+                    to_llm_dict(user_payload),
+                    settings.llm_temperature_fill,
+                    history=history,
+                    deadline=deadline,
+                )
             except Exception as exc:  # noqa: BLE001
                 error = f"参数填充调用失败：{describe_api_error(exc)}"
                 filled = None
