@@ -36,6 +36,7 @@ import { clearSnapshots, deleteSnapshot, loadSnapshots, saveSnapshot, type Sessi
 import { sessionApi, type SessionMeta } from '@/lib/sessionApi'
 import { deriveSessionKey, isSessionKey, randomSessionKey, SESSION_PARAM } from '@/lib/sessionKey'
 import { migrateLegacySessions } from '@/lib/migrateLegacySessions'
+import { auditGeometry, type AuditIssue } from '@/canvas/geometryAudit'
 import { useDesignStore } from '@/yjs/useDesignStore'
 
 interface OptimizeReport {
@@ -647,6 +648,16 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
   // ---- P0-1 增量编辑：被修改节点高亮（3 秒后消失）----
   const [highlightIds, setHighlightIds] = useState<Set<string>>(new Set())
 
+  // T26：几何体检（纯只读）——结果面板 + 复用 highlightIds 高亮相关节点
+  const [auditIssues, setAuditIssues] = useState<AuditIssue[] | null>(null)
+  const handleAudit = () => {
+    const sheet = document.querySelector<HTMLElement>('[data-testid="canvas-sheet"]')
+    if (!sheet) return
+    const issues = auditGeometry(sheet)
+    setAuditIssues(issues)
+    setHighlightIds(new Set(issues.map((issue) => issue.nodeId)))
+  }
+
   const handleIncrementalEdit = async (
     newDesign: DesignNode,
     changedIds: string[],
@@ -743,6 +754,15 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
             onClick={() => setExportOpen(true)}
           >
             ⬇ 导出代码
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 text-xs"
+            data-testid="geometry-audit"
+            onClick={handleAudit}
+          >
+            🧭 几何体检
           </Button>
           {design.style?.layout !== 'free' && design.children && design.children.length > 0 && (
             <Button
@@ -867,6 +887,52 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
             highlightIds={highlightIds}
             canvasRef={canvasRef}
           />
+          {auditIssues !== null && (
+            <div
+              className="absolute left-1/2 top-3 z-40 w-[420px] -translate-x-1/2 rounded-lg border bg-background p-3 text-xs shadow-lg"
+              data-testid="geometry-audit-panel"
+            >
+              <div className="mb-2 flex items-center justify-between">
+                <span className="font-medium">
+                  几何体检：{auditIssues.length === 0 ? '未发现问题 ✓' : `${auditIssues.length} 项`}
+                </span>
+                <button
+                  className="text-muted-foreground hover:text-foreground"
+                  data-testid="audit-close"
+                  onClick={() => {
+                    setAuditIssues(null)
+                    setHighlightIds(new Set())
+                  }}
+                >
+                  关闭
+                </button>
+              </div>
+              <ul className="max-h-48 space-y-1 overflow-y-auto">
+                {auditIssues.map((issue, index) => (
+                  <li key={`${issue.kind}-${issue.nodeId}-${index}`}>
+                    <button
+                      className="w-full rounded px-1.5 py-1 text-left hover:bg-accent"
+                      data-testid={`audit-issue-${index}`}
+                      onClick={() => setHighlightIds(new Set([issue.nodeId]))}
+                    >
+                      <span className="mr-1 rounded bg-muted px-1">
+                        {
+                          {
+                            overflow: '溢出',
+                            overlap: '重叠',
+                            'empty-frame': '空容器',
+                            'truncated-text': '截断',
+                            'low-contrast': '对比度',
+                          }[issue.kind]
+                        }
+                      </span>
+                      {issue.detail}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
           {generating && (
             <div className="absolute inset-0 z-50 flex items-center justify-center bg-background/60" data-testid="canvas-lock">
               <span className="rounded-lg bg-background px-4 py-2 text-sm shadow">AI 生成中，画布已锁定…</span>
