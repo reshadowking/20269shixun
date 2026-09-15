@@ -22,6 +22,7 @@ from .beautify import preset_value, vocabulary_text
 from .compliance import compliance_rate, enforce_compliance
 from .edit_guard import structure_loss_reason
 from .llm import LLMClient, describe_api_error, to_llm_dict
+from .ops import OP_TYPES, apply_ops
 from .templates import KEYWORD_MAP, TEMPLATES, free_default_design
 
 logger = logging.getLogger(__name__)
@@ -533,6 +534,26 @@ HISTORY_USAGE_SECTION = """
 3. 历史中出现过的文案/数值默认保持不变，除非本轮明确要求修改。"""
 
 
+def ops_prompt_section() -> str:
+    """T23：op 白名单与输出形态（运行期由 `ops.OP_TYPES` 生成，禁止手抄）。"""
+    lines = [
+        "\n\n## 修改指令的输出形态（本版起以本节为准）",
+        '只输出 {"ops":[…]} 操作列表——不要再输出完整 DesignNode 树（旧约束"输出完整树"自本版作废）。',
+        "可用 op（字段名逐字使用）：",
+    ]
+    for name, fields in OP_TYPES.items():
+        lines.append(f"- {name}：{'、'.join(fields)}")
+    lines.append(
+        '示例：把购买按钮改成红色并放大 → {"ops":[{"op":"set_style","id":"buy","key":"color","value":"danger"},'
+        '{"op":"set_style","id":"buy","key":"width","value":200},{"op":"set_style","id":"buy","key":"height","value":48}]}'
+    )
+    lines.append(
+        "约束：节点 id 必须逐字取自 current_design；props 字段名必须来自组件库契约；"
+        '删除节点只能用 remove 显式声明；无改动时返回空数组 {"ops":[]}。'
+    )
+    return "\n".join(lines)
+
+
 def incremental_system(locked: bool = False) -> str:
     """组装增量修改 system 提示词（T4 批2）：既有约束 + 效果词典 + 图标清单 +（locked 时）锁定约束段。
 
@@ -551,6 +572,7 @@ def incremental_system(locked: bool = False) -> str:
         + vocabulary_text()
         + icon_prompt_section()
         + component_contract_section()
+        + ops_prompt_section()
         + HISTORY_USAGE_SECTION
     )
     if locked:
@@ -631,6 +653,8 @@ class GenerateResult:
     degraded: list[str] = field(default_factory=list)
     # T21：本次生成的模型调用记录（由路由层落库到 ai_calls；不含用户文本）
     ai_calls: list[dict] = field(default_factory=list)
+    # T23：本轮 ops 落地的受影响节点 id（空表示走的是整树兼容路径）
+    ops_applied: list[str] = field(default_factory=list)
 
 
 # ---- T4 前置：mock 模式增量修改（确定性关键词规则，无 LLM）----
@@ -829,36 +853,52 @@ def generate_design(
             except Exception as exc:  # noqa: BLE001
                 error = f"参数填充调用失败：{describe_api_error(exc)}"
                 filled = None
+        ops_applied: list[str] = []
         if filled is None or not isinstance(filled, dict):
             fallback = True
             if not error:
                 error = "参数填充未返回有效 JSON（模型限流或超时）"
             filled = default
         else:
-            # T17：模型常把整棵树包一层——先解包再修复，避免"只差一层壳"整稿回退模板
-            unwrapped, source = unwrap_design(filled)
-            if unwrapped is not None:
-                if source != "root":
-                    gen_logger.info("LLM 输出已解包（%s）", source)
-                filled = unwrapped
-            # LLM 产物先宽容修复常见格式错误（type 误写/数值超界/枚举非法/props 类型），
-            # T8 起未知组件/未知类型降级、未知键裁剪（不再整树回退），再过 Schema
-            filled = repair_design(filled, degraded)
-            # T16：编辑结果必须保留既有节点——空壳树能过 Schema，但会把画布清空
-            reason = structure_loss_reason(current_design or {}, filled) if is_edit else None
-            if reason:
-                gen_logger.warning("编辑结果被结构闸门拒绝：%s", reason)
-                fallback = True
-                error = f"AI 修改未保留原有结构（{reason}），画布保持原样"
-                filled = default
-            else:
-                try:
-                    validate_design(filled)
-                except SchemaError as exc:
-                    logger.warning("LLM 产物 Schema 校验失败，回退%s: %s", "原设计" if is_edit else ("自由生成兜底稿" if is_free else "模板"), exc.errors[:2])
+            # T23：编辑模式优先按 ops 落地（显式增量）；返回整树时走下方兼容路径
+            ops_removed: set[str] = set()
+            if is_edit and isinstance(filled.get("ops"), list):
+                filled, ops_applied, ops_removed, ops_reason = apply_ops(current_design or {}, filled["ops"])
+                if ops_reason:
+                    gen_logger.warning("ops 落地被拒绝：%s", ops_reason)
                     fallback = True
-                    error = f"生成结果未通过 Schema 校验（{exc.errors[0][:80]}）"
+                    error = f"AI 修改指令无法落地（{ops_reason}），画布保持原样"
                     filled = default
+                else:
+                    gen_logger.info("ops 落地成功：%s 条，影响 %s 个节点", len(ops_applied), len(ops_applied))
+            if not fallback:
+                # T17：模型常把整棵树包一层——先解包再修复，避免"只差一层壳"整稿回退模板
+                unwrapped, source = unwrap_design(filled)
+                if unwrapped is not None:
+                    if source != "root":
+                        gen_logger.info("LLM 输出已解包（%s）", source)
+                    filled = unwrapped
+                # LLM 产物先宽容修复常见格式错误（type 误写/数值超界/枚举非法/props 类型），
+                # T8 起未知组件/未知类型降级、未知键裁剪（不再整树回退），再过 Schema
+                filled = repair_design(filled, degraded)
+                # T16：编辑结果必须保留既有节点——空壳树能过 Schema，但会把画布清空；
+                # T23：只有 remove op 显式声明过的 id 允许消失
+                reason = (
+                    structure_loss_reason(current_design or {}, filled, allowed_removed=ops_removed) if is_edit else None
+                )
+                if reason:
+                    gen_logger.warning("编辑结果被结构闸门拒绝：%s", reason)
+                    fallback = True
+                    error = f"AI 修改未保留原有结构（{reason}），画布保持原样"
+                    filled = default
+                else:
+                    try:
+                        validate_design(filled)
+                    except SchemaError as exc:
+                        logger.warning("LLM 产物 Schema 校验失败，回退%s: %s", "原设计" if is_edit else ("自由生成兜底稿" if is_free else "模板"), exc.errors[:2])
+                        fallback = True
+                        error = f"生成结果未通过 Schema 校验（{exc.errors[0][:80]}）"
+                        filled = default
     times["param_fill"] = time.perf_counter() - t0
     gen_logger.info("参数填充 ok=%s 耗时=%.2fs error=%s", filled is not None and not fallback, times["param_fill"], error or "-")
 
@@ -911,4 +951,5 @@ def generate_design(
         violations_detail=[asdict(f) for f in fixes],
         degraded=degraded,
         ai_calls=client.calls,
+        ops_applied=ops_applied,
     )

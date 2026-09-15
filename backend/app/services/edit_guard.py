@@ -25,12 +25,17 @@ def _collect_ids(node: Any, out: list[str]) -> None:
             _collect_ids(child, out)
 
 
-def structure_loss_reason(before: dict[str, Any], after: dict[str, Any]) -> str | None:
+def structure_loss_reason(
+    before: dict[str, Any], after: dict[str, Any], allowed_removed: set[str] | None = None
+) -> str | None:
     """编辑结果是否丢失了 before 的结构；通过返回 None，否则返回可读原因。
 
     - 根 id 变化 → 拒绝（第一种失败形态：模型换了整棵树的根）
-    - before 中任一 id 在 after 中缺失 → 拒绝（含"空壳树"与"删节点"两种）
-    - 其余（新增节点、属性/样式变化、未知组件降级为 frame）→ 放行
+     - before 中任一 id 在 after 中缺失 → 拒绝（含"空壳树"与"删节点"两种）
+     - 其余（新增节点、属性/样式变化、未知组件降级为 frame）→ 放行
+
+    allowed_removed（T23）：模型用 **显式 remove op** 删除的 id——只有它们可以消失；
+    未声明的消失仍然拒绝（"删节点必须走 ops"）。
     """
     before_root, after_root = before.get("id"), after.get("id")
     if before_root != after_root:
@@ -42,11 +47,12 @@ def structure_loss_reason(before: dict[str, Any], after: dict[str, Any]) -> str 
     _collect_ids(after, after_ids)
 
     pool = Counter(after_ids)
+    allowed = allowed_removed or set()
     lost: list[str] = []
     for node_id in before_ids:
         if pool[node_id] > 0:
             pool[node_id] -= 1
-        else:
+        elif node_id not in allowed:
             lost.append(node_id)
 
     if not lost:
