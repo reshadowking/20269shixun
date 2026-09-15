@@ -4,7 +4,16 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from ..llm_runtime import public_config, save_runtime_config
+from ..llm_runtime import (
+    activate_profile,
+    delete_profile,
+    is_masked_key,
+    list_profiles,
+    mask_api_key,
+    public_config,
+    save_profile,
+    save_runtime_config,
+)
 from ..security import get_current_user
 
 logger = logging.getLogger(__name__)
@@ -41,6 +50,60 @@ def public_config_after(values: dict) -> dict:
     return public_config()
 
 
+class ProfileUpsert(BaseModel):
+    """T34：保存/新建档案（id 缺省表示新建；name 可命名；Key 传空或脱敏值则不覆盖）。"""
+
+    id: str | None = Field(default=None, max_length=64)
+    name: str | None = Field(default=None, max_length=60)
+    llm_base_url: str | None = Field(default=None, max_length=200)
+    llm_api_key: str | None = Field(default=None, max_length=200)
+    llm_model: str | None = Field(default=None, max_length=100)
+    llm_backup_model: str | None = Field(default=None, max_length=100)
+    llm_timeout_seconds: float | None = Field(default=None, ge=10, le=300)
+
+
+def _masked_profiles() -> dict:
+    data = list_profiles()
+    return {
+        "active": data["active"],
+        "profiles": [
+            {**p, "llm_api_key": mask_api_key(str(p.get("llm_api_key") or ""))} for p in data["profiles"]
+        ],
+    }
+
+
+@router.get("/api/llm-config/profiles")
+def get_profiles(_user: str = Depends(get_current_user)):
+    """T34：全部接口档案（Key 脱敏）+ 当前生效档案 id。"""
+    return _masked_profiles()
+
+
+@router.post("/api/llm-config/profiles")
+def upsert_profile(req: ProfileUpsert, _user: str = Depends(get_current_user)):
+    """保存或新建档案，并设为当前生效（保存即切换）。"""
+    values = req.model_dump(exclude_none=True, exclude={"id", "name"})
+    if not values and not req.id:
+        raise HTTPException(status_code=422, detail="没有可保存的配置项")
+    save_profile(values, profile_id=req.id, name=req.name)
+    return _masked_profiles()
+
+
+@router.post("/api/llm-config/profiles/{profile_id}/activate")
+def switch_profile(profile_id: str, _user: str = Depends(get_current_user)):
+    """切换当前生效档案（不通配 —— 每个档案的地址/模型/Key 互不覆盖）。"""
+    if activate_profile(profile_id) is None:
+        raise HTTPException(status_code=404, detail=f"档案不存在：{profile_id}")
+    return _masked_profiles()
+
+
+@router.delete("/api/llm-config/profiles/{profile_id}")
+def remove_profile(profile_id: str, _user: str = Depends(get_current_user)):
+    """删除档案（至少保留一个；删当前档案自动切到第一个）。"""
+    if not delete_profile(profile_id):
+        raise HTTPException(status_code=404, detail="档案不存在，或不允许删除最后一个档案")
+    return _masked_profiles()
+
+
 @router.post("/api/llm-config/test")
 def test_connection(req: LLMConfigUpdate, _user: str = Depends(get_current_user)):
     """用给定配置（或当前生效配置）发起最小对话调用，返回成功/失败与错误码。
@@ -50,7 +113,7 @@ def test_connection(req: LLMConfigUpdate, _user: str = Depends(get_current_user)
     """
     from openai import APITimeoutError, OpenAI
 
-    from ..llm_runtime import get_runtime_config, is_masked_key
+    from ..llm_runtime import get_runtime_config
     from ..services.llm import describe_api_error
 
     merged = dict(get_runtime_config())
