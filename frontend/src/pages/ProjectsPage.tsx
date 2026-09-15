@@ -13,7 +13,15 @@ interface DesignRow {
   id: number
   name: string
   updated_at: string | null
+  /** T46a-4：当前所属工作区（用于"移动到其他工作区"） */
+  workspace_id?: number | null
   design?: DesignNode
+}
+
+interface WorkspaceRow {
+  id: number
+  name: string
+  role: string
 }
 
 const PAGE_SIZE = 12
@@ -25,6 +33,8 @@ export default function ProjectsPage() {
   const [offset, setOffset] = useState(0)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  /** T46a-4：可写入的工作区（owner/editor）——只有多于一个时才显示"移动"入口 */
+  const [workspaces, setWorkspaces] = useState<WorkspaceRow[]>([])
 
   const load = useCallback(async (nextOffset: number) => {
     setLoading(true)
@@ -47,6 +57,24 @@ export default function ProjectsPage() {
     load(0)
   }, [load])
 
+  useEffect(() => {
+    api<{ workspaces: WorkspaceRow[] }>('/api/workspaces')
+      .then((r) => setWorkspaces(r.workspaces.filter((w) => w.role !== 'viewer')))
+      .catch(() => setWorkspaces([])) // 工作区接口不可用不影响项目列表
+  }, [])
+
+  const move = async (row: DesignRow, targetId: number) => {
+    const target = workspaces.find((w) => w.id === targetId)
+    if (!target) return
+    if (!window.confirm(`把「${row.name}」移动到「${target.name}」？\n该工作区的成员将能访问这份稿件。`)) return
+    try {
+      await api(`/api/designs/${row.id}/move`, { method: 'POST', body: JSON.stringify({ workspace_id: targetId }) })
+      load(offset)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '移动失败')
+    }
+  }
+
   const remove = async (row: DesignRow) => {
     if (!window.confirm(`删除「${row.name}」？历史版本将一并删除。`)) return
     try {
@@ -59,6 +87,8 @@ export default function ProjectsPage() {
 
   const pages = Math.max(1, Math.ceil(total / PAGE_SIZE))
   const page = Math.floor(offset / PAGE_SIZE) + 1
+  /** 可移动目标：我参与且能写、且不是它当前所在的工作区 */
+  const moveTargets = (row: DesignRow) => workspaces.filter((w) => w.id !== row.workspace_id)
 
   return (
     <div className="mx-auto max-w-[1080px] px-8 py-8" data-testid="projects-page">
@@ -119,6 +149,29 @@ export default function ProjectsPage() {
                 删除
               </button>
             </div>
+            {/* T46a-4：移动到其他工作区（只有存在"别的可写工作区"时才出现） */}
+            {moveTargets(row).length > 0 && (
+              <div className="border-t border-border px-3 py-1.5">
+                <select
+                  className="h-6 w-full rounded border border-input bg-background px-1 text-[11px]"
+                  data-testid={`project-move-${row.id}`}
+                  value=""
+                  title="移动到其他工作区"
+                  onChange={(e) => {
+                    const value = Number(e.target.value)
+                    if (value) void move(row, value)
+                    e.target.value = ''
+                  }}
+                >
+                  <option value="">移动到…</option>
+                  {moveTargets(row).map((w) => (
+                    <option key={w.id} value={w.id}>
+                      {w.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
           </div>
         ))}
       </div>

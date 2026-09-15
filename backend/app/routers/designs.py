@@ -135,6 +135,8 @@ def _design_meta(design: Design) -> dict:
     return {
         "id": design.id,
         "name": design.name,
+        # T46a-4：让前端能显示/排除"当前工作区"（移动稿件时不能把自己移到自己）
+        "workspace_id": design.workspace_id,
         "updated_at": design.updated_at.isoformat() if design.updated_at else None,
         "created_at": design.created_at.isoformat() if design.created_at else None,
         "node_count": node_count,
