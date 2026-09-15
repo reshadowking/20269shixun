@@ -4,6 +4,7 @@
 - real 模式：openai SDK，单次超时 LLM_TIMEOUT_SECONDS，失败重试 1 次后切备用模型
 - chat_json：要求输出 JSON，解析失败重试一次（v2.2 §4.4：非 JSON 重试 1 次）
 """
+import hashlib
 import json
 import logging
 import re
@@ -16,6 +17,11 @@ from openai import APIStatusError, APITimeoutError, OpenAI
 from ..config import get_settings
 
 logger = logging.getLogger(__name__)
+
+
+def prompt_version(system: str) -> str:
+    """T21：提示词版本 = system 文本 sha256 前 12 位（自动生成，禁止手工维护版本号）。"""
+    return hashlib.sha256(system.encode("utf-8")).hexdigest()[:12]
 
 
 def _repair_json_text(text: str) -> str:
@@ -142,10 +148,27 @@ class LLMClient:
     def __init__(self, mock_responder: Callable[[str, str], str] | None = None):
         self.settings = get_settings()
         self.mock_responder = mock_responder
+        # T21：本次生成的全部模型调用记录（由调用方落库；不外发、不含用户文本）
+        self.calls: list[dict] = []
         # 运行时配置（前端 API 配置页保存）优先于 .env，立即生效
         from ..llm_runtime import get_runtime_config
 
         self.runtime = get_runtime_config()
+
+    def note_skipped(self, kind: str, error_code: str) -> None:
+        """T21/T22：没真正调用模型（预算耗尽 / 熔断打开）也记一条，保证"每次生成都有账"。"""
+        self.calls.append(
+            {
+                "kind": kind,
+                "model": "",
+                "prompt_version": "",
+                "tokens_in": 0,
+                "tokens_out": 0,
+                "latency_ms": 0,
+                "ok": False,
+                "error_code": error_code,
+            }
+        )
 
     def cfg(self, name: str):
         """读取配置：运行时（前端保存）> .env。"""
@@ -165,6 +188,7 @@ class LLMClient:
         temperature: float,
         history: list[dict] | None = None,
         deadline: Any | None = None,
+        kind: str = "",
     ) -> str:
         # T20：单次调用超时不得超过剩余时间预算（预算耗尽则直接抛错，不再发请求）
         timeout = float(self.cfg("llm_timeout_seconds"))
@@ -179,18 +203,22 @@ class LLMClient:
             timeout=timeout,
         )
         try:
-            return self._create(client, self.cfg("llm_model"), system, user, temperature, history)
+            return self._create(client, self.cfg("llm_model"), system, user, temperature, history, kind)
         except APITimeoutError as exc:
             # 超时往往是一次性抖动：重试一次主模型，仍失败再切备用（备用超时减半，控制总时长）
             logger.warning("主模型超时（%s），重试一次", describe_api_error(exc))
             try:
-                return self._create(client, self.cfg("llm_model"), system, user, temperature, history)
+                return self._create(client, self.cfg("llm_model"), system, user, temperature, history, kind)
             except Exception as exc2:  # noqa: BLE001
                 logger.warning("重试仍失败，切备用模型: %s", describe_api_error(exc2))
-                return self._create(self._backup_client(), self.cfg("llm_backup_model"), system, user, temperature, history)
+                return self._create(
+                    self._backup_client(), self.cfg("llm_backup_model"), system, user, temperature, history, kind
+                )
         except Exception as exc:  # noqa: BLE001 - 限流/鉴权等切备用模型
             logger.warning("主模型调用失败（%s），切备用模型", describe_api_error(exc))
-            return self._create(self._backup_client(), self.cfg("llm_backup_model"), system, user, temperature, history)
+            return self._create(
+                self._backup_client(), self.cfg("llm_backup_model"), system, user, temperature, history, kind
+            )
 
     def _backup_client(self) -> OpenAI:
         """备用模型客户端：超时减半（如 60s → 30s），避免重试链路总时长失控。"""
@@ -208,18 +236,35 @@ class LLMClient:
         user: str,
         temperature: float,
         history: list[dict] | None = None,
+        kind: str = "",
     ) -> str:
+        started = time.perf_counter()
         # T24：多轮 = system + 历史轮次 + 本轮 user（历史为空则与旧行为逐字相同）
-        resp = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": system},
-                *(history or []),
-                {"role": "user", "content": user},
-            ],
-            temperature=temperature,
-            max_tokens=self.cfg("llm_max_tokens"),  # 防输出截断导致 JSON 解析失败
-        )
+        try:
+            resp = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": system},
+                    *(history or []),
+                    {"role": "user", "content": user},
+                ],
+                temperature=temperature,
+                max_tokens=self.cfg("llm_max_tokens"),  # 防输出截断导致 JSON 解析失败
+            )
+        except Exception as exc:  # 记账后原样抛出，由上层决定兜底/切备用
+            self.calls.append(
+                {
+                    "kind": kind,
+                    "model": model,
+                    "prompt_version": prompt_version(system),
+                    "tokens_in": 0,
+                    "tokens_out": 0,
+                    "latency_ms": int((time.perf_counter() - started) * 1000),
+                    "ok": False,
+                    "error_code": describe_api_error(exc),
+                }
+            )
+            raise
         choice = resp.choices[0]
         usage = getattr(resp, "usage", None)
         gen_logger = logging.getLogger("ai.gen")
@@ -230,6 +275,18 @@ class LLMClient:
             {"in": usage.prompt_tokens, "out": usage.completion_tokens} if usage else "-",
             len(choice.message.content or ""),
         )
+        self.calls.append(
+            {
+                "kind": kind,
+                "model": getattr(resp, "model", model),
+                "prompt_version": prompt_version(system),
+                "tokens_in": int(getattr(usage, "prompt_tokens", 0) or 0),
+                "tokens_out": int(getattr(usage, "completion_tokens", 0) or 0),
+                "latency_ms": int((time.perf_counter() - started) * 1000),
+                "ok": True,
+                "error_code": "",
+            }
+        )
         return choice.message.content or ""
 
     def chat_text(
@@ -239,10 +296,12 @@ class LLMClient:
         temperature: float | None = None,
         history: list[dict] | None = None,
         deadline: Any | None = None,
+        kind: str = "",
     ) -> str:
         if self.is_mock:
             return self.mock_responder(system, user) if self.mock_responder else ""
-        return self._real_chat(system, user, temperature or 0.3, _sanitize_history(history), deadline)
+        # kind 用关键字传：测试替身只需接住已知参数 + **kwargs 即可，不必跟着改签名
+        return self._real_chat(system, user, temperature or 0.3, _sanitize_history(history), deadline, kind=kind)
 
     def chat_json(
         self,
@@ -251,11 +310,12 @@ class LLMClient:
         temperature: float | None = None,
         history: list[dict] | None = None,
         deadline: Any | None = None,
+        kind: str = "",
     ) -> dict | None:
         """输出 JSON；解析失败重试 1 次，重试时把错误定位回传模型让其自纠（v2.2 §4.4）。"""
         clean_history = _sanitize_history(history)
         for attempt in range(2):
-            text = self.chat_text(system, user, temperature, clean_history, deadline)
+            text = self.chat_text(system, user, temperature, clean_history, deadline, kind)
             parsed = _extract_json(text)
             if parsed is not None:
                 return parsed

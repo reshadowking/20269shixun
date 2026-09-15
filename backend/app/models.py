@@ -129,3 +129,26 @@ class DesignLock(Base):
     session_key: Mapped[str] = mapped_column(String(64), primary_key=True)
     locked: Mapped[bool] = mapped_column(Boolean, default=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+
+class AiCall(Base):
+    """T21：AI 调用记账（**不含任何用户文本**，宪法 §二.3）。
+
+    一次生成会产生多条（意图解析 / 摘要 / 填充，含重试与备用模型切换），按 kind 区分。
+    prompt_version 由 system 文本的 sha256 前 12 位自动生成（防"忘改版本号"）。
+    """
+
+    __tablename__ = "ai_calls"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    session_key: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    kind: Mapped[str] = mapped_column(String(16), default="")
+    model: Mapped[str] = mapped_column(String(64), default="")
+    prompt_version: Mapped[str] = mapped_column(String(16), default="")
+    tokens_in: Mapped[int] = mapped_column(Integer, default=0)
+    tokens_out: Mapped[int] = mapped_column(Integer, default=0)
+    latency_ms: Mapped[int] = mapped_column(Integer, default=0)
+    ok: Mapped[bool] = mapped_column(Boolean, default=True)
+    error_code: Mapped[str] = mapped_column(String(64), default="")
+    fallback: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)

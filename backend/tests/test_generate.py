@@ -300,7 +300,7 @@ class TestGenerateAPI:
 
         monkeypatch.setattr(llm_module.LLMClient, "is_mock", property(lambda self: False))
 
-        def boom(self, system, user, temperature, history=None, deadline=None):
+        def boom(self, system, user, temperature, history=None, deadline=None, **_kwargs):
             raise RuntimeError("模拟模型不可用")
 
         monkeypatch.setattr(llm_module.LLMClient, "_real_chat", boom)
@@ -456,7 +456,7 @@ class TestUnwrapDesignPipeline:
         monkeypatch.setattr(
             llm_module.LLMClient,
             "_real_chat",
-            lambda self, system, user, temperature, history=None, deadline=None: json.dumps(payload, ensure_ascii=False),
+            lambda self, system, user, temperature, history=None, deadline=None, **_kw: json.dumps(payload, ensure_ascii=False),
         )
 
     def test_wrapped_tree_adopted_end_to_end(self, monkeypatch):

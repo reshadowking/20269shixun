@@ -581,7 +581,7 @@ def summarize_prompt(prompt: str, client: LLMClient) -> tuple[str, bool]:
     if len(prompt) <= SUMMARY_THRESHOLD:
         return prompt, False
     try:
-        summary = client.chat_text(SUMMARY_SYSTEM, prompt, 0.2).strip()
+        summary = client.chat_text(SUMMARY_SYSTEM, prompt, 0.2, kind="summary").strip()
         if 50 <= len(summary) < len(prompt) * 0.9:
             return summary, True
     except Exception as exc:  # noqa: BLE001 - 摘要失败不阻塞主流程
@@ -628,6 +628,8 @@ class GenerateResult:
     violations_detail: list = field(default_factory=list)
     # T8：本轮降级明细（["icon@节点id"]，无降级为空）——前端聊天面板消费（T8 收尾）
     degraded: list[str] = field(default_factory=list)
+    # T21：本次生成的模型调用记录（由路由层落库到 ai_calls；不含用户文本）
+    ai_calls: list[dict] = field(default_factory=list)
 
 
 # ---- T4 前置：mock 模式增量修改（确定性关键词规则，无 LLM）----
@@ -735,7 +737,12 @@ def generate_design(
             with tracer.start_as_current_span("intent_parse"):
                 try:
                     intent = client.chat_json(
-                        INTENT_SYSTEM, prompt, settings.llm_temperature_parse, history=history, deadline=deadline
+                        INTENT_SYSTEM,
+                        prompt,
+                        settings.llm_temperature_parse,
+                        history=history,
+                        deadline=deadline,
+                        kind="intent",
                     )
                 except Exception as exc:  # noqa: BLE001 - 网络/限流等异常 → 兜底并记录原因
                     error = f"意图解析调用失败：{describe_api_error(exc)}"
@@ -783,6 +790,7 @@ def generate_design(
             # T20：预算不足以再发起一次调用 → 直接兜底，不再打模型（也不重试/切备用）
             fallback = True
             error = "已超出生成时间预算（未发起本次调用）"
+            client.note_skipped("fill", "budget_exhausted")
             filled = None
         elif is_edit and client.is_mock and client.mock_responder is None:
             # T4 前置：mock 模式增量修改产出确定性改写树（关键词规则、无 LLM），
@@ -799,6 +807,7 @@ def generate_design(
                     settings.llm_temperature_fill,
                     history=history,
                     deadline=deadline,
+                    kind="fill",
                 )
             except Exception as exc:  # noqa: BLE001
                 error = f"参数填充调用失败：{describe_api_error(exc)}"
@@ -858,6 +867,16 @@ def generate_design(
         {k: round(v, 2) for k, v in times.items()},
     )
 
+    # T21：一次生成的多条记录共享同一兜底状态；span 上挂业务属性（Jaeger 里能直接看出是否降级）
+    for call in client.calls:
+        call["fallback"] = fallback
+    span = trace.get_current_span()
+    span.set_attribute("template", template_name)
+    span.set_attribute("fallback", fallback)
+    span.set_attribute("degraded_count", len(degraded))
+    span.set_attribute("model", client.calls[-1]["model"] if client.calls else "")
+    span.set_attribute("prompt_version", client.calls[-1]["prompt_version"] if client.calls else "")
+
     return GenerateResult(
         design=design,
         template=template_name,
@@ -870,4 +889,5 @@ def generate_design(
         error=error,
         violations_detail=[asdict(f) for f in fixes],
         degraded=degraded,
+        ai_calls=client.calls,
     )

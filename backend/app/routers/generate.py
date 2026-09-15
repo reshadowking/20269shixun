@@ -9,6 +9,7 @@ from ..config import get_settings
 from ..db import get_db
 from ..security import get_current_user
 from ..services.ai_gateway import GatewayBusy, GenerationDeadline, run_generation
+from ..services.ai_ledger import record_calls
 from ..services.compliance import compliance_rate, enforce_compliance
 from ..services.design_guard import GUARD_REPLY, is_design_request
 from ..services.generate import generate_design
@@ -74,6 +75,7 @@ async def generate(req: GenerateRequest, _user: str = Depends(get_current_user),
         raise HTTPException(status_code=503, detail="当前生成任务较多，请稍后重试") from exc
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"AI 生成失败：{exc}") from exc
+    record_calls(result.ai_calls, req.session_key)  # T21：记账（内部吞异常，不影响返回）
     return GenerateResponse(
         design=result.design,
         template=result.template,
@@ -226,6 +228,8 @@ async def explore_options(req: ExploreRequest, _user: str = Depends(get_current_
         raise HTTPException(status_code=503, detail="当前生成任务较多，请稍后重试") from exc
     options = []
     degraded = False
+    for result in results:
+        record_calls(result.ai_calls, req.session_key)  # T21：两方案各自记账
     for (label, _), result in zip(variants, results):
         if result.fallback:
             degraded = True

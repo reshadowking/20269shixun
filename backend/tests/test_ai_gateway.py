@@ -140,7 +140,7 @@ class TestDeadline:
         monkeypatch.setattr(settings, "llm_min_call_budget_seconds", 0.0)  # 允许发起第一次调用
         calls: list[str] = []
 
-        def slow_real_chat(self, system, user, temperature, history=None, deadline=None):
+        def slow_real_chat(self, system, user, temperature, history=None, deadline=None, **_kwargs):
             calls.append(system[:12])
             time.sleep(0.4)  # 吃掉全部预算
             return json.dumps(
