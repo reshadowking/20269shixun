@@ -75,6 +75,9 @@ def authorize(
 
     user = db.execute(select(User).where(User.username == req.username)).scalar_one_or_none()
     design = db.execute(select(Design).where(Design.collab_room == req.room)).scalars().first()
+    # 兼容当前前端派生出的旧房间名（`design-<id>`）：网关不必等前端切到签名房间名就能先上线
+    if design is None and req.room.startswith("design-") and req.room[7:].isdigit():
+        design = db.get(Design, int(req.room[7:]))
     if user is None or design is None:
         return {"ok": False, "role": None}
     role = _role_for_design(db, design, user.id)

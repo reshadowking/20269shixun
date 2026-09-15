@@ -97,6 +97,21 @@ export class DesignStore {
   ydoc: Y.Doc
   private designMap: Y.Map<unknown>
   provider: WebsocketProvider | null = null
+
+  /**
+   * T46a-3c：把登录 JWT 作为 WS 查询参数带上（网关用它验签 + 查成员资格）。
+   *
+   * 用 `params` 而不是拼进 serverUrl——y-websocket 会自己拼 `/<room>`，拼在 serverUrl 上会拼错。
+   * 没有 token（未登录/未启用网关）时返回 undefined，**行为与改造前完全一致**。
+   */
+  private wsOptions(): { params: Record<string, string> } | undefined {
+    try {
+      const token = localStorage.getItem('design-tool-token') // 与 lib/api.ts 的 TOKEN_KEY 一致
+      return token ? { params: { token } } : undefined
+    } catch {
+      return undefined
+    }
+  }
   /** 快照缓存：文档无更新时返回同一引用（React useSyncExternalStore 要求 getSnapshot 引用稳定） */
   private cached: DesignNode | null = null
   /** AI 版本快照栈（E3-2/P0-1）：优化与增量编辑前保存，恢复时整体重置文档 */
@@ -167,7 +182,7 @@ export class DesignStore {
     if (wsUrl !== undefined) this.wsEndpoint = wsUrl
     if (room !== undefined) this.roomName = room
     if (!this.wsEndpoint || this.provider) return
-    this.provider = new WebsocketProvider(this.wsEndpoint, this.roomName, this.ydoc)
+    this.provider = new WebsocketProvider(this.wsEndpoint, this.roomName, this.ydoc, this.wsOptions())
     this.bindProviderEvents()
     this._reapplyPresence()
   }
@@ -191,7 +206,7 @@ export class DesignStore {
     this.wsEndpoint = wsUrl
     this.roomName = newRoom
     if (wsUrl) {
-      this.provider = new WebsocketProvider(wsUrl, newRoom, this.ydoc)
+      this.provider = new WebsocketProvider(wsUrl, newRoom, this.ydoc, this.wsOptions())
       this.bindProviderEvents()
       this._reapplyPresence()
     }
