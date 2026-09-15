@@ -38,6 +38,22 @@ def init_db() -> None:
 
     Base.metadata.create_all(bind=engine)
     _ensure_version_unique_index()
+    _ensure_image_owner_column()
+
+
+def _ensure_image_owner_column() -> None:
+    """T38：给既有库的 images 表补 owner_id（create_all 不会改已存在的表）。
+
+    幂等：列已存在的报错被吞掉；其它错误显式暴露（不静默失守）。
+    """
+    with engine.begin() as conn:
+        try:
+            conn.execute(text("ALTER TABLE images ADD COLUMN owner_id INTEGER DEFAULT 0"))
+        except Exception as exc:
+            if "duplicate column" not in str(exc).lower():
+                logger.error("images.owner_id 迁移失败：%s", exc)
+                raise
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_images_owner_id ON images (owner_id)"))
 
 
 def _ensure_version_unique_index() -> None:

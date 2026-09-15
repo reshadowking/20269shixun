@@ -62,6 +62,8 @@ class Image(Base):
     __tablename__ = "images"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # T38：资产归属（此前 images 表没有 owner：任何登录用户都能看到全部图片；资产库必须先补这一列）
+    owner_id: Mapped[int] = mapped_column(Integer, default=0, index=True)
     filename: Mapped[str] = mapped_column(String(255))
     path: Mapped[str] = mapped_column(String(512))  # 相对 volume 路径
     design_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
