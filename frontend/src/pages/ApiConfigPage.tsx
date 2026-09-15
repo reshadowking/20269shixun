@@ -30,6 +30,22 @@ interface TestResult {
   code?: string
 }
 
+/** T34：接口档案（多套接口互不覆盖；Key 由后端脱敏返回） */
+interface ProfileRow {
+  id: string
+  name: string
+  llm_base_url?: string
+  llm_api_key?: string
+  llm_model?: string
+  llm_backup_model?: string
+  llm_timeout_seconds?: number
+}
+
+interface ProfileList {
+  active: string
+  profiles: ProfileRow[]
+}
+
 const MODE_OPTIONS = [
   { value: 'real', label: '真实模式（调用 API）' },
   { value: 'mock', label: 'Mock 模式（预置模板，零成本）' },
@@ -51,6 +67,10 @@ export default function ApiConfigPage() {
   const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<TestResult | null>(null)
+  const [profiles, setProfiles] = useState<ProfileRow[]>([])
+  const [activeProfile, setActiveProfile] = useState('')
+  const [profileName, setProfileName] = useState('')
+  const [profileMsg, setProfileMsg] = useState('')
 
   // 加载当前生效配置（Key 脱敏）
   useEffect(() => {
@@ -66,6 +86,93 @@ export default function ApiConfigPage() {
       })
       .catch(() => setCfg(null))
   }, [])
+
+  // T34：加载档案列表（当前生效 id + 全部档案，Key 已脱敏）
+  const refreshProfiles = async () => {
+    try {
+      const data = await api<ProfileList>('/api/llm-config/profiles')
+      setProfiles(data.profiles)
+      setActiveProfile(data.active)
+      setProfileName(data.profiles.find((p) => p.id === data.active)?.name ?? '')
+    } catch {
+      setProfiles([])
+    }
+  }
+  useEffect(() => {
+    void refreshProfiles()
+  }, [])
+
+  /** 选中某档案：把它的值载入表单（Key 不回填——脱敏值会被后端忽略，避免误以为已填）。 */
+  const loadProfile = (id: string) => {
+    const p = profiles.find((item) => item.id === id)
+    setActiveProfile(id)
+    if (!p) return
+    setProfileName(p.name)
+    setBaseUrl(p.llm_base_url ?? '')
+    setModel(p.llm_model ?? '')
+    setBackupModel(p.llm_backup_model ?? '')
+    setTimeoutSec(String(p.llm_timeout_seconds ?? 60))
+    setApiKey('')
+    setKeyEdited(false)
+    setProfileMsg(p.llm_api_key ? '该档案已存 Key（脱敏显示），不改就不用重填。' : '该档案还没有 Key，请填写后保存。')
+  }
+
+  /** 新建：清空表单，避免继承上一个预设/档案的地址与模型（这就是"自定义跟着上一个走"的修法）。 */
+  const handleNewProfile = () => {
+    setActiveProfile('')
+    setProfileName('')
+    setBaseUrl('')
+    setModel('')
+    setBackupModel('')
+    setApiKey('')
+    setKeyEdited(false)
+    setProfileMsg('已清空表单，填写新接口后点「保存档案」即可创建一份新配置。')
+  }
+
+  const handleSaveProfile = async () => {
+    setProfileMsg('')
+    try {
+      const body: Record<string, unknown> = {
+        name: profileName.trim() || '未命名配置',
+        llm_base_url: baseUrl.trim(),
+        llm_model: model.trim(),
+        llm_backup_model: backupModel.trim(),
+        llm_timeout_seconds: Number(timeoutSec) || 60,
+      }
+      if (activeProfile) body.id = activeProfile
+      if (keyEdited && apiKey.trim()) body.llm_api_key = apiKey.trim()
+      const data = await api<ProfileList>('/api/llm-config/profiles', { method: 'POST', body: JSON.stringify(body) })
+      setProfiles(data.profiles)
+      setActiveProfile(data.active)
+      setProfileMsg('已保存并设为当前生效（无需重启）。')
+    } catch (err) {
+      setProfileMsg(err instanceof Error ? err.message : '保存档案失败')
+    }
+  }
+
+  const handleActivateProfile = async (id: string) => {
+    try {
+      const data = await api<ProfileList>(`/api/llm-config/profiles/${id}/activate`, { method: 'POST' })
+      setProfiles(data.profiles)
+      setActiveProfile(data.active)
+      setProfileMsg('已切换生效档案。')
+      await refreshProfiles()
+    } catch (err) {
+      setProfileMsg(err instanceof Error ? err.message : '切换失败')
+    }
+  }
+
+  const handleDeleteProfile = async (id: string) => {
+    if (!window.confirm('删除这份接口配置？')) return
+    try {
+      const data = await api<ProfileList>(`/api/llm-config/profiles/${id}`, { method: 'DELETE' })
+      setProfiles(data.profiles)
+      setActiveProfile(data.active)
+      setProfileMsg('已删除。')
+    } catch (err) {
+      setProfileMsg(err instanceof Error ? err.message : '删除失败')
+    }
+  }
 
   // 供应商预设快捷填充
   const applyProvider = (key: string) => {
@@ -169,6 +276,67 @@ export default function ApiConfigPage() {
           <div className="grid gap-3 rounded-lg border p-4 sm:grid-cols-2">
             <div className="flex flex-col gap-1 sm:col-span-2">
               <label className="text-xs text-muted-foreground">Base URL（OpenAI 兼容地址）</label>
+              {/* T34：接口档案区——可保存多套接口（互相不覆盖），支持新建/切换/删除 */}
+              <div className="flex flex-col gap-2 rounded-md border bg-background p-3" data-testid="profile-section">
+                <div className="flex items-center gap-2">
+                  <select
+                    className="h-9 flex-1 rounded-md border border-input bg-background px-2 text-sm"
+                    data-testid="profile-select"
+                    value={activeProfile}
+                    onChange={(e) => loadProfile(e.target.value)}
+                  >
+                    {!activeProfile && <option value="">（新建配置）</option>}
+                    {profiles.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name}
+                        {p.id === activeProfile ? ' · 当前' : ''}
+                      </option>
+                    ))}
+                  </select>
+                  <Button size="sm" variant="outline" className="h-9 text-xs" data-testid="profile-new" onClick={handleNewProfile}>
+                    ＋ 新建配置
+                  </Button>
+                </div>
+                <Input
+                  className={inputCls}
+                  data-testid="profile-name"
+                  value={profileName}
+                  placeholder="配置名称，例如：本地 Ollama / 千问生产"
+                  onChange={(e) => setProfileName(e.target.value)}
+                />
+                <div className="flex items-center gap-2">
+                  <Button size="sm" className="h-8 text-xs" data-testid="profile-save" onClick={handleSaveProfile}>
+                    保存档案（并设为生效）
+                  </Button>
+                  {activeProfile && (
+                    <>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-8 text-xs"
+                        data-testid="profile-activate"
+                        onClick={() => handleActivateProfile(activeProfile)}
+                      >
+                        设为生效
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-8 text-xs"
+                        data-testid="profile-delete"
+                        onClick={() => handleDeleteProfile(activeProfile)}
+                      >
+                        删除
+                      </Button>
+                    </>
+                  )}
+                </div>
+                {profileMsg && (
+                  <p className="text-xs text-muted-foreground" data-testid="profile-msg">
+                    {profileMsg}
+                  </p>
+                )}
+              </div>
               <Input className={inputCls} data-testid="cfg-base-url" value={baseUrl} placeholder="https://api.deepseek.com/v1" onChange={(e) => setBaseUrl(e.target.value)} />
             </div>
             <div className="flex flex-col gap-1 sm:col-span-2">
