@@ -572,7 +572,7 @@ def incremental_system(locked: bool = False) -> str:
         + vocabulary_text()
         + icon_prompt_section()
         + component_contract_section()
-        + ops_prompt_section()
+        + (ops_prompt_section() if get_settings().prompt_ops_enabled else "")
         + HISTORY_USAGE_SECTION
     )
     if locked:

@@ -26,6 +26,8 @@ class Settings(BaseSettings):
     llm_queue_timeout_seconds: float = 5.0
     llm_deadline_seconds: float = 45.0
     llm_min_call_budget_seconds: float = 5.0
+    # T23 对照用：是否在增量提示词里启用 ops 输出形态（0 = 强制旧的整树输出，用于 A/B 评估）
+    prompt_ops_enabled: bool = True
     # T22：熔断与限流/配额（进程内实现；0 表示不限制）
     ai_breaker_fail_ratio: float = 0.6
     ai_breaker_min_samples: int = 5
