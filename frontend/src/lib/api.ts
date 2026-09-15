@@ -84,3 +84,13 @@ export async function login(username: string, password: string) {
   setAuth(resp.token, resp.username)
   return resp
 }
+
+/** T46a-4：开放注册（后端建用户 + 个人工作区，直接返回 token）。 */
+export async function register(username: string, password: string) {
+  const resp = await api<{ token: string; username: string }>('/api/auth/register', {
+    method: 'POST',
+    body: JSON.stringify({ username, password }),
+  })
+  setAuth(resp.token, resp.username)
+  return resp
+}

@@ -9,6 +9,7 @@ import { CheckCircle2, Eye, EyeOff, Loader2, XCircle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import FollowupModeSelect from '@/components/settings/FollowupModeSelect'
+import MembersPanel from '@/components/collab/MembersPanel'
 import { api } from '@/lib/api'
 
 interface LLMConfig {
@@ -51,7 +52,7 @@ const MODE_OPTIONS = [
   { value: 'mock', label: 'Mock 模式（预置模板，零成本）' },
 ]
 
-export default function ApiConfigPage() {
+export default function ApiConfigPage({ showMembers = false }: { showMembers?: boolean } = {}) {
   const [cfg, setCfg] = useState<LLMConfig | null>(null)
   const [provider, setProvider] = useState('deepseek')
   const [mode, setMode] = useState('real')
@@ -444,6 +445,8 @@ export default function ApiConfigPage() {
             <span className="text-xs text-muted-foreground">未配置 Key 时自动走 Mock 模式（预置模板兜底）</span>
           </div>
         </div>
+        {/* T46a-4：设置页（/settings）才显示「成员与邀请」；/api-config 旧入口保持纯 API 配置 */}
+        {showMembers && <MembersPanel />}
       </div>
     </div>
   )
