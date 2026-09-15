@@ -114,7 +114,7 @@ export default function BeautifyPanel({
             <div className="text-sm font-medium" data-testid="beautify-confirmed">
               基础版已保留（{fmtTime(baseSnapshot.at)}）
             </div>
-            <div className="text-xs text-muted-foreground">
+            <div className="text-xs text-muted-foreground" data-testid="lock-state">
               版面已锁定：布局 / 模块顺序 / 文本 / 尺寸的改动会被写入层拒绝，只放行样式效果。
             </div>
             <Button

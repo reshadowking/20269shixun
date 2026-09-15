@@ -388,16 +388,23 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
     store.setBeautifyLock(true)
     setLayoutLocked(true)
     setBeautifyError('')
+    // T32：同步失败必须**回滚本地状态**——否则 UI 显示"已锁定/已解锁"，服务端却是另一个状态，
+    // 用户后续操作会被闸门静默拒绝（"点了没反应"的根源）。
     sessionApi.setBeautifyLock(sessionKey, true).catch(() => {
-      setBeautifyError('锁定状态未同步到服务端，刷新后可能丢失。请检查网络后重试。')
+      store.setBeautifyLock(false)
+      setLayoutLocked(false)
+      setBeautifyError('版面锁定未能同步到服务端（已回滚为未锁定）。请检查网络后重试。')
     })
   }
 
   const handleUnlockLayout = () => {
     store.setBeautifyLock(false)
     setLayoutLocked(false)
+    setBeautifyError('')
     sessionApi.setBeautifyLock(sessionKey, false).catch(() => {
-      setBeautifyError('解锁状态未同步到服务端，刷新后可能回到锁定态。请检查网络后重试。')
+      store.setBeautifyLock(true)
+      setLayoutLocked(true)
+      setBeautifyError('解除版面锁定失败（已回滚为仍锁定）。请检查网络后重试。')
     })
   }
 
