@@ -20,6 +20,7 @@ import ComponentRecommend, { type RecommendItem } from '@/components/props/Compo
 import CanvasSettings from '@/components/props/CanvasSettings'
 import MultiSelectPanel from '@/components/props/MultiSelectPanel'
 import PropertyPanel from '@/components/props/PropertyPanel'
+import MembersPanel from '@/components/collab/MembersPanel'
 import FollowupModeSelect from '@/components/settings/FollowupModeSelect'
 import AlignToolbar from '@/components/toolbar/AlignToolbar'
 import { Button } from '@/components/ui/button'
@@ -175,13 +176,17 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
   // §三.1：同一个请求把**签发房间**也拿回来（一次调用两样东西，避免重复打接口）。
   const [collabRole, setCollabRole] = useState<string | null>(null)
   const [collabRoomError, setCollabRoomError] = useState('')
+  /** T46a-4：本稿所属工作区（工作台内"邀请协作"入口用） */
+  const [collabWorkspaceId, setCollabWorkspaceId] = useState<number | null>(null)
+  const [inviteOpen, setInviteOpen] = useState(false)
   useEffect(() => {
     if (!designParam || !loaded) return
     let cancelled = false
-    api<{ role: string; room: string }>(`/api/designs/${designParam}/collab`)
+    api<{ role: string; room: string; workspace_id: number | null }>(`/api/designs/${designParam}/collab`)
       .then((r) => {
         if (cancelled) return
         setCollabRole(r.role)
+        setCollabWorkspaceId(r.workspace_id ?? null)
         setCollabRoomError('')
         if (r.room) setSignedRoom(r.room)
       })
@@ -881,6 +886,18 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
           >
             🧭 几何体检
           </Button>
+          {/* T46a-4：工作台内的邀请入口（不用再跑到设置页）；草稿没有工作区时不显示 */}
+          {collabWorkspaceId !== null && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 text-xs"
+              data-testid="invite-collab"
+              onClick={() => setInviteOpen(true)}
+            >
+              👥 邀请协作
+            </Button>
+          )}
           {design.style?.layout !== 'free' && design.children && design.children.length > 0 && (
             <Button
               size="sm"
@@ -995,6 +1012,18 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
           <span data-testid="selection-count">{selectedIds.size > 0 ? `已选 ${selectedIds.size} 个节点` : ''}</span>
         </div>
       </header>
+      {/* T46a-4：邀请协作风幕（复用设置页那块面板，固定到本稿的工作区） */}
+      {inviteOpen && collabWorkspaceId !== null && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-6"
+          data-testid="invite-dialog"
+          onClick={() => setInviteOpen(false)}
+        >
+          <div className="max-h-[80vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+            <MembersPanel fixedWorkspaceId={collabWorkspaceId} onClose={() => setInviteOpen(false)} />
+          </div>
+        </div>
+      )}
       <main className="flex flex-1 overflow-hidden">
         {/* 左侧：组件库（可折叠，P2） */}
         <aside

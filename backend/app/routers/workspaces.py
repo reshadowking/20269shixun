@@ -82,6 +82,50 @@ class JoinRequest(BaseModel):
     token: str = Field(min_length=8, max_length=64)
 
 
+class InviteByNameRequest(BaseModel):
+    username: str = Field(min_length=3, max_length=64)
+    role: str = Field(default="editor", max_length=16)
+
+
+@router.post("/api/workspaces/{workspace_id}/invites/by-username")
+def invite_by_username(
+    workspace_id: int,
+    req: InviteByNameRequest,
+    db: DbSession = Depends(get_db),
+    _user: str = Depends(get_current_user),
+):
+    """T46a-4 第 3 件：直接按用户名把对方加为成员（省掉"发链接→对方点开"两步）。
+
+    口径：
+    - 仅 owner 可邀请（与链接邀请一致）；
+    - 对方**必须已注册**（不存在 → 404，提示先注册；不自动建号，避免悄悄给别人开账号）；
+    - 已是成员 → 409（不静默改角色，让邀请方自己决策）；
+    - 不能邀请自己（422）。
+    """
+    me = _owner_id(db, _user)
+    member = _member(db, workspace_id, me)
+    if member is None:
+        raise HTTPException(status_code=404, detail="工作区不存在或无权访问")
+    if member.role != "owner":
+        raise HTTPException(status_code=403, detail="只有 owner 可以邀请成员")
+    if req.role not in INVITE_ROLES:
+        raise HTTPException(status_code=422, detail=f"role 必须是 {'/'.join(INVITE_ROLES)} 之一")
+
+    target = db.execute(select(User).where(User.username == req.username)).scalar_one_or_none()
+    if target is None:
+        raise HTTPException(status_code=404, detail=f"账号「{req.username}」不存在，请让对方先注册再加入")
+    if target.id == me:
+        raise HTTPException(status_code=422, detail="你已经是该工作区成员")
+    existing = _member(db, workspace_id, target.id)
+    if existing is not None:
+        raise HTTPException(status_code=409, detail=f"「{target.username}」已是成员（当前角色：{existing.role}）")
+
+    db.add(WorkspaceMember(workspace_id=workspace_id, user_id=target.id, role=req.role))
+    db.commit()
+    logger.info("%s 直接把 %s 加为工作区 %s 的 %s", _user, target.username, workspace_id, req.role)
+    return {"ok": True, "username": target.username, "role": req.role}
+
+
 @router.post("/api/workspaces/join")
 def join_workspace(req: JoinRequest, db: DbSession = Depends(get_db), _user: str = Depends(get_current_user)):
     """用邀请 token 加入工作区（一次性；已是成员则幂等返回，不降级角色）。"""

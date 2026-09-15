@@ -6,6 +6,9 @@
  *   ② 成员列表 + 移除（仅 owner；owner 自己不可被移除，后端 422）；
  *   ③ 生成**一次性**邀请链接（editor / viewer），带复制按钮。
  * 没有 owner 权限时按钮直接禁用并说明原因——不让人点了才知道不行。
+ *
+ * T46a-4：新增 ④ 按用户名直接邀请；并支持 `fixedWorkspaceId`（工作台内的"邀请协作"弹窗
+ * 只针对当前稿件的那个工作区，不给切换）。
  */
 import { useCallback, useEffect, useState } from 'react'
 
@@ -23,12 +26,21 @@ const ROLE_LABEL: Record<string, string> = {
 
 const selectCls = 'h-9 rounded-md border border-input bg-background px-2 text-sm'
 
-export default function MembersPanel() {
+export default function MembersPanel({
+  fixedWorkspaceId,
+  onClose,
+}: {
+  /** 指定工作区（工作台弹窗用法）：隐藏选择器，只操作这一个 */
+  fixedWorkspaceId?: number
+  /** 传入则显示关闭按钮（弹窗用法） */
+  onClose?: () => void
+} = {}) {
   const [workspaces, setWorkspaces] = useState<Workspace[]>([])
-  const [workspaceId, setWorkspaceId] = useState<number | null>(null)
+  const [workspaceId, setWorkspaceId] = useState<number | null>(fixedWorkspaceId ?? null)
   const [members, setMembers] = useState<Member[]>([])
   const [inviteRole, setInviteRole] = useState<'editor' | 'viewer'>('editor')
   const [inviteLink, setInviteLink] = useState('')
+  const [inviteUsername, setInviteUsername] = useState('')
   const [msg, setMsg] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
@@ -38,7 +50,7 @@ export default function MembersPanel() {
       .then((r) => {
         setWorkspaces(r.workspaces)
         const mine = r.workspaces.find((w) => w.role === 'owner') ?? r.workspaces[0]
-        if (mine) setWorkspaceId(mine.id)
+        if (fixedWorkspaceId === undefined && mine) setWorkspaceId(mine.id)
       })
       .catch((err: unknown) => setError(err instanceof Error ? err.message : '工作区列表加载失败'))
   }, [])
@@ -71,6 +83,26 @@ export default function MembersPanel() {
       setMsg(`已生成 ${ROLE_LABEL[r.role] ?? r.role} 邀请链接（一次性，用过即失效）`)
     } catch (err) {
       setError(err instanceof Error ? err.message : '生成邀请失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  /** T46a-4：按用户名直接邀请（对方必须已注册；后端 404/409 都带可读原因） */
+  const inviteByUsername = async () => {
+    if (workspaceId === null || !inviteUsername.trim()) return
+    setBusy(true)
+    setError('')
+    try {
+      const r = await api<{ username: string; role: string }>(
+        `/api/workspaces/${workspaceId}/invites/by-username`,
+        { method: 'POST', body: JSON.stringify({ username: inviteUsername.trim(), role: inviteRole }) },
+      )
+      setMsg(`已把「${r.username}」加入工作区（${ROLE_LABEL[r.role] ?? r.role}）`)
+      setInviteUsername('')
+      loadMembers(workspaceId)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '邀请失败')
     } finally {
       setBusy(false)
     }
@@ -110,19 +142,28 @@ export default function MembersPanel() {
             邀请对方加入你的工作区后，你名下的设计稿对 TA 可见（权限按角色生效）。
           </p>
         </div>
-        <select
-          className={selectCls}
-          data-testid="members-workspace-select"
-          value={workspaceId ?? ''}
-          onChange={(e) => setWorkspaceId(Number(e.target.value))}
-        >
-          {workspaces.length === 0 && <option value="">（暂无工作区）</option>}
-          {workspaces.map((w) => (
-            <option key={w.id} value={w.id}>
-              {w.name}（{ROLE_LABEL[w.role] ?? w.role}）
-            </option>
-          ))}
-        </select>
+        <div className="flex shrink-0 items-center gap-2">
+          {fixedWorkspaceId === undefined && (
+            <select
+              className={selectCls}
+              data-testid="members-workspace-select"
+              value={workspaceId ?? ''}
+              onChange={(e) => setWorkspaceId(Number(e.target.value))}
+            >
+              {workspaces.length === 0 && <option value="">（暂无工作区）</option>}
+              {workspaces.map((w) => (
+                <option key={w.id} value={w.id}>
+                  {w.name}（{ROLE_LABEL[w.role] ?? w.role}）
+                </option>
+              ))}
+            </select>
+          )}
+          {onClose && (
+            <Button variant="outline" size="sm" className="h-7 text-xs" data-testid="members-close" onClick={onClose}>
+              关闭
+            </Button>
+          )}
+        </div>
       </div>
 
       <div className="mt-4 flex flex-col gap-2">
@@ -197,6 +238,33 @@ export default function MembersPanel() {
         )}
         <p className="text-[11px] text-muted-foreground">
           链接 72 小时内有效、**只能用一次**；对方登录后打开即加入。
+        </p>
+      </div>
+
+      {/* T46a-4：按用户名直接邀请（省掉发链接那一步；对方需已注册） */}
+      <div className="mt-4 flex flex-col gap-2 rounded-md border p-3">
+        <div className="text-xs text-muted-foreground">按用户名直接邀请（对方需已注册）</div>
+        <div className="flex items-center gap-2">
+          <input
+            className="h-8 flex-1 rounded-md border border-input bg-background px-2 text-xs"
+            data-testid="invite-username"
+            value={inviteUsername}
+            placeholder="对方登录账号，例如 alice"
+            onChange={(e) => setInviteUsername(e.target.value)}
+          />
+          <Button
+            size="sm"
+            className="h-8 text-xs"
+            data-testid="invite-username-submit"
+            disabled={busy || !isOwner || workspaceId === null || !inviteUsername.trim()}
+            title={isOwner ? undefined : '只有工作区所有者可以邀请成员'}
+            onClick={inviteByUsername}
+          >
+            直接邀请
+          </Button>
+        </div>
+        <p className="text-[11px] text-muted-foreground">
+          角色沿用上方选择（当前：{ROLE_LABEL[inviteRole] ?? inviteRole}）；对方下次登录即可看到你的设计稿。
         </p>
       </div>
 

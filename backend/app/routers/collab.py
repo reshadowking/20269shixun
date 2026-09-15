@@ -35,11 +35,19 @@ def collab_room(design_id: int, db: DbSession = Depends(get_db), _user: str = De
         design.collab_room = secrets.token_urlsafe(16)
         db.commit()
         db.refresh(design)
+    # T46a-4：工作台内的"邀请协作"入口需要知道这份稿件属于哪个工作区
+    workspace_id = design.workspace_id
+    if workspace_id is None:
+        from ..services.workspaces import personal_workspace_of
+
+        ws = personal_workspace_of(db, design.owner_id)
+        workspace_id = ws.id if ws else None
     return {
         "room": design.collab_room,
         "role": role,
         "can_edit": role in ("owner", "editor"),
         "design_id": design.id,
+        "workspace_id": workspace_id,
     }
 
 

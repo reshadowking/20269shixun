@@ -31,6 +31,11 @@ function mockFetch(overrides: { workspaces?: unknown[] } = {}) {
     if (path.includes('/members')) {
       return { ok: true, status: 200, json: async () => ({ members: MEMBERS }) }
     }
+    if (path.includes('/invites/by-username')) {
+      // 必须在通用 /invites 之前判：否则会返回"链接"形状的响应
+      const body = JSON.parse(String(options?.body ?? '{}'))
+      return { ok: true, status: 200, json: async () => ({ ok: true, username: body.username, role: body.role }) }
+    }
     if (path.includes('/invites')) {
       return {
         ok: true,
@@ -102,5 +107,33 @@ describe('T46a-4：成员与邀请面板', () => {
       expect(fetchMock.mock.calls.some((c) => String(c[0]).includes('/api/workspaces/3/members/2') && c[1]?.method === 'DELETE')).toBe(true),
     )
     expect(screen.getByTestId('members-msg')).toHaveTextContent('已移除 guest')
+  })
+
+  it('T46a-4：按用户名直接邀请（后端 409/404 原样显示）', async () => {
+    const fetchMock = mockFetch()
+    vi.stubGlobal('fetch', fetchMock)
+    render(<MembersPanel />)
+
+    const input = await screen.findByTestId('invite-username')
+    fireEvent.change(input, { target: { value: 'guest' } })
+    fireEvent.click(screen.getByTestId('invite-username-submit'))
+
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find((c) => String(c[0]).includes('/invites/by-username'))
+      expect(call).toBeTruthy()
+      expect(String(call?.[1]?.body)).toContain('"username":"guest"')
+    })
+    expect(await screen.findByTestId('members-msg')).toHaveTextContent('guest')
+  })
+
+  it('T46a-4：固定工作区模式隐藏选择器，非 owner 时按用户名邀请禁用', async () => {
+    // 固定到"我是 editor"的工作区 → 不是 owner
+    vi.stubGlobal('fetch', mockFetch({ workspaces: [WORKSPACES[1]] }))
+    render(<MembersPanel fixedWorkspaceId={9} onClose={() => {}} />)
+
+    expect(await screen.findByTestId('member-row-demo')).toBeInTheDocument()
+    expect(screen.queryByTestId('members-workspace-select')).not.toBeInTheDocument()
+    expect(screen.getByTestId('invite-username-submit')).toBeDisabled()
+    expect(screen.getByTestId('members-close')).toBeInTheDocument()
   })
 })
