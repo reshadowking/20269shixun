@@ -11,6 +11,7 @@ from .otel import init_otel
 from .routers import (
     assist,
     auth,
+    collab,
     designs,
     export,
     generate,
@@ -53,6 +54,7 @@ app.include_router(designs.router)
 app.include_router(sessions.router)
 app.include_router(images.router)
 app.include_router(workspaces.router)
+app.include_router(collab.router)
 
 
 @app.get("/")

@@ -40,7 +40,20 @@ def init_db() -> None:
     _ensure_version_unique_index()
     _ensure_image_owner_column()
     _ensure_workspace_columns()
+    _ensure_collab_room_column()
     _seed_personal_workspaces()
+
+
+def _ensure_collab_room_column() -> None:
+    """T46a-3：给既有库的 designs 补 collab_room（幂等）。"""
+    with engine.begin() as conn:
+        try:
+            conn.execute(text("ALTER TABLE designs ADD COLUMN collab_room VARCHAR(64)"))
+        except Exception as exc:
+            if "duplicate column" not in str(exc).lower():
+                logger.error("designs.collab_room 迁移失败：%s", exc)
+                raise
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_designs_collab_room ON designs (collab_room)"))
 
 
 def _ensure_workspace_columns() -> None:

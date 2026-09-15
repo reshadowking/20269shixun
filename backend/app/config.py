@@ -61,6 +61,8 @@ class Settings(BaseSettings):
     # 端口
     backend_port: int = 8000
     y_websocket_url: str = "ws://localhost:1234"
+    # T46a-3：协作鉴权网关的内网令牌（网关调 /api/collab/authorize 时必须带上；空 = 该接口关闭）
+    collab_internal_token: str = ""
 
 
 @lru_cache

@@ -37,6 +37,8 @@ class Design(Base):
     owner_id: Mapped[int] = mapped_column(Integer, index=True)
     # T46a：归属工作区（NULL = 兼容期，读作创建人的个人工作区）
     workspace_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    # T46a-3：协作房间名（服务端签发、不可猜；首次访问 /collab 时生成并持久化，保证多人拿到同一个）
+    collab_room: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     # 设计 JSON（toJSON 后的 DesignNode 树）
     design_json: Mapped[str] = mapped_column(Text, default="{}")
     # Yjs 实时文档状态由 y-websocket + leveldb 承担（B3-2 决策：实时状态与 PG 整树快照职责分离）；
