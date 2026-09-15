@@ -87,6 +87,78 @@ class TestIncrementalEdit:
         assert result.design == CURRENT
 
 
+class TestEditStructureGate:
+    """T16：编辑结果不得丢失既有节点（空壳树能过 Schema，却会把画布清空）。"""
+
+    @staticmethod
+    def _responder(tree: dict):
+        class Responder:
+            def __call__(self, system: str, user: str) -> str:
+                return json.dumps(tree, ensure_ascii=False) if "设计修改器" in system else ""
+
+        return Responder()
+
+    def test_empty_shell_tree_rejected(self):
+        """模型返回 id/type 齐全的空壳树 → 拒绝并保持画布原样（实测曾出现 3 个子节点 → 0）。"""
+        shell = {"id": "root", "type": "frame", "children": []}
+        result = generate_design("把标题改小", LLMClient(mock_responder=self._responder(shell)), current_design=CURRENT)
+        assert result.fallback is True
+        assert result.design == CURRENT
+        assert "未保留原有结构" in result.error
+
+    def test_root_id_change_rejected(self):
+        """根 id 变化 → 拒绝（第一判定分支）。"""
+        other_root = json.loads(json.dumps(CURRENT))
+        other_root["id"] = "root-v2"
+        result = generate_design("换个根容器", LLMClient(mock_responder=self._responder(other_root)), current_design=CURRENT)
+        assert result.fallback is True
+        assert "根节点 id 变化" in result.error
+
+    def test_added_node_passes(self):
+        """新增节点不属于「丢失」，必须放行。"""
+        added = json.loads(json.dumps(CURRENT))
+        added["children"].append(
+            {"id": "badge", "type": "component", "componentType": "tag", "props": {"text": "NEW"}}
+        )
+        result = generate_design("加个标签", LLMClient(mock_responder=self._responder(added)), current_design=CURRENT)
+        assert result.fallback is False
+        assert any(c["id"] == "badge" for c in result.design["children"])
+
+    def test_removed_node_rejected(self):
+        """删掉任意一个既有节点（即使只删一个）→ 拒绝。"""
+        removed = json.loads(json.dumps(CURRENT))
+        removed["children"] = [c for c in removed["children"] if c["id"] != "note"]
+        result = generate_design("删掉说明", LLMClient(mock_responder=self._responder(removed)), current_design=CURRENT)
+        assert result.fallback is True
+        assert result.design == CURRENT
+
+    def test_same_count_all_new_ids_rejected(self):
+        """节点数不变但 id 全换（1:1 替换）→ 拒绝：判定口径是 id 多重集，不是节点数。"""
+        replaced = {
+            "id": "root",
+            "type": "frame",
+            "style": CURRENT["style"],
+            "children": [
+                {"id": "n1", "type": "text", "props": {"text": "a"}},
+                {"id": "n2", "type": "text", "props": {"text": "b"}},
+                {"id": "n3", "type": "text", "props": {"text": "c"}},
+            ],
+        }
+        result = generate_design("重写整页文案", LLMClient(mock_responder=self._responder(replaced)), current_design=CURRENT)
+        assert result.fallback is True
+        assert result.design == CURRENT
+
+    def test_unknown_component_degraded_not_treated_as_loss(self):
+        """未知组件降级为 frame 但保留 id → 不算丢失，不得误拒。"""
+        degraded_tree = json.loads(json.dumps(CURRENT))
+        degraded_tree["children"].append(
+            {"id": "checkbox-1", "type": "component", "componentType": "checkbox", "props": {"text": "同意"}}
+        )
+        result = generate_design("加个勾选框", LLMClient(mock_responder=self._responder(degraded_tree)), current_design=CURRENT)
+        assert result.fallback is False
+        assert any(d.startswith("checkbox@") for d in result.degraded)
+
+
 class TestIncrementalApi:
     def test_generate_with_design_returns_edit(self, client, auth_headers):
         resp = client.post(

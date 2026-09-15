@@ -18,6 +18,7 @@ from ..config import get_settings
 from ..design.validator import SchemaError, validate_design
 from .beautify import preset_value, vocabulary_text
 from .compliance import compliance_rate, enforce_compliance
+from .edit_guard import structure_loss_reason
 from .llm import LLMClient, describe_api_error, to_llm_dict
 from .templates import KEYWORD_MAP, TEMPLATES, free_default_design
 
@@ -641,13 +642,21 @@ def generate_design(
             # LLM 产物先宽容修复常见格式错误（type 误写/数值超界/枚举非法/props 类型），
             # T8 起未知组件/未知类型降级、未知键裁剪（不再整树回退），再过 Schema
             filled = repair_design(filled, degraded)
-            try:
-                validate_design(filled)
-            except SchemaError as exc:
-                logger.warning("LLM 产物 Schema 校验失败，回退%s: %s", "原设计" if is_edit else ("自由生成兜底稿" if is_free else "模板"), exc.errors[:2])
+            # T16：编辑结果必须保留既有节点——空壳树能过 Schema，但会把画布清空
+            reason = structure_loss_reason(current_design or {}, filled) if is_edit else None
+            if reason:
+                gen_logger.warning("编辑结果被结构闸门拒绝：%s", reason)
                 fallback = True
-                error = f"生成结果未通过 Schema 校验（{exc.errors[0][:80]}）"
+                error = f"AI 修改未保留原有结构（{reason}），画布保持原样"
                 filled = default
+            else:
+                try:
+                    validate_design(filled)
+                except SchemaError as exc:
+                    logger.warning("LLM 产物 Schema 校验失败，回退%s: %s", "原设计" if is_edit else ("自由生成兜底稿" if is_free else "模板"), exc.errors[:2])
+                    fallback = True
+                    error = f"生成结果未通过 Schema 校验（{exc.errors[0][:80]}）"
+                    filled = default
     times["param_fill"] = time.perf_counter() - t0
     gen_logger.info("参数填充 ok=%s 耗时=%.2fs error=%s", filled is not None and not fallback, times["param_fill"], error or "-")
 
