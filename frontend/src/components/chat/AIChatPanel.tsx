@@ -8,7 +8,7 @@ import type { DesignNode } from '@/design/types'
 import { api } from '@/lib/api'
 import { GUARD_HINT, isDesignRequest } from '@/lib/designGuard'
 import { diffDesign } from '@/design/diff'
-import { isEditIntent } from '@/lib/editIntent'
+import { isNewDesignIntent } from '@/lib/editIntent'
 import {
   loadExploreArchive,
   saveExploreArchive,
@@ -347,6 +347,8 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
     const isEdit = editDesign !== undefined
     try {
       const body: Record<string, unknown> = { prompt }
+      // T24：带上会话 id——后端据此取最近 2 轮历史（含上一轮指令原文）
+      body.session_key = sessionKey
       if (isEdit) {
         body.design = editDesign
         // T4 批2：告知后端当前处于版面锁定阶段（仅影响提示词措辞）。安全判定不在
@@ -361,11 +363,15 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
       if (resp.fallback) {
         if (isEdit) {
           // 增量修改失败：画布保持原样（后端兜底返回原树），提示重试
+          // T24：结构/落地类失败时给出"怎么重做"的出口（否则用户只会反复重试同一句）
+          const rebuildHint = /未保留原有结构|无法落地/.test(resp.error ?? '')
+            ? '\n如果是想整体重做，请以「重新设计…」开头。'
+            : ''
           setMessages((m) => [
             ...m,
             {
               role: 'assistant',
-              text: `⚠️ 修改失败（画布保持原样）\n原因：${resp.error ?? '未知'}。\n可点击下方「↻ 重试上次需求」重新尝试。`,
+              text: `⚠️ 修改失败（画布保持原样）\n原因：${resp.error ?? '未知'}。\n可点击下方「↻ 重试上次需求」重新尝试。${rebuildHint}`,
             },
           ])
           return
@@ -383,8 +389,22 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
       }
       // D1：成功响应携带合规明细时展示逐项报告（生成与增量均适用）
       setComplianceReport(resp.violations_detail && resp.violations_detail.length > 0 ? resp.violations_detail : null)
+      // T24：有稿时不再前置拦截"无编辑动词"的输入（"太丑了""再来一版"这类对话式延续），
+      // 交由模型按 INCREMENTAL_SYSTEM 的兜底指令判定；模型原样返回（零改动）时如实说明，
+      // 不冒充"已应用修改 ✓"，也不产生一次无意义的撤销步。
+      const changedForEdit = isEdit && editDesign ? diffDesign(editDesign, resp.design) : []
+      if (isEdit && editDesign && changedForEdit.length === 0) {
+        setMessages((m) => [
+          ...m,
+          {
+            role: 'assistant',
+            text: '这次没有需要改动的地方：没有识别出可执行的界面改动。\n如果这是无关问题，我只处理 UI / 界面设计相关需求；如果想整体重做，请以「重新设计…」开头。',
+          },
+        ])
+        return
+      }
       if (isEdit && editDesign && onIncrementalEdit) {
-        const changed = diffDesign(editDesign, resp.design)
+        const changed = changedForEdit
         // T4 批1：上层把 AI 结果送服务端闸门（锁状态由服务端判定）后再落地
         const outcome = await onIncrementalEdit(resp.design, changed)
         if (outcome && outcome.ok === false) {
@@ -402,11 +422,12 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
         const degradedNote = resp.degraded?.length
           ? `\n⚠️ 有 ${resp.degraded.length} 项能力暂不支持，已用近似组件表达。`
           : ''
+        const echo = prompt.length > 20 ? `${prompt.slice(0, 20)}…` : prompt
         setMessages((m) => [
           ...m,
           {
             role: 'assistant',
-            text: `已应用修改 ✓（仅改动 ${changed.length > 0 ? changed.length : '指定'} 处，其余保持不变）${droppedNote}${degradedNote}\n被修改的节点已高亮提示；输入「撤销」可回到修改前。`,
+            text: `按你说的「${echo}」，已应用修改 ✓（仅改动 ${changed.length > 0 ? changed.length : '指定'} 处，其余保持不变）${droppedNote}${degradedNote}\n被修改的节点已高亮提示；输入「撤销」可回到修改前。`,
           },
         ])
         return
@@ -549,7 +570,9 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
     // 缺陷 9 + T10：角色边界分级——增量修改路径（有设计稿且命中编辑动词）不再调守卫：
     // "用户在有设计稿时提要求"本来就该直达模型（§4.9 实测「加高级功能」被误拦）。
     // 首轮生成保持原有强度——「今天天气怎么样」这类无编辑动词的话仍被拦下。
-    const incremental = Boolean(design) && isEditIntent(raw)
+    // T24：有设计稿时按"延续"处理——只有显式"设计/重新设计…"才走重新生成；
+    // 这样"太丑了""再来一版"这类对话式输入不再被角色守卫拦下（无稿时的守卫不变）。
+    const incremental = Boolean(design) && !isNewDesignIntent(raw)
     if (!incremental && !isDesignRequest(raw)) {
       setMessages((m) => [...m, { role: 'assistant', text: GUARD_HINT }])
       return

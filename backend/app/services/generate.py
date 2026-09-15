@@ -443,6 +443,15 @@ LOCKED_STAGE_SECTION = """
 3. 用户说"整个页面/所有卡片/全部模块"时，对全部符合语义的节点施加效果。"""
 
 
+# T24：会话历史的使用规则（三段 system 共用；history 为空时该段不产生任何行为影响）
+HISTORY_USAGE_SECTION = """
+
+## 对话上下文使用规则（有 history 时生效）
+1. history 里是此前轮次的需求与结果，仅作背景；以本次 user_request 为准；
+2. 若历史与本轮要求冲突，按本轮执行，并且只改必要节点；
+3. 历史中出现过的文案/数值默认保持不变，除非本轮明确要求修改。"""
+
+
 def incremental_system(locked: bool = False) -> str:
     """组装增量修改 system 提示词（T4 批2）：既有约束 + 效果词典 + 图标清单 +（locked 时）锁定约束段。
 
@@ -460,6 +469,7 @@ def incremental_system(locked: bool = False) -> str:
         + "\n\n## 可用美化效果（只能从中选，禁止自创 CSS 值）\n"
         + vocabulary_text()
         + icon_prompt_section()
+        + HISTORY_USAGE_SECTION
     )
     if locked:
         text += LOCKED_STAGE_SECTION
@@ -467,13 +477,13 @@ def incremental_system(locked: bool = False) -> str:
 
 
 def fill_system_text() -> str:
-    """FILL_SYSTEM + 运行期注入段（图标清单，T9）。generate_design 实际发送的文本。"""
-    return FILL_SYSTEM + icon_prompt_section()
+    """FILL_SYSTEM + 运行期注入段（图标清单 T9 + 对话上下文规则 T24）。generate_design 实际发送的文本。"""
+    return FILL_SYSTEM + icon_prompt_section() + HISTORY_USAGE_SECTION
 
 
 def free_system_text() -> str:
-    """FREE_SYSTEM + 运行期注入段（图标清单，T9）。generate_design 实际发送的文本。"""
-    return FREE_SYSTEM + icon_prompt_section()
+    """FREE_SYSTEM + 运行期注入段（图标清单 T9 + 对话上下文规则 T24）。generate_design 实际发送的文本。"""
+    return FREE_SYSTEM + icon_prompt_section() + HISTORY_USAGE_SECTION
 
 SUMMARY_SYSTEM = """你是需求摘要器。把用户的长篇设计需求压缩为简洁的结构化需求描述（200 字以内），供下游生成设计稿。
 硬约束：
@@ -603,12 +613,16 @@ def generate_design(
     client: LLMClient | None = None,
     current_design: dict[str, Any] | None = None,
     locked: bool = False,
+    history: list[dict] | None = None,
 ) -> GenerateResult:
     """生成设计稿。current_design 非空时走【增量修改】模式（P0-1）：
     基于当前树只改用户指定部分，其他节点保持不变；失败兜底返回原树。
 
     locked（T4 批2）只影响增量提示词措辞（是否注入锁定约束段），不参与任何
     安全判定——锁定与否的权威是服务端闸门按 design_locks 查表的结果。
+
+    history（T24）：会话最近若干轮（[{"role","content"}]），仅作背景，
+    **以本次 user_request 为准**；为空时行为与改造前逐字相同。
     """
     settings = get_settings()
     client = client or LLMClient()
@@ -626,7 +640,7 @@ def generate_design(
     if not is_edit:
         with tracer.start_as_current_span("intent_parse"):
             try:
-                intent = client.chat_json(INTENT_SYSTEM, prompt, settings.llm_temperature_parse)
+                intent = client.chat_json(INTENT_SYSTEM, prompt, settings.llm_temperature_parse, history=history)
             except Exception as exc:  # noqa: BLE001 - 网络/限流等异常 → 兜底并记录原因
                 error = f"意图解析调用失败：{type(exc).__name__} {str(exc)[:120]}"
                 intent = None
@@ -649,7 +663,8 @@ def generate_design(
     fill_prompt = prompt
     summarized = False
     with tracer.start_as_current_span("prompt_summary"):
-        if len(prompt) > SUMMARY_THRESHOLD and not client.is_mock:
+        # T24：编辑模式禁用摘要——"你原话怎么说的"必须原样进模型（首轮生成仍按阈值压缩）
+        if len(prompt) > SUMMARY_THRESHOLD and not client.is_mock and not is_edit:
             fill_prompt, summarized = summarize_prompt(prompt, client)
     times["prompt_summary"] = time.perf_counter() - t0
     gen_logger.info("模板=%s 摘要=%s 摘要后%d字符", template_name, summarized, len(fill_prompt))
@@ -659,12 +674,12 @@ def generate_design(
     with tracer.start_as_current_span("param_fill"):
         if is_edit:
             default = current_design  # 增量失败兜底：返回原树（画布不变，不丢用户调整）
-            user_payload = {"user_request": fill_prompt, "current_design": current_design}
+            user_payload = {"user_request": fill_prompt, "current_design": current_design, "history": history or []}
             fill_system = incremental_system(locked)
         else:
             is_free = template_name == "free"
             default = free_default_design(prompt) if is_free else TEMPLATES.get(template_name, TEMPLATES["landing"])
-            user_payload = {"user_request": fill_prompt, "intent": intent}
+            user_payload = {"user_request": fill_prompt, "intent": intent, "history": history or []}
             if not is_free:
                 user_payload["template_skeleton"] = default
             fill_system = free_system_text() if is_free else fill_system_text()
@@ -677,7 +692,7 @@ def generate_design(
             filled = mock_edited_design(prompt, current_design or {})
         else:
             try:
-                filled = client.chat_json(fill_system, to_llm_dict(user_payload), settings.llm_temperature_fill)
+                filled = client.chat_json(fill_system, to_llm_dict(user_payload), settings.llm_temperature_fill, history=history)
             except Exception as exc:  # noqa: BLE001
                 error = f"参数填充调用失败：{describe_api_error(exc)}"
                 filled = None

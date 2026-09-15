@@ -16,7 +16,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session as DbSession
 
-from ..models import ChatMessage, ChatSession, DesignLock, SessionToolCall
+from ..models import ChatMessage, ChatSession, DesignLock, SessionToolCall, User
 
 SESSION_KEY_RE = re.compile(r"^[A-Za-z0-9_-]{3,64}$")
 MAX_MESSAGES = 200
@@ -47,6 +47,14 @@ def get_owned_session(db: DbSession, owner_id: int, key: str) -> ChatSession | N
     return db.execute(
         select(ChatSession).where(ChatSession.owner_id == owner_id, ChatSession.session_key == key)
     ).scalar_one_or_none()
+
+
+def owner_id_of(db: DbSession, username: str) -> int | None:
+    """用户名 → owner_id；用户不存在返回 None（403/404 的判定留给 router 层）。
+
+    T24：history 服务需要"查不到就安全降级"，不能 import router 的私有 _owner_id（会翻层）。
+    """
+    return db.execute(select(User.id).where(User.username == username)).scalar_one_or_none()
 
 
 def get_or_create_session(

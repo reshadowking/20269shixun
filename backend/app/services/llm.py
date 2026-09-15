@@ -114,6 +114,24 @@ def _json_error_hint(text: str) -> str:
         return f"JSONDecodeError: {exc.msg} @{exc.pos} 附近: ...{ctx}..."
 
 
+def _sanitize_history(history: list[dict] | None) -> list[dict]:
+    """T24：会话历史只允许 user/assistant 且内容非空；任一项非法即**整段丢弃**（记 warning）。
+
+    "整段丢弃"而非"跳过该项"：历史是与本次指令并列的上下文，掺半条不如不掺。
+    """
+    if not history:
+        return []
+    clean: list[dict] = []
+    for item in history:
+        role = item.get("role") if isinstance(item, dict) else None
+        content = item.get("content") if isinstance(item, dict) else None
+        if role not in ("user", "assistant") or not isinstance(content, str) or not content.strip():
+            logger.warning("会话历史含非法轮次（role=%r），整段丢弃", role)
+            return []
+        clean.append({"role": role, "content": content})
+    return clean
+
+
 class LLMClient:
     def __init__(self, mock_responder: Callable[[str, str], str] | None = None):
         self.settings = get_settings()
@@ -134,25 +152,25 @@ class LLMClient:
     def is_mock(self) -> bool:
         return self.cfg("llm_mode") != "real" or not self.cfg("llm_api_key")
 
-    def _real_chat(self, system: str, user: str, temperature: float) -> str:
+    def _real_chat(self, system: str, user: str, temperature: float, history: list[dict] | None = None) -> str:
         client = OpenAI(
             base_url=self.cfg("llm_base_url"),
             api_key=self.cfg("llm_api_key"),
             timeout=self.cfg("llm_timeout_seconds"),
         )
         try:
-            return self._create(client, self.cfg("llm_model"), system, user, temperature)
+            return self._create(client, self.cfg("llm_model"), system, user, temperature, history)
         except APITimeoutError as exc:
             # 超时往往是一次性抖动：重试一次主模型，仍失败再切备用（备用超时减半，控制总时长）
             logger.warning("主模型超时（%s），重试一次", describe_api_error(exc))
             try:
-                return self._create(client, self.cfg("llm_model"), system, user, temperature)
+                return self._create(client, self.cfg("llm_model"), system, user, temperature, history)
             except Exception as exc2:  # noqa: BLE001
                 logger.warning("重试仍失败，切备用模型: %s", describe_api_error(exc2))
-                return self._create(self._backup_client(), self.cfg("llm_backup_model"), system, user, temperature)
+                return self._create(self._backup_client(), self.cfg("llm_backup_model"), system, user, temperature, history)
         except Exception as exc:  # noqa: BLE001 - 限流/鉴权等切备用模型
             logger.warning("主模型调用失败（%s），切备用模型", describe_api_error(exc))
-            return self._create(self._backup_client(), self.cfg("llm_backup_model"), system, user, temperature)
+            return self._create(self._backup_client(), self.cfg("llm_backup_model"), system, user, temperature, history)
 
     def _backup_client(self) -> OpenAI:
         """备用模型客户端：超时减半（如 60s → 30s），避免重试链路总时长失控。"""
@@ -162,11 +180,21 @@ class LLMClient:
             timeout=max(15.0, float(self.cfg("llm_timeout_seconds")) / 2),
         )
 
-    def _create(self, client: OpenAI, model: str, system: str, user: str, temperature: float) -> str:
+    def _create(
+        self,
+        client: OpenAI,
+        model: str,
+        system: str,
+        user: str,
+        temperature: float,
+        history: list[dict] | None = None,
+    ) -> str:
+        # T24：多轮 = system + 历史轮次 + 本轮 user（历史为空则与旧行为逐字相同）
         resp = client.chat.completions.create(
             model=model,
             messages=[
                 {"role": "system", "content": system},
+                *(history or []),
                 {"role": "user", "content": user},
             ],
             temperature=temperature,
@@ -184,15 +212,22 @@ class LLMClient:
         )
         return choice.message.content or ""
 
-    def chat_text(self, system: str, user: str, temperature: float | None = None) -> str:
+    def chat_text(self, system: str, user: str, temperature: float | None = None, history: list[dict] | None = None) -> str:
         if self.is_mock:
             return self.mock_responder(system, user) if self.mock_responder else ""
-        return self._real_chat(system, user, temperature or 0.3)
+        return self._real_chat(system, user, temperature or 0.3, _sanitize_history(history))
 
-    def chat_json(self, system: str, user: str, temperature: float | None = None) -> dict | None:
+    def chat_json(
+        self,
+        system: str,
+        user: str,
+        temperature: float | None = None,
+        history: list[dict] | None = None,
+    ) -> dict | None:
         """输出 JSON；解析失败重试 1 次，重试时把错误定位回传模型让其自纠（v2.2 §4.4）。"""
+        clean_history = _sanitize_history(history)
         for attempt in range(2):
-            text = self.chat_text(system, user, temperature)
+            text = self.chat_text(system, user, temperature, clean_history)
             parsed = _extract_json(text)
             if parsed is not None:
                 return parsed

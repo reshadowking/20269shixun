@@ -12,7 +12,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session as DbSession
 
 from ..db import get_db
-from ..models import ChatSession, Design, User
+from ..models import ChatSession, Design
 from ..security import get_current_user
 from ..services import sessions as sessions_service
 from ..services.beautify import apply_locked_edit
@@ -23,12 +23,12 @@ router = APIRouter(tags=["sessions"])
 
 
 def _owner_id(db: DbSession, username: str) -> int:
-    user = db.execute(select(User).where(User.username == username)).scalar_one_or_none()
-    if user is None:
+    user_id = sessions_service.owner_id_of(db, username)
+    if user_id is None:
         # 403 而非 401：token 本身合法，只是库里没有该用户。用 401 会触发前端的
         # "清凭证 + 跳登录"逻辑，把一次数据异常放大成整站掉线（见排查报告 P1-2）
         raise HTTPException(status_code=403, detail="账号不存在，请重新登录")
-    return user.id
+    return user_id
 
 
 def _own_session(db: DbSession, username: str, session_key: str) -> ChatSession:

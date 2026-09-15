@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     llm_max_tokens: int = 16384  # 输出上限：42K 字符的完整 DesignNode 树 ≈ 8200 token，8192 会截断（finish_reason=length）
     llm_temperature_parse: float = 0.2
     llm_temperature_fill: float = 0.6  # 0.3 太死板（相同提示词结果雷同），0.6 平衡多样与稳定
+    llm_history_max_chars: int = 1200  # T24：会话历史进提示词的字符预算（超出丢最旧一轮）
 
     # 数据库（测试用 sqlite 覆盖此值）
     pg_url: str = "postgresql+psycopg://postgres:postgres@localhost:5432/design"

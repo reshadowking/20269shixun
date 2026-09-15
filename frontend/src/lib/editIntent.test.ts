@@ -3,7 +3,23 @@
  */
 import { describe, expect, it } from 'vitest'
 
-import { isEditIntent } from './editIntent'
+import { isEditIntent, isNewDesignIntent } from './editIntent'
+
+describe('isNewDesignIntent（T24：有稿时区分"延续"与"重做"）', () => {
+  it('显式新设计意图', () => {
+    expect(isNewDesignIntent('设计一个登录页')).toBe(true)
+    expect(isNewDesignIntent('重新设计一个仪表板')).toBe(true)
+    expect(isNewDesignIntent('自由生成一个设置页')).toBe(true)
+    expect(isNewDesignIntent('  做一个电商优惠券页  ')).toBe(true)
+  })
+
+  it('对话式延续不算新设计（否则会被守卫拦下或误判为重做）', () => {
+    expect(isNewDesignIntent('太丑了')).toBe(false)
+    expect(isNewDesignIntent('再来一版')).toBe(false)
+    expect(isNewDesignIntent('把按钮改红')).toBe(false)
+    expect(isNewDesignIntent('不行，重来')).toBe(false)
+  })
+})
 
 describe('isEditIntent', () => {
   it('修改类指令判定为增量编辑', () => {

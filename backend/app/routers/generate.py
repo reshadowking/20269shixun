@@ -3,11 +3,14 @@ from dataclasses import asdict
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator
+from sqlalchemy.orm import Session as DbSession
 
+from ..db import get_db
 from ..security import get_current_user
 from ..services.compliance import compliance_rate, enforce_compliance
 from ..services.design_guard import GUARD_REPLY, is_design_request
 from ..services.generate import generate_design
+from ..services.history import recent_turns
 from ..services.questions import FOLLOWUP_MODES, analyze_questions
 from ..services.templates import TEMPLATE_KEYS
 
@@ -25,6 +28,9 @@ class GenerateRequest(BaseModel):
     # design_locks 查表），不读本字段——客户端谎报 locked=false 只会让模型更可能
     # 产出被闸门拒绝的改动（体验变差），不构成绕过锁的安全漏洞。
     locked: bool = False
+    # T24：会话 id（可选，向后兼容）——服务端据此取最近 2 轮历史（含上一轮指令原文）。
+    # 与 T21 的记账复用同一字段；缺省/越权/不存在都会安全降级为"无历史"。
+    session_key: str | None = Field(default=None, max_length=64)
 
 
 class GenerateResponse(BaseModel):
@@ -44,14 +50,15 @@ class GenerateResponse(BaseModel):
 
 
 @router.post("/api/generate", response_model=GenerateResponse)
-def generate(req: GenerateRequest, _user: str = Depends(get_current_user)):
+def generate(req: GenerateRequest, _user: str = Depends(get_current_user), db: DbSession = Depends(get_db)):
     """自然语言生成设计稿（意图解析 + 模板匹配 + 参数填充 + 合规检查）。"""
     # 缺陷 9 + T10：角色边界分级——带 design 的增量修改不调守卫（「有设计稿且提要求」
     # 本来就该放行，§4.9 实测「加高级功能」被误拦）；首轮生成保持原有强度。
     if req.design is None and not is_design_request(req.prompt):
         raise HTTPException(status_code=422, detail=GUARD_REPLY)
+    history = recent_turns(db, req.session_key, _user)
     try:
-        result = generate_design(req.prompt, current_design=req.design, locked=req.locked)
+        result = generate_design(req.prompt, current_design=req.design, locked=req.locked, history=history)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"AI 生成失败：{exc}") from exc
     return GenerateResponse(
@@ -150,6 +157,8 @@ class ExploreRequest(BaseModel):
     # 与 GenerateRequest 同约束：超长需求由长提示词摘要兜底
     prompt: str = Field(min_length=1, max_length=8000)
     design_system: str = Field(default="brand-design-token-23v1", max_length=100)
+    # T24：与 /api/generate 一致——可选会话 id，用于取最近 2 轮历史
+    session_key: str | None = Field(default=None, max_length=64)
 
 
 class ExploreOptionModel(BaseModel):
@@ -172,7 +181,7 @@ class ExploreResponse(BaseModel):
 
 
 @router.post("/api/generate/explore", response_model=ExploreResponse)
-async def explore_options(req: ExploreRequest, _user: str = Depends(get_current_user)):
+async def explore_options(req: ExploreRequest, _user: str = Depends(get_current_user), db: DbSession = Depends(get_db)):
     """D3 最小版：并行生成 2 份不同风格方案（复用 /api/generate 单段生成链路，不构成两段式）。
 
     方案二在提示词上附加差异化风格约束；两次调用线程池并行，总耗时接近单次。
@@ -193,7 +202,10 @@ async def explore_options(req: ExploreRequest, _user: str = Depends(get_current_
             ),
         ),
     ]
-    results = await asyncio.gather(*(asyncio.to_thread(generate_design, prompt) for _, prompt in variants))
+    history = recent_turns(db, req.session_key, _user)
+    results = await asyncio.gather(
+        *(asyncio.to_thread(generate_design, prompt, history=history) for _, prompt in variants)
+    )
     options = []
     degraded = False
     for (label, _), result in zip(variants, results):
