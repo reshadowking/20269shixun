@@ -153,6 +153,43 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // T46a-3d：协作角色（owner/editor/viewer）。写入阻断由协作网关负责，这里只做"如实告知"。
+  const [collabRole, setCollabRole] = useState<string | null>(null)
+  useEffect(() => {
+    const designParam = searchParams.get('design')
+    if (!designParam || !loaded) return
+    let cancelled = false
+    api<{ role: string }>(`/api/designs/${designParam}/collab`)
+      .then((r) => {
+        if (!cancelled) setCollabRole(r.role)
+      })
+      .catch(() => {
+        /* 拿不到角色（老数据/未启用网关）就不标角色，不阻塞画布 */
+      })
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loaded])
+
+  // 网关 4403 → 明确告知（不静默重连，避免"看着在线其实被拒"）
+  useEffect(() => {
+    store.onForbidden = () => {
+      setLockHint('无权进入该协作房间：请确认已用被邀请的账号登录，或让管理员重新邀请。')
+      window.setTimeout(() => setLockHint(''), 8000)
+    }
+    return () => {
+      store.onForbidden = undefined
+    }
+  }, [store])
+
+  // viewer 角色：进画布即提示"只读"（真实写入阻断在协作网关，这里负责让人知道自己是只读）
+  useEffect(() => {
+    if (collabRole !== 'viewer') return
+    setLockHint('只读访客：可以查看实时协作，但你的画布改动不会被保存。')
+    window.setTimeout(() => setLockHint(''), 8000)
+  }, [collabRole])
+
   // T43：从资产库一键插入——`/workspace?asset=<id>` 时，把图片写进"当前选中的图片组件"。
   // 没选中 / 选中的不是图片组件时，给出明确提示（不静默丢弃，也不猜用户想插到哪）。
   useEffect(() => {

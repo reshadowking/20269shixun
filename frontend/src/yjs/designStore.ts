@@ -97,6 +97,8 @@ export class DesignStore {
   ydoc: Y.Doc
   private designMap: Y.Map<unknown>
   provider: WebsocketProvider | null = null
+  /** T46a-3d：网关拒绝连接（4403）时的回调——由上层显示"无权进入该协作房间"。 */
+  onForbidden?: () => void
 
   /**
    * T46a-3c：把登录 JWT 作为 WS 查询参数带上（网关用它验签 + 查成员资格）。
@@ -183,6 +185,10 @@ export class DesignStore {
     if (room !== undefined) this.roomName = room
     if (!this.wsEndpoint || this.provider) return
     this.provider = new WebsocketProvider(this.wsEndpoint, this.roomName, this.ydoc, this.wsOptions())
+    this.provider.on('connection-close', (event: CloseEvent | null) => {
+      // 4403 = 网关判定"未授权/非成员"（见 docker/collab-gateway）；其余关闭码交给默认重连逻辑
+      if (event?.code === 4403) this.onForbidden?.()
+    })
     this.bindProviderEvents()
     this._reapplyPresence()
   }
