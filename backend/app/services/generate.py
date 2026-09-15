@@ -105,6 +105,75 @@ def icon_prompt_section() -> str:
         + "\n不在上列的名字会被渲染为兜底占位（不会导致整稿被拒），所以禁止编造图标名。"
     )
 
+
+# ---- T18：组件字段契约（shared/component-library.json，唯一来源，禁止手抄进提示词正文）----
+COMPONENT_LIBRARY_FILE = ROOT / "shared" / "component-library.json"
+with COMPONENT_LIBRARY_FILE.open(encoding="utf-8") as _cf:
+    COMPONENT_LIBRARY: dict[str, Any] = json.load(_cf)
+
+_SHAPE_PARENS_RE = re.compile(r"\[(.*?)\]")
+
+
+def component_prop_names(component_type: str) -> frozenset[str]:
+    """该组件在组件库中**声明**的 props 字段名（每次现算——防漂移测试依赖可观测变化）。"""
+    for spec in COMPONENT_LIBRARY["components"]:
+        if spec.get("type") == component_type:
+            return frozenset((spec.get("props") or {}).keys())
+    return frozenset()
+
+
+def _object_keys(default: Any) -> list[str]:
+    """从默认值里取对象字段名（数组取首元素）。"""
+    sample = default[0] if isinstance(default, list) and default else default
+    return list(sample.keys()) if isinstance(sample, dict) else []
+
+
+def _shape_of(spec: dict[str, Any]) -> str:
+    """字段的结构提示（只有结构性字段才带 = 后缀；标量只留字段名）。"""
+    kind = spec.get("type")
+    if kind == "array":
+        if spec.get("itemType") == "object":
+            # 优先用组件库自带的形状说明（如"行数据 [{key: value}]"），空默认值也能给出结构
+            matched = _SHAPE_PARENS_RE.search(str(spec.get("description") or ""))
+            if matched and matched.group(1).strip():
+                return "=[" + re.sub(r"\s+", "", matched.group(1)) + "]"
+            keys = _object_keys(spec.get("default"))
+            return "=[{" + ",".join(keys) + "}]" if keys else "=[{…}]"
+        return "=[字符串]"
+    if kind == "object":
+        keys = _object_keys(spec.get("default"))
+        return "={" + ",".join(keys) + "}" if keys else "={…}"
+    enums = spec.get("enum")
+    if enums:
+        return "=" + "|".join(str(e) for e in enums)
+    return ""
+
+
+# 唯一一个 few-shot 正例（只示意字段结构，内容仍由需求决定；字段名全部来自组件库）
+COMPONENT_FEW_SHOT = (
+    "\n示例（只示意字段结构，内容按需求生成）："
+    '\n{"id":"s1","type":"component","componentType":"stat-block","props":{"label":"本月营收","value":"¥128,400","trend":"↑ 12.6%"}}'
+    '\n{"id":"t1","type":"component","componentType":"table","props":{"columns":[{"key":"name","title":"商品"},{"key":"sales","title":"销量"}],"rows":[{"name":"轻量跑鞋","sales":1280}]}}'
+    '\n{"id":"c1","type":"component","componentType":"chart","props":{"chartType":"bar","title":"近 6 月销量","xKey":"month","yKey":"sales","data":[{"month":"4月","sales":820}]}}'
+)
+
+
+def component_contract_section() -> str:
+    """运行期从 shared/component-library.json 现算的"组件字段契约"段（照 icon_prompt_section 模式）。
+
+    只注入 props 的字段名/结构/枚举——**不注入 default_style**（其中的 `background: "card"`
+    这类值不是令牌，注进去会把错误写法教给模型；口径修正见 T19）。
+    """
+    lines = ["\n\n## 可用组件与字段（只能用这里声明的字段名；数组/对象必须给出结构）"]
+    for spec in COMPONENT_LIBRARY["components"]:
+        props = spec.get("props") or {}
+        fields = "；".join(f"{name}{_shape_of(value)}" for name, value in props.items())
+        name = spec.get("name") or ""
+        lines.append(f"- {spec['type']} {name}：{fields}" if fields else f"- {spec['type']} {name}：无字段")
+    lines.append("字段名写错不会报错，但组件会回退到默认值渲染（等于内容丢失）。")
+    return "\n".join(lines) + COMPONENT_FEW_SHOT
+
+
 # 样式数值边界（与 shared/design-schema.json 一致；超界自动 clamp，不整树回退）
 STYLE_BOUNDS = {
     "fontSize": (8, 96),
@@ -232,6 +301,16 @@ def _repair_props(node: dict) -> None:
             elif not isinstance(value, dict):
                 del props[key]
                 gen_logger.debug("修复 props.%s 非对象 %r 已删除", key, value)
+
+    # T18：契约外字段只记日志、不改行为——"字段名写错 → 组件用默认值渲染"是静默失败，
+    # 这条日志是后续"契约命中率"指标的原料（校验口径见 component_prop_names）。
+    component_type = node.get("componentType")
+    if node.get("type") == "component" and isinstance(component_type, str):
+        declared = component_prop_names(component_type)
+        if declared:
+            for key in props:
+                if key not in declared:
+                    gen_logger.warning("props 契约外字段：%s.%s（渲染层忽略，组件回退默认值）", component_type, key)
 
 
 # T8：已知节点类型（schema type 枚举）与节点级键白名单——降级/裁剪的判定依据
@@ -469,6 +548,7 @@ def incremental_system(locked: bool = False) -> str:
         + "\n\n## 可用美化效果（只能从中选，禁止自创 CSS 值）\n"
         + vocabulary_text()
         + icon_prompt_section()
+        + component_contract_section()
         + HISTORY_USAGE_SECTION
     )
     if locked:
@@ -477,13 +557,13 @@ def incremental_system(locked: bool = False) -> str:
 
 
 def fill_system_text() -> str:
-    """FILL_SYSTEM + 运行期注入段（图标清单 T9 + 对话上下文规则 T24）。generate_design 实际发送的文本。"""
-    return FILL_SYSTEM + icon_prompt_section() + HISTORY_USAGE_SECTION
+    """FILL_SYSTEM + 运行期注入段（图标 T9 + 组件字段契约 T18 + 对话上下文规则 T24）。"""
+    return FILL_SYSTEM + icon_prompt_section() + component_contract_section() + HISTORY_USAGE_SECTION
 
 
 def free_system_text() -> str:
-    """FREE_SYSTEM + 运行期注入段（图标清单 T9 + 对话上下文规则 T24）。generate_design 实际发送的文本。"""
-    return FREE_SYSTEM + icon_prompt_section() + HISTORY_USAGE_SECTION
+    """FREE_SYSTEM + 运行期注入段（图标 T9 + 组件字段契约 T18 + 对话上下文规则 T24）。"""
+    return FREE_SYSTEM + icon_prompt_section() + component_contract_section() + HISTORY_USAGE_SECTION
 
 SUMMARY_SYSTEM = """你是需求摘要器。把用户的长篇设计需求压缩为简洁的结构化需求描述（200 字以内），供下游生成设计稿。
 硬约束：
