@@ -2,9 +2,13 @@ import { useEffect } from 'react'
 import { Navigate, Route, Routes } from 'react-router-dom'
 
 import ApiConfigPage from '@/pages/ApiConfigPage'
+import AssetsPage from '@/pages/AssetsPage'
 import HomePage from '@/pages/HomePage'
 import LoginPage from '@/pages/LoginPage'
+import ProjectsPage from '@/pages/ProjectsPage'
+import TemplatesPage from '@/pages/TemplatesPage'
 import WorkspacePage from '@/pages/WorkspacePage'
+import AppShell from '@/components/shell/AppShell'
 
 import { api, getToken } from '@/lib/api'
 
@@ -30,7 +34,57 @@ export default function App() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
-      <Route path="/" element={<RequireAuth><HomePage /></RequireAuth>} />
+      {/* T36：首页/模板库/资产库/我的项目/设置共用全局侧边栏；工作台不套（它自身三栏） */}
+      <Route
+        path="/"
+        element={
+          <RequireAuth>
+            <AppShell>
+              <HomePage />
+            </AppShell>
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/templates"
+        element={
+          <RequireAuth>
+            <AppShell>
+              <TemplatesPage />
+            </AppShell>
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/assets"
+        element={
+          <RequireAuth>
+            <AppShell>
+              <AssetsPage />
+            </AppShell>
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/projects"
+        element={
+          <RequireAuth>
+            <AppShell>
+              <ProjectsPage />
+            </AppShell>
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/settings"
+        element={
+          <RequireAuth>
+            <AppShell>
+              <ApiConfigPage />
+            </AppShell>
+          </RequireAuth>
+        }
+      />
       <Route path="/workspace" element={<RequireAuth><WorkspacePage /></RequireAuth>} />
       <Route path="/api-config" element={<RequireAuth><ApiConfigPage /></RequireAuth>} />
       <Route path="*" element={<Navigate to="/" replace />} />
