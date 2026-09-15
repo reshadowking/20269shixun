@@ -16,7 +16,7 @@ import uuid
 from hashlib import sha256
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session as DbSession
 
 from ..config import get_settings
 from ..db import get_db
-from ..models import Design, Image, User
+from ..models import AssetFolder, Design, Image, User
 from ..security import decode_token, get_current_user
 from ..services.workspaces import personal_workspace_of, role_for_design, role_of
 from .sessions import _owner_id  # T38：复用既有的"用户名 → owner_id"解析（单一实现）
@@ -138,6 +138,7 @@ def _row_payload(db: DbSession, row: Image, refs: list[Design]) -> dict:
         "url": f"/api/images/{row.id}",
         "public_url": _public_url(row.id),
         "visibility": row.visibility or "private",
+        "folder_id": row.folder_id,
         "referenced_by": len(refs),
         "size": row.size,
         "created_at": row.created_at.isoformat() if row.created_at else None,
@@ -147,6 +148,7 @@ def _row_payload(db: DbSession, row: Image, refs: list[Design]) -> dict:
 @router.post("/api/images")
 async def upload_image(
     file: UploadFile = File(...),
+    folder_id: int | None = Form(default=None),
     _user: str = Depends(get_current_user),
     db=Depends(get_db),
 ):
@@ -160,13 +162,19 @@ async def upload_image(
     if len(data) > MAX_IMAGE_BYTES:
         raise HTTPException(status_code=422, detail="图片超过 2MB 上限")
 
+    owner = _owner_id(db, _user)
+    # T44：上传前先校验目标文件夹，避免先落盘再报错留下孤儿文件
+    if folder_id is not None:
+        folder = db.get(AssetFolder, folder_id)
+        if folder is None or folder.owner_id != owner:
+            raise HTTPException(status_code=404, detail="文件夹不存在或无权访问")
+
     storage = Path(get_settings().storage_root)
     storage.mkdir(parents=True, exist_ok=True)
     name = f"{uuid.uuid4().hex}{ext}"
     (storage / name).write_bytes(data)
 
     # T38：归属 + 配额（数量/容量）——资产库的前提是"这是谁的"
-    owner = _owner_id(db, _user)
     used_count = db.execute(select(func.count()).select_from(Image).where(Image.owner_id == owner)).scalar_one()
     used_bytes = db.execute(
         select(func.coalesce(func.sum(Image.size), 0)).where(Image.owner_id == owner)
@@ -182,21 +190,45 @@ async def upload_image(
         size=len(data),
         owner_id=owner,
         visibility="private",
+        folder_id=folder_id,
     )
     db.add(row)
     db.commit()
     db.refresh(row)
-    return {"id": row.id, "url": f"/api/images/{row.id}", "visibility": row.visibility, "public_url": _public_url(row.id)}
+    return {
+        "id": row.id,
+        "url": f"/api/images/{row.id}",
+        "visibility": row.visibility,
+        "folder_id": row.folder_id,
+        "public_url": _public_url(row.id),
+    }
 
 
 @router.get("/api/images")
-def list_images(db: DbSession = Depends(get_db), _user: str = Depends(get_current_user)):
+def list_images(
+    folder_id: str | None = Query(
+        default=None,
+        description="T44：不传=全部；`none`=未分组；数字=该文件夹（必须是我自己的）",
+    ),
+    db: DbSession = Depends(get_db),
+    _user: str = Depends(get_current_user),
+):
     """T38：当前用户的资产列表（按上传时间倒序）+ 已用容量与配额。
 
     T46b：附带可见性、被引用次数（删之前先看这个）、公开链接。
     """
     owner = _owner_id(db, _user)
-    rows = db.execute(select(Image).where(Image.owner_id == owner).order_by(Image.id.desc())).scalars().all()
+    stmt = select(Image).where(Image.owner_id == owner)
+    if folder_id == "none":
+        stmt = stmt.where(Image.folder_id.is_(None))
+    elif folder_id is not None:
+        if not folder_id.isdigit():
+            raise HTTPException(status_code=422, detail="folder_id 只接受 `none` 或文件夹 id")
+        target = db.get(AssetFolder, int(folder_id))
+        if target is None or target.owner_id != owner:
+            raise HTTPException(status_code=404, detail="文件夹不存在或无权访问")
+        stmt = stmt.where(Image.folder_id == target.id)
+    rows = db.execute(stmt.order_by(Image.id.desc())).scalars().all()
     index = _reference_index(db)
     return {
         "images": [_row_payload(db, r, index.get(r.id, [])) for r in rows],

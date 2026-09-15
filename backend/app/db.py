@@ -40,6 +40,7 @@ def init_db() -> None:
     _ensure_version_unique_index()
     _ensure_image_owner_column()
     _ensure_image_visibility_column()
+    _ensure_image_folder_column()
     _ensure_workspace_columns()
     _ensure_collab_room_column()
     _seed_personal_workspaces()
@@ -131,6 +132,16 @@ def _ensure_image_visibility_column() -> None:
             "ALTER TABLE images ADD COLUMN visibility VARCHAR(16) DEFAULT 'private'",
         )
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_images_visibility ON images (visibility)"))
+
+
+def _ensure_image_folder_column() -> None:
+    """T44：给既有库的 images 补 folder_id（幂等）。
+
+    `asset_folders` 表本身由 `create_all` 建出（新表不需要补列）；老资产落 NULL = 未分组。
+    """
+    with engine.begin() as conn:
+        _add_column(conn, "images", "folder_id", "ALTER TABLE images ADD COLUMN folder_id INTEGER")
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_images_folder_id ON images (folder_id)"))
 
 
 def _ensure_version_unique_index() -> None:

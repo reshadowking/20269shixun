@@ -18,11 +18,28 @@ interface AssetRow {
   /** T46b：public-link 档位的链接（带 k 凭证，未登录也能读） */
   public_url: string
   visibility: string
+  /** T44：所属文件夹（null = 未分组） */
+  folder_id: number | null
   /** T46b：有多少份设计稿引用了它（删之前先看这个） */
   referenced_by: number
   size: number
   created_at: string | null
 }
+
+interface FolderRow {
+  id: number
+  name: string
+  count: number
+}
+
+interface FolderList {
+  folders: FolderRow[]
+  ungrouped: number
+  limit_folders: number
+}
+
+/** T44：当前浏览范围——全部 / 未分组 / 某个文件夹 */
+type Scope = 'all' | 'none' | number
 
 const VISIBILITY_LABEL: Record<string, string> = {
   private: '私有（仅自己可读）',
@@ -50,18 +67,35 @@ export default function AssetsPage() {
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
+  const [scope, setScope] = useState<Scope>('all')
+  const [folders, setFolders] = useState<FolderList>({ folders: [], ungrouped: 0, limit_folders: 0 })
+
+  /**
+   * T44：文件夹单独取，失败也不拖垮资产列表（后端版本落后 / 接口 404 时，
+   * 资产列表照常显示，只是没有文件夹栏——不制造"整页打不开"）。
+   */
+  const loadFolders = useCallback(async () => {
+    try {
+      const r = await api<FolderList>('/api/asset-folders')
+      setFolders({ folders: r.folders ?? [], ungrouped: r.ungrouped ?? 0, limit_folders: r.limit_folders ?? 0 })
+    } catch {
+      setFolders({ folders: [], ungrouped: 0, limit_folders: 0 })
+    }
+  }, [])
 
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      setData(await api<AssetList>('/api/images'))
+      const query = scope === 'all' ? '' : `?folder_id=${scope === 'none' ? 'none' : scope}`
+      setData(await api<AssetList>(`/api/images${query}`))
+      void loadFolders()
       setMessage('')
     } catch (err) {
       setMessage(err instanceof Error ? err.message : '加载失败')
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [scope, loadFolders])
 
   useEffect(() => {
     void load()
@@ -72,6 +106,8 @@ export default function AssetsPage() {
     try {
       const form = new FormData()
       form.append('file', file)
+      // T44：当前正在浏览某个文件夹时，上传直接落进去
+      if (typeof scope === 'number') form.append('folder_id', String(scope))
       const token = localStorage.getItem('design-tool-token')
       const resp = await fetch('/api/images', {
         method: 'POST',
@@ -133,6 +169,63 @@ export default function AssetsPage() {
     }
   }
 
+  // ---- T44：文件夹（一层目录）----
+
+  const createFolder = async () => {
+    const name = window.prompt('新建文件夹（一层目录，最多 32 字）')
+    if (!name?.trim()) return
+    try {
+      const created = await api<FolderRow>('/api/asset-folders', {
+        method: 'POST',
+        body: JSON.stringify({ name: name.trim() }),
+      })
+      await loadFolders()
+      setScope(created.id)
+      setMessage(`已创建文件夹「${created.name}」。`)
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : '新建文件夹失败')
+    }
+  }
+
+  const renameFolder = async (folder: FolderRow) => {
+    const name = window.prompt('重命名文件夹', folder.name)
+    if (!name?.trim() || name.trim() === folder.name) return
+    try {
+      await api(`/api/asset-folders/${folder.id}`, { method: 'PATCH', body: JSON.stringify({ name: name.trim() }) })
+      await loadFolders()
+      setMessage('已重命名。')
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : '重命名失败')
+    }
+  }
+
+  const removeFolder = async (folder: FolderRow) => {
+    const hint = folder.count > 0 ? `\n其中 ${folder.count} 张图片会回到「未分组」（不会被删除）。` : ''
+    if (!window.confirm(`删除文件夹「${folder.name}」？${hint}`)) return
+    try {
+      await api(`/api/asset-folders/${folder.id}`, { method: 'DELETE' })
+      if (scope === folder.id) setScope('all')
+      await load()
+      setMessage('已删除文件夹（里面的图片已回到未分组）。')
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : '删除文件夹失败')
+    }
+  }
+
+  /** 把资产移到某个文件夹（空值 = 未分组） */
+  const moveAsset = async (row: AssetRow, value: string) => {
+    try {
+      await api(`/api/images/${row.id}/folder`, {
+        method: 'PATCH',
+        body: JSON.stringify({ folder_id: value === '' ? null : Number(value) }),
+      })
+      await load()
+      setMessage(value === '' ? '已移出到「未分组」。' : '已移动到目标文件夹。')
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : '移动失败')
+    }
+  }
+
   /** 复制图片链接：public-link 复制"带凭证的公开链接"，其余复制需要登录的地址。 */
   const copyUrl = async (row: AssetRow) => {
     const target = row.visibility === 'public-link' ? row.public_url : row.url
@@ -150,9 +243,83 @@ export default function AssetsPage() {
 
   const used = data?.used_bytes ?? 0
   const count = data?.images.length ?? 0
+  /** 文件夹计数是全账号口径（与当前浏览范围无关），所以"全部"能用它显示总数 */
+  const totalCount = folders.folders.reduce((sum, f) => sum + f.count, 0) + folders.ungrouped
+  const scopeBtnCls = (active: boolean) =>
+    `flex w-full items-center justify-between rounded px-2 py-1 text-left text-[13px] ${
+      active ? 'bg-primary/10 font-medium text-primary' : 'text-muted-foreground hover:bg-accent'
+    }`
 
   return (
-    <div className="mx-auto max-w-[1080px] px-8 py-8" data-testid="assets-page">
+    <div className="mx-auto flex max-w-[1120px] gap-6 px-8 py-8" data-testid="assets-page">
+      {/* T44：文件夹栏（一层目录；删除文件夹不删素材） */}
+      <aside className="w-48 shrink-0" data-testid="asset-folders">
+        <div className="mb-2 flex items-center justify-between">
+          <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">文件夹</span>
+          <button
+            className="rounded border border-border px-1.5 text-xs hover:bg-accent"
+            data-testid="folder-create"
+            title="新建文件夹"
+            onClick={() => void createFolder()}
+          >
+            ＋
+          </button>
+        </div>
+        <ul className="flex flex-col gap-0.5">
+          <li>
+            <button className={scopeBtnCls(scope === 'all')} data-testid="folder-all" onClick={() => setScope('all')}>
+              <span>全部素材</span>
+              <span className="text-[11px] text-muted-foreground" data-testid="folder-count-all">
+                {totalCount}
+              </span>
+            </button>
+          </li>
+          <li>
+            <button className={scopeBtnCls(scope === 'none')} data-testid="folder-none" onClick={() => setScope('none')}>
+              <span>未分组</span>
+              <span className="text-[11px] text-muted-foreground" data-testid="folder-count-none">
+                {folders.ungrouped}
+              </span>
+            </button>
+          </li>
+          {folders.folders.map((f) => (
+            <li key={f.id} className="flex items-center gap-0.5">
+              <button
+                className={scopeBtnCls(scope === f.id)}
+                data-testid={`folder-${f.id}`}
+                title={f.name}
+                onClick={() => setScope(f.id)}
+              >
+                <span className="truncate">{f.name}</span>
+                <span className="text-[11px] text-muted-foreground" data-testid={`folder-count-${f.id}`}>
+                  {f.count}
+                </span>
+              </button>
+              <button
+                className="rounded px-1 text-[11px] text-muted-foreground hover:bg-accent"
+                data-testid={`folder-rename-${f.id}`}
+                title="重命名"
+                onClick={() => void renameFolder(f)}
+              >
+                ✎
+              </button>
+              <button
+                className="rounded px-1 text-[11px] text-muted-foreground hover:text-destructive"
+                data-testid={`folder-delete-${f.id}`}
+                title="删除文件夹（里面的图片会回到未分组）"
+                onClick={() => void removeFolder(f)}
+              >
+                ✕
+              </button>
+            </li>
+          ))}
+        </ul>
+        <p className="mt-3 text-[11px] leading-relaxed text-muted-foreground">
+          进入文件夹后上传的图片会直接放进该文件夹；删除文件夹不会删除图片。
+        </p>
+      </aside>
+
+      <div className="min-w-0 flex-1">
       <div className="mb-1 flex items-center gap-3">
         <h1 className="text-lg font-semibold">我的资产</h1>
         <span className="text-xs text-muted-foreground" data-testid="assets-usage">
@@ -235,6 +402,21 @@ export default function AssetsPage() {
                 <option value="workspace">工作区可见</option>
                 <option value="public-link">公开链接</option>
               </select>
+              {/* T44：移动到文件夹 */}
+              <select
+                className="mt-1 h-7 w-full rounded border border-input bg-background px-1 text-[11px]"
+                data-testid={`asset-folder-${row.id}`}
+                value={row.folder_id === null || row.folder_id === undefined ? '' : String(row.folder_id)}
+                title="移动到文件夹"
+                onChange={(e) => void moveAsset(row, e.target.value)}
+              >
+                <option value="">未分组</option>
+                {folders.folders.map((f) => (
+                  <option key={f.id} value={f.id}>
+                    {f.name}
+                  </option>
+                ))}
+              </select>
               <div className="mt-1.5 flex items-center gap-2">
                 <button
                   className="rounded border border-border px-2 py-0.5 text-[11px] hover:bg-accent"
@@ -261,6 +443,7 @@ export default function AssetsPage() {
             </div>
           </div>
         ))}
+      </div>
       </div>
     </div>
   )

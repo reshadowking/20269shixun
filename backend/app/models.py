@@ -72,10 +72,28 @@ class Image(Base):
     workspace_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     # T46b：资产可见性——private(仅自己) / workspace(工作区成员) / public-link(凭链接任何人)
     visibility: Mapped[str] = mapped_column(String(16), default="private", index=True)
+    # T44：所属资产文件夹（NULL = 根目录/未分组；删除文件夹时回落 NULL，不删资产）
+    folder_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     filename: Mapped[str] = mapped_column(String(255))
     path: Mapped[str] = mapped_column(String(512))  # 相对 volume 路径
     design_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     size: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class AssetFolder(Base):
+    """T44：资产文件夹（按账号组织素材，类似文件管理器的目录）。
+
+    不做嵌套（一期只一层）：演示规模下"一层目录 + 未分组"已经够用，
+    嵌套会把权限/移动/计数的复杂度放大好几倍。
+    """
+
+    __tablename__ = "asset_folders"
+    __table_args__ = (UniqueConstraint("owner_id", "name", name="uq_asset_folders_owner_name"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    owner_id: Mapped[int] = mapped_column(Integer, index=True)
+    name: Mapped[str] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 

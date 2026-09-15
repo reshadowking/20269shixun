@@ -16,9 +16,19 @@ const IMAGE = {
   created_at: '2026-09-15T10:00:00Z',
 }
 
-function mockFetch(list: unknown, opts: { deleteStatus?: number } = {}) {
+function mockFetch(list: unknown, opts: { deleteStatus?: number; folders?: unknown; ungrouped?: number } = {}) {
   return vi.fn(async (url: string, options?: RequestInit) => {
-    void url
+    const path = String(url)
+    if (path.includes('/api/asset-folders')) {
+      if (options?.method === 'POST') return { ok: true, status: 200, json: async () => ({ id: 3, name: '新目录', count: 0 }) }
+      if (options?.method === 'DELETE') return { ok: true, status: 200, json: async () => ({ ok: true, moved_to_ungrouped: 1 }) }
+      if (options?.method === 'PATCH') return { ok: true, status: 200, json: async () => ({ id: 1, name: '改名后' }) }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ folders: opts.folders ?? [], ungrouped: opts.ungrouped ?? 0, limit_folders: 30 }),
+      }
+    }
     if (options?.method === 'DELETE') {
       return { ok: (opts.deleteStatus ?? 200) === 200, status: opts.deleteStatus ?? 200, json: async () => ({ ok: true }) }
     }
@@ -143,5 +153,94 @@ describe('AssetsPage（T46b 可见性）', () => {
     fireEvent.click(await screen.findByTestId('asset-copy-7'))
     await waitFor(() => expect(writeText).toHaveBeenCalled())
     expect(String(writeText.mock.calls[0][0])).toContain('/api/images/7?k=abc123abc123ab')
+  })
+})
+
+describe('AssetsPage（T44 文件夹）', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    localStorage.clear()
+  })
+
+  const FOLDERS = [
+    { id: 1, name: '图标', count: 2 },
+    { id: 2, name: '背景', count: 1 },
+  ]
+
+  it('文件夹栏显示计数，切换范围后按 folder_id 过滤', async () => {
+    const fetchMock = mockFetch(
+      { images: [{ ...IMAGE, folder_id: 1 }], used_bytes: 2048, limit_count: 50, limit_bytes: 20971520 },
+      { folders: FOLDERS, ungrouped: 3 },
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    renderPage()
+
+    expect(await screen.findByTestId('folder-1')).toHaveTextContent('图标')
+    expect(screen.getByTestId('folder-count-1')).toHaveTextContent('2')
+    expect(screen.getByTestId('folder-count-none')).toHaveTextContent('3')
+    expect(screen.getByTestId('folder-count-all')).toHaveTextContent('6') // 2 + 1 + 3
+
+    fireEvent.click(screen.getByTestId('folder-2'))
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.some((c) => String(c[0]).includes('/api/images?folder_id=2'))).toBe(true),
+    )
+    fireEvent.click(screen.getByTestId('folder-none'))
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.some((c) => String(c[0]).includes('/api/images?folder_id=none'))).toBe(true),
+    )
+  })
+
+  it('卡片上的文件夹下拉把资产移进去（PATCH /folder）', async () => {
+    const fetchMock = mockFetch(
+      { images: [{ ...IMAGE, folder_id: null }], used_bytes: 2048, limit_count: 50, limit_bytes: 20971520 },
+      { folders: FOLDERS },
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    renderPage()
+
+    const select = await screen.findByTestId('asset-folder-7')
+    expect(select).toHaveValue('')
+    fireEvent.change(select, { target: { value: '2' } })
+
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find((c) => String(c[0]) === '/api/images/7/folder')
+      expect(call).toBeTruthy()
+      expect(call?.[1]?.method).toBe('PATCH')
+      expect(String(call?.[1]?.body)).toContain('"folder_id":2')
+    })
+  })
+
+  it('新建文件夹取 prompt 的名字并创建', async () => {
+    const fetchMock = mockFetch(
+      { images: [], used_bytes: 0, limit_count: 50, limit_bytes: 20971520 },
+      { folders: [] },
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('prompt', () => '新目录')
+    renderPage()
+
+    fireEvent.click(await screen.findByTestId('folder-create'))
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find((c) => String(c[0]) === '/api/asset-folders' && c[1]?.method === 'POST')
+      expect(call).toBeTruthy()
+      expect(String(call?.[1]?.body)).toContain('新目录')
+    })
+  })
+
+  it('删除文件夹要二次确认，并说明图片会回到未分组', async () => {
+    const fetchMock = mockFetch(
+      { images: [], used_bytes: 0, limit_count: 50, limit_bytes: 20971520 },
+      { folders: FOLDERS },
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const confirm = vi.fn((_message?: string) => true)
+    vi.stubGlobal('confirm', confirm)
+    renderPage()
+
+    fireEvent.click(await screen.findByTestId('folder-delete-1'))
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some((c) => String(c[0]) === '/api/asset-folders/1' && c[1]?.method === 'DELETE')).toBe(true)
+    })
+    expect(String(confirm.mock.calls[0][0])).toContain('未分组')
   })
 })

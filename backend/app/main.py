@@ -9,6 +9,7 @@ from .db import init_db
 from .logging_config import init_generate_logging
 from .otel import init_otel
 from .routers import (
+    asset_folders,
     assist,
     auth,
     collab,
@@ -53,6 +54,7 @@ app.include_router(export.router)
 app.include_router(designs.router)
 app.include_router(sessions.router)
 app.include_router(images.router)
+app.include_router(asset_folders.router)
 app.include_router(workspaces.router)
 app.include_router(collab.router)
 
