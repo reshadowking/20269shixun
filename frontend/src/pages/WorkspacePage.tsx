@@ -190,6 +190,16 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
     window.setTimeout(() => setLockHint(''), 8000)
   }, [collabRole])
 
+  /**
+   * T46a-3e：只读访客的写入口一律关掉（拖拽 / 属性 / AI / 美化 / 保存）。
+   * 三层防护：① 网关丢弃 viewer 的写消息（服务端）；② 写接口 403（服务端）；
+   * ③ store 写入层拒绝 + UI 禁用（这里）——③ 的意义是"立刻可见"，而不是拖完才发现没动。
+   */
+  const readOnly = collabRole === 'viewer'
+  useEffect(() => {
+    store.setReadOnly(readOnly)
+  }, [store, readOnly])
+
   // T43：从资产库一键插入——`/workspace?asset=<id>` 时，把图片写进"当前选中的图片组件"。
   // 没选中 / 选中的不是图片组件时，给出明确提示（不静默丢弃，也不猜用户想插到哪）。
   useEffect(() => {
@@ -237,6 +247,11 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
   // 保存到后端（缺陷 16/17）：未命名先弹命名框，已命名直接 PUT
   const handleSave = () => {
     if (saving) return
+    // T46a-3e：只读访客不能保存（后端 PUT 也会 403，这里先给出可读原因）
+    if (readOnly) {
+      setSaveError('只读访客：不能保存修改（需要 owner / editor 权限）。')
+      return
+    }
     if (savedMeta.id !== undefined) {
       setSaving(true)
       setSaveError('')
@@ -619,6 +634,11 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
   const [errorMsg, setErrorMsg] = useState('')
 
   const handleOptimize = async () => {
+    if (readOnly) {
+      setLockHint('只读访客：不能执行智能优化（需要 owner / editor 权限）')
+      window.setTimeout(() => setLockHint(''), 4000)
+      return
+    }
     setOptimizing(true)
     try {
       store.pushSnapshot()
@@ -808,7 +828,8 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
             variant="outline"
             className="h-7 text-xs"
             data-testid="optimize-layout"
-            disabled={optimizing}
+            disabled={optimizing || readOnly}
+            title={readOnly ? '只读访客：不能修改画布' : undefined}
             onClick={handleOptimize}
           >
             ✨ 智能优化布局
@@ -837,9 +858,11 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
               variant="outline"
               className="h-7 text-xs"
               data-testid="convert-free"
-              disabled={layoutLocked}
+              disabled={layoutLocked || readOnly}
               title={
-                layoutLocked
+                readOnly
+                  ? '只读访客：不能修改画布'
+                  : layoutLocked
                   ? '版面已确认：请先解除版面锁定再转自由画布'
                   : '保留当前布局，把子节点变成可自由拖拽（不改位置与尺寸）'
               }
@@ -877,6 +900,7 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
               variant="ghost"
               className="h-7 text-xs"
               data-testid="undo-optimize"
+              disabled={readOnly}
               onClick={handleUndo}
             >
               ↩ 撤销优化
@@ -884,6 +908,15 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
           )}
         </div>
         <div className="flex items-center gap-3 text-xs text-muted-foreground">
+          {readOnly && (
+            <span
+              className="rounded-full border border-amber-500/60 bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-600"
+              data-testid="readonly-badge"
+              title="只读访客：可查看实时协作，不能修改"
+            >
+              只读访客
+            </span>
+          )}
           {/* P1 文件系统（缺陷 5/8/16/17）：主页 + 文件名 + 保存；demo 切换已迁至主页 */}
           <span className="flex items-center gap-1 font-medium text-foreground" data-testid="design-name" title={savedMeta.name ?? '未命名'}>
             {savedMeta.name ?? '未命名'}
@@ -897,7 +930,8 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
             variant="outline"
             className="h-7 text-xs"
             data-testid="save-design"
-            disabled={saving}
+            disabled={saving || readOnly}
+            title={readOnly ? '只读访客：不能保存修改' : undefined}
             onClick={handleSave}
           >
             💾 保存
@@ -931,7 +965,7 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
           <ComponentPalette
             collapsed={paletteCollapsed}
             onToggle={() => setPaletteCollapsed((c) => !c)}
-            onAdd={handleAdd}
+            onAdd={readOnly ? () => setLockHint('只读访客：不能添加组件（需要 owner / editor 权限）') : handleAdd}
           />
         </aside>
 
@@ -948,11 +982,12 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
             store={store}
             selectedIds={selectedIds}
             onSelectChange={setSelectedIds}
-            onDropComponent={handleDropComponent}
+            onDropComponent={readOnly ? undefined : handleDropComponent}
             showGrid={showGrid}
             onCanvasContextMenu={(nodeId, x, y) => setCtxMenu({ x, y, nodeId })}
             highlightIds={highlightIds}
             canvasRef={canvasRef}
+            readOnly={readOnly}
           />
           {auditIssues !== null && (
             <div
@@ -1175,6 +1210,7 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
                       node={selectedNode}
                       design={design}
                       locked={layoutLocked}
+                      readOnly={readOnly}
                       onUpdate={(updater) => store.updateNode(selectedNode.id, updater)}
                       onDelete={() => {
                         store.removeNode(selectedNode.id)
@@ -1207,6 +1243,7 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
                   <AIChatPanel
                     sessionKey={sessionKey}
                     onGeneratingChange={setGenerating}
+                    readOnly={readOnly}
                     onGenerate={(generated) => {
                       store.resetDesign(generated)
                       setSelectedIds(new Set())
@@ -1240,6 +1277,7 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
                     selectedNode={selectedNode}
                     baseSnapshot={baseSnapshot}
                     locked={layoutLocked}
+                    readOnly={readOnly}
                     applying={beautifying}
                     error={beautifyError}
                     previewing={effectsPreview}
@@ -1258,10 +1296,14 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
                   <HistoryPanel
                     design={design}
                     savedId={savedMeta.id}
-                    onRestore={(restored: DesignNode) => {
-                      store.resetDesign(restored)
-                      setSelectedIds(new Set())
-                    }}
+                    onRestore={
+                      readOnly
+                        ? () => setLockHint('只读访客：不能恢复历史版本（需要 owner / editor 权限）')
+                        : (restored: DesignNode) => {
+                            store.resetDesign(restored)
+                            setSelectedIds(new Set())
+                          }
+                    }
                     onVersionSaved={() => setSavedMeta((m) => ({ ...m }))}
                   />
                 )}
@@ -1345,6 +1387,7 @@ function CanvasWithSelection({
   onCanvasContextMenu,
   highlightIds,
   canvasRef,
+  readOnly,
 }: {
   design: DesignNode
   store: ReturnType<typeof useDesignStore>['store']
@@ -1355,6 +1398,7 @@ function CanvasWithSelection({
   onCanvasContextMenu?: (nodeId: string | null, x: number, y: number) => void
   highlightIds?: Set<string>
   canvasRef?: React.Ref<DesignCanvasHandle>
+  readOnly?: boolean
 }) {
   return (
     <DesignCanvas
@@ -1367,6 +1411,7 @@ function CanvasWithSelection({
       showGrid={showGrid}
       onContextMenu={onCanvasContextMenu}
       highlightIds={highlightIds}
+      readOnly={readOnly}
     />
   )
 }

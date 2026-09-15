@@ -35,6 +35,8 @@ interface BeautifyPanelProps {
   /** T4 批3：批量应用回调（同类/多选共用；nodeIds 为已算好的目标集合，含影响范围语义） */
   onApplyEffectBatch?: (nodeIds: string[], key: string, value: string | number | null) => void
   onPreviewToggle: (on: boolean) => void
+  /** T46a-3e：只读访客——效果/版面锁定全部不可写（只能看） */
+  readOnly?: boolean
 }
 
 function fmtTime(ts: number): string {
@@ -56,6 +58,7 @@ export default function BeautifyPanel({
   onApplyEffect,
   onApplyEffectBatch,
   onPreviewToggle,
+  readOnly = false,
 }: BeautifyPanelProps) {
   const [compareOpen, setCompareOpen] = useState(false)
   const [scopeChoice, setScopeChoice] = useState<ApplyScope>('single')
@@ -107,6 +110,11 @@ export default function BeautifyPanel({
 
   return (
     <div className="flex h-full flex-col gap-4 overflow-y-auto p-4" data-testid="beautify-panel">
+      {readOnly && (
+        <p className="rounded-md bg-muted/60 px-2 py-1 text-[11px] text-muted-foreground" data-testid="beautify-readonly-note">
+          只读访客：可以查看当前效果，但不能修改（需要 owner / editor 权限）。
+        </p>
+      )}
       {/* ① 版面确认（基础版快照） */}
       <div className="flex flex-col gap-2 rounded-md border bg-background p-3" data-testid="beautify-status">
         {baseSnapshot ? (
@@ -122,6 +130,7 @@ export default function BeautifyPanel({
               size="sm"
               className="h-7 text-xs"
               data-testid="beautify-unlock"
+              disabled={readOnly}
               onClick={onUnlock}
             >
               解除版面锁定（继续编辑版面）
@@ -133,7 +142,7 @@ export default function BeautifyPanel({
             <div className="text-xs text-muted-foreground">
               确认后自动保留「基础版快照」（无动效 / 渐变 / 装饰），后续美化不会改动它。
             </div>
-            <Button size="sm" className="h-7 text-xs" data-testid="beautify-confirm" onClick={onConfirmLayout}>
+            <Button size="sm" className="h-7 text-xs" data-testid="beautify-confirm" disabled={readOnly} onClick={onConfirmLayout}>
               确认版面，进入美化
             </Button>
           </>
@@ -186,7 +195,7 @@ export default function BeautifyPanel({
                   scope === 'single' ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted-foreground'
                 }`}
                 data-testid="beautify-scope-single"
-                disabled={applying}
+                disabled={applying || readOnly}
                 onClick={() => setScopeChoice('single')}
               >
                 当前节点
@@ -197,7 +206,7 @@ export default function BeautifyPanel({
                     scope === 'same-type' ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted-foreground'
                   }`}
                   data-testid="beautify-scope-same-type"
-                  disabled={applying}
+                  disabled={applying || readOnly}
                   onClick={() => setScopeChoice('same-type')}
                 >
                   同类节点（{sameTypeNodes.length}）
@@ -209,7 +218,7 @@ export default function BeautifyPanel({
                     scope === 'multi' ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted-foreground'
                   }`}
                   data-testid="beautify-scope-multi"
-                  disabled={applying}
+                  disabled={applying || readOnly}
                   onClick={() => setScopeChoice('multi')}
                 >
                   选中多个（{multiNodes.length}）
@@ -248,7 +257,7 @@ export default function BeautifyPanel({
                         current === v.value ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted-foreground'
                       }`}
                       data-testid={`beautify-${spec.key}-${i}`}
-                      disabled={applying}
+                      disabled={applying || readOnly}
                       onClick={() => applyToTargets(spec.key, v.value)}
                     >
                       {v.label}
@@ -257,7 +266,7 @@ export default function BeautifyPanel({
                   <button
                     className="rounded-full border border-border px-2 py-0.5 text-[11px] text-muted-foreground transition hover:border-destructive hover:text-destructive"
                     data-testid={`beautify-${spec.key}-off`}
-                    disabled={applying || current === undefined}
+                    disabled={applying || readOnly || current === undefined}
                     onClick={() => applyToTargets(spec.key, null)}
                   >
                     关闭

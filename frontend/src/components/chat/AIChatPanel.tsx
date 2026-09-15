@@ -177,6 +177,8 @@ interface AIChatPanelProps {
   /** T4 批2：当前是否处于版面锁定阶段（WorkspacePage 从服务端读回的锁状态）。
    * 仅随增量编辑请求告知后端以调整提示词措辞——不是安全开关，闸门仍由服务端判定。 */
   locked?: boolean
+  /** T46a-3e：只读访客——可以看会话/方案，但不能生成、不能应用（写入口统一禁用） */
+  readOnly?: boolean
   /** P0-1 撤销：回到上一版（快照） */
   onUndo?: () => void
   canUndo?: boolean
@@ -188,7 +190,9 @@ interface AIChatPanelProps {
   onUseExploreDesign?: (design: DesignNode) => void
 }
 
-export default function AIChatPanel({ onGenerate, onGeneratingChange, design, onIncrementalEdit, onUndo, canUndo, sessionKey, onComplianceRestore, onUseExploreDesign, locked }: AIChatPanelProps) {
+export default function AIChatPanel({ onGenerate, onGeneratingChange, design, onIncrementalEdit, onUndo, canUndo, sessionKey, onComplianceRestore, onUseExploreDesign, locked, readOnly = false }: AIChatPanelProps) {
+  /** 只读访客：所有"会写画布"的按钮一律禁用（生成 / 应用方案 / 还原修正） */
+  const ro = readOnly
   const [input, setInput] = useState('')
   /** 会话作用域：本项目会话数据的唯一读写入口（盖章写入 + 过滤读取，跨会话访问抛错） */
   const scope = useMemo(() => createSessionScope(sessionKey), [sessionKey])
@@ -710,6 +714,7 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
                 key={opt}
                 className="rounded-full border border-border px-2.5 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
                 data-testid={`followup-option-${opt}`}
+                disabled={ro}
                 onClick={() => answerPending(opt)}
               >
                 {opt === '随便选一个' ? `🎲 ${opt}` : opt}
@@ -721,6 +726,7 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
             size="sm"
             className="w-full text-xs"
             data-testid="followup-skip"
+            disabled={ro}
             onClick={skipPending}
           >
             跳过追问，直接生成
@@ -773,7 +779,7 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
           size="sm"
           className="w-full text-xs"
           data-testid="explore-options"
-          disabled={generating || exploring}
+          disabled={generating || exploring || ro}
           onClick={handleExplore}
         >
           {exploring ? '探索中…（并行生成 2 份方案）' : '✨ 探索 2 个方案'}
@@ -820,6 +826,7 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
                 size="sm"
                 className="mt-1.5 h-6 w-full text-[11px]"
                 data-testid={`explore-use-${i}`}
+                disabled={ro}
                 onClick={() => applyExploreOption(i)}
               >
                 使用此方案
@@ -892,6 +899,7 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
                       size="sm"
                       className="mt-1.5 h-6 w-full text-[11px]"
                       data-testid={`explore-other-use-${index}`}
+                      disabled={ro}
                       onClick={() => applyExploreOption(index)}
                     >
                       改用此方案
@@ -930,6 +938,7 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
                       variant={i === archive.chosenIndex ? 'secondary' : 'default'}
                       className="mt-1.5 h-6 w-full text-[11px]"
                       data-testid={`explore-rechoose-use-${i}`}
+                      disabled={ro}
                       onClick={() => applyExploreOption(i)}
                     >
                       {i === archive.chosenIndex ? '当前方案（重新应用）' : '改用此方案'}
@@ -963,6 +972,7 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
                 size="sm"
                 className="h-6 shrink-0 px-2 text-[11px]"
                 data-testid={`compliance-restore-${i}`}
+                disabled={ro}
                 onClick={() => handleRestoreFix(fix)}
               >
                 还原此项
@@ -986,7 +996,7 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
             size="sm"
             className="w-full text-xs"
             data-testid="fallback-retry"
-            disabled={generating}
+            disabled={generating || ro}
             onClick={handleFallbackRetry}
           >
             ↻ 重试生成
@@ -996,17 +1006,24 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
             size="sm"
             className="w-full text-xs"
             data-testid="fallback-use-template"
+            disabled={ro}
             onClick={handleUseTemplate}
           >
             使用预置模板（兼容率 {fallbackResult.compliance}%）
           </Button>
         </div>
       )}
+      {ro && (
+        <p className="border-t bg-muted/50 px-3 py-2 text-[11px] text-muted-foreground" data-testid="chat-readonly-note">
+          只读访客：可以查看会话与方案，但不能生成或应用修改（需要 owner / editor 权限）。
+        </p>
+      )}
       <div className="border-t p-3">
         <Textarea
           data-testid="chat-input"
           className="min-h-16 resize-none text-sm"
-          placeholder="描述你想要的设计稿，例如：登录页、电商优惠券页、数据仪表板…"
+          placeholder={ro ? '只读访客：不可发起生成' : '描述你想要的设计稿，例如：登录页、电商优惠券页、数据仪表板…'}
+          disabled={ro}
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => {
@@ -1019,7 +1036,7 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
         <Button
           className="mt-2 w-full"
           data-testid="chat-send"
-          disabled={generating || !input.trim()}
+          disabled={generating || ro || !input.trim()}
           onClick={() => handleSend()}
         >
           {generating ? '生成中…' : '生成设计稿'}
@@ -1030,7 +1047,7 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
             size="sm"
             className="mt-1 w-full text-xs"
             data-testid="chat-retry"
-            disabled={generating}
+            disabled={generating || ro}
             onClick={() => handleSend(lastPrompt)}
           >
             ↻ 重试上次需求（{lastPrompt.slice(0, 12)}…）

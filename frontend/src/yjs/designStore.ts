@@ -126,6 +126,8 @@ export class DesignStore {
   undoManager: Y.UndoManager
   /** 缺陷 3：美化阶段版面锁定——只有效果白名单的 style 键允许改动（写入层强制，不靠 UI 禁用） */
   private beautifyLock = false
+  /** T46a-3e：只读访客（viewer）——所有写方法在数据层直接拒绝 */
+  private readOnly = false
   private blockedCbs = new Set<(reason: string) => void>()
   /** T2：连接端点。构造只记忆、不建立连接——provider 的生灭与 React effect 配对 */
   private wsEndpoint: string | undefined
@@ -286,6 +288,26 @@ export class DesignStore {
   }
 
   /**
+   * T46a-3e：设置只读态（viewer 角色）。协作网关已经在服务端丢弃 viewer 的写消息，
+   * 这里是**同一条规则的前端入口**：让"没有权限"立刻可见，而不是拖完之后发现没动、
+   * 或者被服务端静默回滚。写方法统一走 `_blockedByRole`，不靠 UI 禁用兜底。
+   */
+  setReadOnly(readOnly: boolean): void {
+    this.readOnly = readOnly
+  }
+
+  get isReadOnly(): boolean {
+    return this.readOnly
+  }
+
+  /** 只读拦截：返回 true 表示本次写入已被拒绝（并已广播可读原因） */
+  private _blockedByRole(what: string): boolean {
+    if (!this.readOnly) return false
+    this._rejectBlocked(`只读访客：${what}不会生效（需要 owner / editor 权限）`)
+    return true
+  }
+
+  /**
    * 锁定期的单节点改动白名单：只允许效果白名单 style 键变化。
    * props（文本/内容）、结构（children/type/id）、位置尺寸（x/y/hidden/width/height/layout 等）一律拒绝。
    */
@@ -350,6 +372,7 @@ export class DesignStore {
 
   /** 通用字段更新：updater 返回新 DesignNode，同步写回 Y 节点（props/style 整表替换保持引用稳定） */
   updateNode(id: string, updater: (node: DesignNode) => DesignNode) {
+    if (this._blockedByRole('修改节点')) return
     this.ydoc.transact(
       () => {
         const root = this.designMap.get(ROOT_KEY) as YNode | undefined
@@ -370,6 +393,7 @@ export class DesignStore {
 
   /** 批量更新多个节点（缺陷 1 多选属性编辑 / P1 转自由画布）：单事务单撤销步 */
   updateMany(ids: string[], updater: (node: DesignNode, index: number) => DesignNode) {
+    if (this._blockedByRole('批量修改节点')) return
     this.ydoc.transact(
       () => {
         const root = this.designMap.get(ROOT_KEY) as YNode | undefined
@@ -404,6 +428,7 @@ export class DesignStore {
     parentId: string,
     updates: Array<{ id: string; x: number; y: number; width: number; height: number }>,
   ): { ok: boolean; reason?: string } {
+    if (this._blockedByRole('转自由画布')) return { ok: false, reason: 'read-only' }
     if (this.beautifyLock) {
       this._rejectBlocked('版面已确认：请先解除版面锁定再转自由画布')
       return { ok: false, reason: 'locked' }
@@ -484,6 +509,7 @@ export class DesignStore {
   }
 
   removeNode(id: string) {
+    if (this._blockedByRole('删除节点')) return
     if (this._blockStructuralWhileLocked()) return
     this.ydoc.transact(
       () => {
@@ -502,6 +528,7 @@ export class DesignStore {
   }
 
   duplicateNode(id: string) {
+    if (this._blockedByRole('复制节点')) return
     if (this._blockStructuralWhileLocked()) return
     this.ydoc.transact(
       () => {
@@ -548,6 +575,7 @@ export class DesignStore {
 
   /** 在指定父节点 children 末尾插入新节点（组件面板添加）；index 指定插入位置（E3-3 推荐落位） */
   insertChild(parentId: string, node: DesignNode, index?: number) {
+    if (this._blockedByRole('添加组件')) return
     if (this._blockStructuralWhileLocked()) return
     this.ydoc.transact(
       () => {
@@ -578,6 +606,7 @@ export class DesignStore {
 
   /** 恢复最近一次快照（撤销 AI 版本）；无快照返回 false */
   popSnapshot(): boolean {
+    if (this._blockedByRole('撤销优化')) return false
     const snapshot = this.snapshots.pop()
     if (!snapshot) return false
     this.resetDesign(snapshot)
@@ -590,6 +619,7 @@ export class DesignStore {
 
   /** 跨父移动（图层管理：拖拽改父级）；目标不能是自己的后代 */
   moveNodeTo(nodeId: string, newParentId: string, index: number) {
+    if (this._blockedByRole('移动图层')) return
     if (this._blockStructuralWhileLocked()) return
     this.ydoc.transact(
       () => {
@@ -627,6 +657,7 @@ export class DesignStore {
 
   /** flex 布局拖拽重排 */
   moveChild(childId: string, parentId: string, targetIndex: number) {
+    if (this._blockedByRole('调整顺序')) return
     if (this._blockStructuralWhileLocked()) return
     this.ydoc.transact(
       () => {

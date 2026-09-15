@@ -68,6 +68,20 @@ def _own_design(db, design_id: int, username: str) -> Design:
     return design
 
 
+def _writable_design(db, design_id: int, username: str) -> Design:
+    """写接口专用（保存 / 写版本 / 删除）：viewer 一律 403。
+
+    T46a-3e：协作网关只挡住了 Yjs 实时写入；**DB 保存是另一条写入口**——
+    只读访客若仍能 PUT，就等于"前端看着只读、接口其实能改"。这里按角色拦死。
+    """
+    from ..services.workspaces import WRITABLE_ROLES, role_for_design
+
+    design = _own_design(db, design_id, username)
+    if role_for_design(db, design, _owner_id(db, username)) not in WRITABLE_ROLES:
+        raise HTTPException(status_code=403, detail="只读访客：无权修改该设计稿（需要 owner/editor 权限）")
+    return design
+
+
 def _save_version(db, design: Design, note: str = "") -> None:
     """保存一个版本（自动编号，清理超出上限的旧版本）。"""
     latest = db.execute(
@@ -217,7 +231,7 @@ def update_design(design_id: int, req: DesignUpdate, _user: str = Depends(get_cu
     必须重跑"重查设计 → 应用变更 → 写版本"整个流程，避免在旧数据上重复写版本。
     """
     for attempt in (1, 2):
-        design = _own_design(db, design_id, _user)
+        design = _writable_design(db, design_id, _user)
         if req.name is not None:
             design.name = req.name
         if req.design is not None:
@@ -237,7 +251,7 @@ def update_design(design_id: int, req: DesignUpdate, _user: str = Depends(get_cu
 @router.delete("/api/designs/{design_id}")
 def delete_design(design_id: int, _user: str = Depends(get_current_user), db=Depends(get_db)):
     """删除设计（连带历史版本）。"""
-    design = _own_design(db, design_id, _user)
+    design = _writable_design(db, design_id, _user)
     db.execute(Version.__table__.delete().where(Version.design_id == design_id))
     db.delete(design)
     db.commit()
@@ -271,7 +285,7 @@ def list_versions(design_id: int, _user: str = Depends(get_current_user), db=Dep
 def save_version(design_id: int, req: VersionNote, _user: str = Depends(get_current_user), db=Depends(get_db)):
     """手动保存当前设计为历史版本（带备注）。P0-5：并发撞号整体重试一次。"""
     for attempt in (1, 2):
-        design = _own_design(db, design_id, _user)
+        design = _writable_design(db, design_id, _user)
         _save_version(db, design, note=req.note)
         try:
             db.commit()

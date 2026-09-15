@@ -44,6 +44,20 @@ def role_of(db: DbSession, workspace_id: int, user_id: int) -> str | None:
     return row.role if row else None
 
 
+def role_for_design(db: DbSession, design: Design, user_id: int) -> str | None:
+    """我对某设计稿的角色；未归属工作区的老数据按创建人的个人工作区兜底判定。
+
+    单一来源：`routers/collab.py`（网关授权）与 `routers/designs.py`（写接口拦 viewer）共用，
+    避免两处各写一份兜底逻辑后慢慢漂移。
+    """
+    if design.workspace_id is not None:
+        return role_of(db, design.workspace_id, user_id)
+    if design.owner_id == user_id:
+        return "owner"
+    ws = personal_workspace_of(db, design.owner_id)
+    return role_of(db, ws.id, user_id) if ws else None
+
+
 def ensure_personal_workspaces(db: DbSession) -> int:
     """启动/迁移用：给每个用户补齐个人工作区，并把"无归属"的老数据迁进去。
 

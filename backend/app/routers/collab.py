@@ -15,20 +15,10 @@ from ..config import get_settings
 from ..db import get_db
 from ..models import Design
 from ..security import get_current_user
-from ..services.workspaces import personal_workspace_of, role_of
+from ..services.workspaces import role_for_design
 from .sessions import _owner_id
 
 router = APIRouter(tags=["collab"])
-
-
-def _role_for_design(db: DbSession, design: Design, user_id: int) -> str | None:
-    """该用户对这份稿件的角色（兼容期稿件按创建人的个人工作区判定）。"""
-    if design.workspace_id is not None:
-        return role_of(db, design.workspace_id, user_id)
-    if design.owner_id == user_id:
-        return "owner"
-    ws = personal_workspace_of(db, design.owner_id)
-    return role_of(db, ws.id, user_id) if ws else None
 
 
 @router.get("/api/designs/{design_id}/collab")
@@ -38,7 +28,7 @@ def collab_room(design_id: int, db: DbSession = Depends(get_db), _user: str = De
     design = db.get(Design, design_id)
     if design is None:
         raise HTTPException(status_code=404, detail="设计稿不存在或无权访问")
-    role = _role_for_design(db, design, me)
+    role = role_for_design(db, design, me)
     if role is None:
         raise HTTPException(status_code=404, detail="设计稿不存在或无权访问")
     if not design.collab_room:
@@ -80,5 +70,5 @@ def authorize(
         design = db.get(Design, int(req.room[7:]))
     if user is None or design is None:
         return {"ok": False, "role": None}
-    role = _role_for_design(db, design, user.id)
+    role = role_for_design(db, design, user.id)
     return {"ok": role is not None, "role": role}

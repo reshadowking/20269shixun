@@ -51,6 +51,8 @@ interface DesignCanvasProps {
   onContextMenu?: (nodeId: string | null, x: number, y: number) => void
   /** P0-1 增量编辑：被修改节点高亮 */
   highlightIds?: Set<string>
+  /** T46a-3e：只读访客——不开始拖拽/缩放，也不写回组件内部交互 */
+  readOnly?: boolean
   /** 转自由画布（P1-13）：由画布自己持有 DOM 与缩放状态，向父组件暴露测量能力 */
   ref?: React.Ref<DesignCanvasHandle>
 }
@@ -60,7 +62,7 @@ export interface DesignCanvasHandle {
   measureFreeze(parentId: string, childIds: string[]): FreezeMeasureResult
 }
 
-export default function DesignCanvas({ design, store, selectedIds, onSelectionChange, onDropComponent, showGrid = true, onContextMenu, highlightIds, ref }: DesignCanvasProps) {
+export default function DesignCanvas({ design, store, selectedIds, onSelectionChange, onDropComponent, showGrid = true, onContextMenu, highlightIds, readOnly = false, ref }: DesignCanvasProps) {
   const [view, setView] = useState<ViewTransform>(DEFAULT_VIEW)
   const dragRef = useRef<DragState | null>(null)
   const resizeRef = useRef<ResizeState | null>(null)
@@ -135,6 +137,22 @@ export default function DesignCanvas({ design, store, selectedIds, onSelectionCh
   // ---- 选中（统一在 pointerdown 处理，避免 click 二次切换）----
 
   // ---- 节点拖拽 ----
+  /** T46a-3e：只读访客仍可选中节点查看属性，但不开始拖拽（选中不是写操作） */
+  const handleNodeSelectOnly = useCallback(
+    (e: React.PointerEvent, id: string) => {
+      e.stopPropagation()
+      if (e.ctrlKey || e.metaKey) {
+        const next = new Set(selectedIds)
+        if (next.has(id)) next.delete(id)
+        else next.add(id)
+        onSelectionChange(next)
+        return
+      }
+      onSelectionChange(new Set([id]))
+    },
+    [onSelectionChange, selectedIds],
+  )
+
   const handleNodePointerDown = useCallback(
     (e: React.PointerEvent, id: string) => {
       e.stopPropagation()
@@ -398,10 +416,13 @@ export default function DesignCanvas({ design, store, selectedIds, onSelectionCh
             node={design}
             selectedIds={selectedIds}
             highlightIds={highlightIds}
-            onDragStart={handleNodePointerDown}
-            onResizeStart={handleResizeStart}
-            onComponentPropsChange={(id, key, value) =>
-              store.updateNode(id, (n) => ({ ...n, props: { ...(n.props ?? {}), [key]: value } }))
+            onDragStart={readOnly ? handleNodeSelectOnly : handleNodePointerDown}
+            onResizeStart={readOnly ? undefined : handleResizeStart}
+            onComponentPropsChange={
+              readOnly
+                ? undefined
+                : (id, key, value) =>
+                    store.updateNode(id, (n) => ({ ...n, props: { ...(n.props ?? {}), [key]: value } }))
             }
           />
         </div>
