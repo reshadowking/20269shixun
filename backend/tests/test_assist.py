@@ -169,15 +169,37 @@ class TestRecommender:
         assert recommend_components(design, "nope") == []
 
     def test_recommended_types_all_in_whitelist(self):
-        # 与 FREE_SYSTEM 组件白名单一致（15 种）
-        whitelist = {
-            "button", "card", "input", "select", "table", "chart", "stat-block",
-            "navbar", "sidebar", "avatar", "tag", "divider", "title-text", "hero", "image",
-        }
-        design = {"id": "root", "type": "frame", "children": [{"id": "c", "type": "frame"}]}
-        for container in ["c", "root"]:
-            for r in recommend_components(design, container):
-                assert r["component_type"] in whitelist
+        """推荐结果必须全部落在组件白名单内，且用例要真正走到每个推荐分支。
+
+        T25 修正：原用例硬编码 15 种（缺 icon/switch/tabs）且只走"空容器"分支——
+        `switch`/`tabs` 早已被推荐，但断言集合里没有它们，改动推荐分支也不会红（静默失效）。
+        现在改为引用唯一来源 `COMPONENT_TYPE_NAMES`，并逐分支覆盖 + 断言新组件确实被推荐过。
+        """
+        from app.services.generate import COMPONENT_TYPE_NAMES
+
+        def comp(cid: str, ctype: str) -> dict:
+            return {"id": cid, "type": "component", "componentType": ctype, "props": {}}
+
+        def frame(cid: str, children: list[dict]) -> dict:
+            return {"id": cid, "type": "frame", "children": children}
+
+        cases = [
+            ("空容器", frame("root", [frame("c", [])]), "c"),
+            ("导航容器", frame("root", [frame("nav", [comp("nb", "navbar")])]), "nav"),
+            ("表单容器", frame("root", [frame("form", [comp("in", "input")])]), "form"),
+            ("数据容器", frame("root", [frame("data", [comp("sb", "stat-block")])]), "data"),
+            ("图文容器", frame("root", [frame("cardbox", [comp("im", "image"), comp("bt", "button")])]), "cardbox"),
+            ("组件自身（配套推荐）", frame("root", [comp("nav2", "navbar")]), "nav2"),
+        ]
+        seen: set[str] = set()
+        for label, design, container in cases:
+            recs = recommend_components(design, container)
+            assert recs, f"{label} 未产出推荐（分支未被走到）"
+            for item in recs:
+                ctype = item["component_type"]
+                assert ctype in COMPONENT_TYPE_NAMES, f"{label} 推荐了白名单外组件：{ctype}"
+                seen.add(ctype)
+        assert {"switch", "tabs"} <= seen, f"新组件推荐分支未被覆盖，实际覆盖：{sorted(seen)}"
 
 
 class TestAssistApi:
