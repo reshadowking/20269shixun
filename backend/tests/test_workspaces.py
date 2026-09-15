@@ -39,6 +39,17 @@ class TestRegister:
 
 
 class TestLegacyMigration:
+    def test_duplicate_column_guard_covers_postgres_message(self):
+        """T46a 回归：Postgres 的补列报错文案与 SQLite 不同，必须都被认作"已存在"。
+
+        历史 P0：只认 SQLite 文案 → Postgres 上第二次启动直接崩（单测跑 SQLite，抓不到）。
+        """
+        from app.db import _is_duplicate_column
+
+        assert _is_duplicate_column(Exception('duplicate column name: owner_id')) is True
+        assert _is_duplicate_column(Exception('column "owner_id" of relation "images" already exists')) is True
+        assert _is_duplicate_column(Exception("permission denied for table images")) is False
+
     def test_legacy_design_and_image_get_workspace(self, client, auth_headers):
         db = SessionLocal()
         try:

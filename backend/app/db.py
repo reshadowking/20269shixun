@@ -44,13 +44,27 @@ def init_db() -> None:
     _seed_personal_workspaces()
 
 
+def _is_duplicate_column(exc: Exception) -> bool:
+    """补列是否"已存在"——**两个数据库的文案不同，必须都认**：
+
+    - SQLite：`duplicate column name: owner_id`
+    - Postgres：`column "owner_id" of relation "images" already exists`
+
+    历史教训（P0）：只匹配 SQLite 文案时，Postgres 上**第二次启动必崩**（首次补列成功、
+    第二次 ADD COLUMN 撞已存在 → 守卫没认出来 → raise → 应用启动失败）；而单测跑 SQLite，
+    永远抓不到这类"只在真实库出现"的分支。
+    """
+    message = str(exc).lower()
+    return "duplicate column" in message or "already exists" in message
+
+
 def _ensure_collab_room_column() -> None:
     """T46a-3：给既有库的 designs 补 collab_room（幂等）。"""
     with engine.begin() as conn:
         try:
             conn.execute(text("ALTER TABLE designs ADD COLUMN collab_room VARCHAR(64)"))
         except Exception as exc:
-            if "duplicate column" not in str(exc).lower():
+            if not _is_duplicate_column(exc):
                 logger.error("designs.collab_room 迁移失败：%s", exc)
                 raise
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_designs_collab_room ON designs (collab_room)"))
@@ -63,7 +77,7 @@ def _ensure_workspace_columns() -> None:
             try:
                 conn.execute(text(f"ALTER TABLE {table} ADD COLUMN workspace_id INTEGER"))
             except Exception as exc:
-                if "duplicate column" not in str(exc).lower():
+                if not _is_duplicate_column(exc):
                     logger.error("%s.workspace_id 迁移失败：%s", table, exc)
                     raise
             conn.execute(text(f"CREATE INDEX IF NOT EXISTS ix_{table}_workspace_id ON {table} (workspace_id)"))
@@ -93,7 +107,7 @@ def _ensure_image_owner_column() -> None:
         try:
             conn.execute(text("ALTER TABLE images ADD COLUMN owner_id INTEGER DEFAULT 0"))
         except Exception as exc:
-            if "duplicate column" not in str(exc).lower():
+            if not _is_duplicate_column(exc):
                 logger.error("images.owner_id 迁移失败：%s", exc)
                 raise
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_images_owner_id ON images (owner_id)"))
