@@ -8,6 +8,8 @@ import { Link, useNavigate } from 'react-router-dom'
 import { ChevronDown, ChevronUp, Clock, FilePlus2, FolderOpen, LayoutTemplate, LogOut, Trash2 } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
+import DesignThumbnail from '@/components/chat/DesignThumbnail'
+import type { DesignNode } from '@/design/types'
 import { api, clearAuth, getUsername } from '@/lib/api'
 import { loadLatestDraft } from '@/lib/designSession'
 import { randomSessionKey } from '@/lib/sessionKey'
@@ -25,6 +27,8 @@ interface DesignMeta {
   node_count: number
   width: number
   height: number
+  /** T36：with_preview=true 时后端附带的设计树（渲染缩略图用） */
+  design?: DesignNode
 }
 
 interface TemplateMeta {
@@ -53,7 +57,7 @@ export default function HomePage() {
     setMoreError('')
     try {
       const r = await api<{ designs: DesignMeta[]; total?: number }>(
-        `/api/designs?limit=${RECENT_DESIGN_LIMIT}&offset=0`,
+        `/api/designs?limit=${RECENT_DESIGN_LIMIT}&offset=0&with_preview=true`,
       )
       const list = r.designs ?? []
       setDesigns(list)
@@ -88,7 +92,7 @@ export default function HomePage() {
       let known = total
       while (acc.length < known) {
         const r = await api<{ designs: DesignMeta[]; total?: number }>(
-          `/api/designs?limit=${RECENT_FETCH_CHUNK}&offset=${acc.length}`,
+          `/api/designs?limit=${RECENT_FETCH_CHUNK}&offset=${acc.length}&with_preview=true`,
         )
         const page = r.designs ?? []
         if (page.length === 0) break
@@ -286,19 +290,27 @@ export default function HomePage() {
                 {visibleDesigns.map((d) => (
                   <div
                     key={d.id}
-                    className="group relative overflow-hidden rounded-xl border bg-background p-4 shadow-sm transition hover:-translate-y-0.5 hover:border-primary/50 hover:shadow-md"
+                    className="group relative overflow-hidden rounded-xl border border-border bg-card transition hover:-translate-y-0.5 hover:border-primary/40"
                   >
-                    <span className="absolute inset-x-0 top-0 h-0.5 bg-gradient-to-r from-primary/60 to-secondary/60 opacity-0 transition group-hover:opacity-100" />
                     <button
                       className="w-full text-left"
                       data-testid={`home-design-${d.id}`}
                       onClick={() => openWorkspace(`?design=${d.id}`)}
                     >
-                      <div className="text-sm font-medium">{d.name}</div>
-                      <div className="mt-1 text-xs text-muted-foreground">
-                        {d.node_count} 个节点 · {d.width > 0 ? `${Math.round(d.width)}×${Math.round(d.height)}` : '自适应'}
+                      {/* T36：缩略预览（后端 with_preview 返回设计树；未返回时退化为等高占位，不空白塌陷） */}
+                      <div className="h-[122px] overflow-hidden bg-muted/40 px-3 py-3" data-testid={`home-design-thumb-${d.id}`}>
+                        {d.design ? (
+                          <DesignThumbnail design={d.design} />
+                        ) : (
+                          <div className="h-full w-full rounded-lg border border-dashed border-border" />
+                        )}
                       </div>
-                      <div className="mt-0.5 text-[11px] text-muted-foreground/70">{fmtTime(d.updated_at)}</div>
+                      <div className="border-t border-border px-3 py-2">
+                        <div className="truncate text-[13px] font-medium">{d.name}</div>
+                        <div className="mt-0.5 text-[11px] text-muted-foreground">
+                          {d.node_count} 个节点 · {fmtTime(d.updated_at)}
+                        </div>
+                      </div>
                     </button>
                     <button
                       className="absolute right-2 top-2 rounded p-1 text-muted-foreground opacity-0 hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100"

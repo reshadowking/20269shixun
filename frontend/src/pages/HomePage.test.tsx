@@ -111,7 +111,8 @@ describe('HomePage 最近设计分页（缺陷 2）', () => {
 
     await waitFor(() => expect(cards()).toHaveLength(8))
     expect(screen.getByTestId('home-load-more')).toBeInTheDocument()
-    expect(calls[0]).toBe('/api/designs?limit=8&offset=0') // 首屏只取 8 条
+    // T36：首屏仍只取 8 条，但追加 with_preview=true（用于缩略图渲染）
+    expect(calls[0]).toBe('/api/designs?limit=8&offset=0&with_preview=true')
 
     await userEvent.click(screen.getByTestId('home-load-more'))
     await waitFor(() => expect(cards()).toHaveLength(9)) // 剩余 1 条已加载并展开
