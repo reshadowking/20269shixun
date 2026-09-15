@@ -6,6 +6,28 @@ const API_BASE = import.meta.env.VITE_API_BASE_URL ?? ''
 
 const TOKEN_KEY = 'design-tool-token'
 const USER_KEY = 'design-tool-user'
+const COOKIE_NAME = 'design_token'
+
+/**
+ * T46b：把 JWT 同步到同源 cookie。
+ *
+ * 为什么需要：资产（图片）读取是 `<img src="/api/images/12">` —— 浏览器自己发这个请求，
+ * **不会带 Authorization 头**。同源 cookie 会自动带上，让 private / workspace 档位的图
+ * 在画布与资产库里正常显示（后端 `GET /api/images/{id}` 同时接受 Bearer 与 cookie）。
+ * 无 token 时清掉，避免退出登录后仍能读到图。
+ */
+function syncAuthCookie(token: string | null): void {
+  try {
+    if (!token) {
+      document.cookie = `${COOKIE_NAME}=; path=/; max-age=0; SameSite=Lax`
+      return
+    }
+    if (document.cookie.split('; ').includes(`${COOKIE_NAME}=${token}`)) return
+    document.cookie = `${COOKIE_NAME}=${token}; path=/; SameSite=Lax`
+  } catch {
+    /* 非浏览器环境（测试/SSR）：忽略 */
+  }
+}
 
 export function getToken(): string | null {
   return localStorage.getItem(TOKEN_KEY)
@@ -14,11 +36,13 @@ export function getToken(): string | null {
 export function setAuth(token: string, username: string) {
   localStorage.setItem(TOKEN_KEY, token)
   localStorage.setItem(USER_KEY, username)
+  syncAuthCookie(token)
 }
 
 export function clearAuth() {
   localStorage.removeItem(TOKEN_KEY)
   localStorage.removeItem(USER_KEY)
+  syncAuthCookie(null)
 }
 
 export function getUsername(): string | null {
@@ -57,6 +81,8 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
   }
   const token = getToken()
   if (token) headers['Authorization'] = `Bearer ${token}`
+  // T46b：给"本改造之前就已登录"的会话补 cookie（否则图片会突然读不到）
+  syncAuthCookie(token)
 
   const resp = await fetch(`${API_BASE}${path}`, { ...options, headers })
   if (resp.status === 401) {

@@ -5,7 +5,16 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import AssetsPage from './AssetsPage'
 
-const IMAGE = { id: 7, filename: 'hero.png', url: '/api/images/7', size: 2048, created_at: '2026-09-15T10:00:00Z' }
+const IMAGE = {
+  id: 7,
+  filename: 'hero.png',
+  url: '/api/images/7',
+  public_url: '/api/images/7?k=abc123abc123ab',
+  visibility: 'private',
+  referenced_by: 0,
+  size: 2048,
+  created_at: '2026-09-15T10:00:00Z',
+}
 
 function mockFetch(list: unknown, opts: { deleteStatus?: number } = {}) {
   return vi.fn(async (url: string, options?: RequestInit) => {
@@ -15,6 +24,10 @@ function mockFetch(list: unknown, opts: { deleteStatus?: number } = {}) {
     }
     if (options?.method === 'POST') {
       return { ok: true, status: 200, json: async () => ({ id: 8, url: '/api/images/8' }) }
+    }
+    if (options?.method === 'PATCH') {
+      const body = JSON.parse(String(options.body ?? '{}'))
+      return { ok: true, status: 200, json: async () => ({ ...IMAGE, visibility: body.visibility }) }
     }
     return { ok: true, status: 200, json: async () => list }
   })
@@ -73,5 +86,62 @@ describe('AssetsPage（T38）', () => {
       expect(call?.[1]?.body).toBeInstanceOf(FormData)
       expect((call?.[1]?.headers as Record<string, string> | undefined)?.['Content-Type']).toBeUndefined()
     })
+  })
+})
+
+describe('AssetsPage（T46b 可见性）', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    localStorage.clear()
+  })
+
+  it('展示可见性选择与被引用次数', async () => {
+    vi.stubGlobal(
+      'fetch',
+      mockFetch({
+        images: [{ ...IMAGE, referenced_by: 2 }],
+        used_bytes: 2048,
+        limit_count: 50,
+        limit_bytes: 20971520,
+      }),
+    )
+    renderPage()
+
+    expect(await screen.findByTestId('asset-visibility-7')).toHaveValue('private')
+    expect(screen.getByTestId('asset-refs-7')).toHaveTextContent('被 2 份稿件引用')
+  })
+
+  it('切换可见性走 PATCH 并刷新', async () => {
+    const fetchMock = mockFetch({ images: [IMAGE], used_bytes: 2048, limit_count: 50, limit_bytes: 20971520 })
+    vi.stubGlobal('fetch', fetchMock)
+    renderPage()
+
+    fireEvent.change(await screen.findByTestId('asset-visibility-7'), { target: { value: 'workspace' } })
+
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find((c) => String(c[0]) === '/api/images/7/visibility')
+      expect(call).toBeTruthy()
+      expect(call?.[1]?.method).toBe('PATCH')
+      expect(String(call?.[1]?.body)).toContain('"workspace"')
+    })
+  })
+
+  it('public-link 时复制的是带凭证的公开链接', async () => {
+    const writeText = vi.fn(async (_text: string) => undefined)
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+    vi.stubGlobal(
+      'fetch',
+      mockFetch({
+        images: [{ ...IMAGE, visibility: 'public-link' }],
+        used_bytes: 2048,
+        limit_count: 50,
+        limit_bytes: 20971520,
+      }),
+    )
+    renderPage()
+
+    fireEvent.click(await screen.findByTestId('asset-copy-7'))
+    await waitFor(() => expect(writeText).toHaveBeenCalled())
+    expect(String(writeText.mock.calls[0][0])).toContain('/api/images/7?k=abc123abc123ab')
   })
 })

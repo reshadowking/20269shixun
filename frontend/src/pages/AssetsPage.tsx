@@ -1,8 +1,10 @@
 /**
  * T38：「我的资产」——按用户隔离的素材库。
  *
- * 后端：`GET /api/images`（只返回本人 + 已用容量与配额）、`POST /api/images`（上传，类型/单文件/配额三重校验）、
- * `DELETE /api/images/{id}`（仅限本人）。前端只做展示与操作，不做任何本地存储（避免"换设备就丢"）。
+ * 后端：`GET /api/images`（本人资产 + 配额）、`POST /api/images`（上传）、
+ * `DELETE /api/images/{id}`（仅本人；被引用时 409，可 force）。
+ * T46b：每张图可切可见性 `private / workspace / public-link`，并显示被多少稿件引用。
+ * 前端只做展示与操作，不做任何本地存储（避免"换设备就丢"）。
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
@@ -13,8 +15,19 @@ interface AssetRow {
   id: number
   filename: string
   url: string
+  /** T46b：public-link 档位的链接（带 k 凭证，未登录也能读） */
+  public_url: string
+  visibility: string
+  /** T46b：有多少份设计稿引用了它（删之前先看这个） */
+  referenced_by: number
   size: number
   created_at: string | null
+}
+
+const VISIBILITY_LABEL: Record<string, string> = {
+  private: '私有（仅自己可读）',
+  workspace: '工作区可见',
+  'public-link': '公开链接（凭链接可读）',
 }
 
 interface AssetList {
@@ -79,23 +92,59 @@ export default function AssetsPage() {
   }
 
   const remove = async (row: AssetRow) => {
-    if (!window.confirm(`删除「${row.filename}」？引用它的设计稿将显示为缺图。`)) return
+    const refs =
+      row.referenced_by > 0
+        ? `\n注意：它仍被 ${row.referenced_by} 份设计稿引用，删除后这些稿会缺图（需要先确认）。`
+        : ''
+    if (!window.confirm(`删除「${row.filename}」？${refs}`)) return
     try {
       await api(`/api/images/${row.id}`, { method: 'DELETE' })
       await load()
       setMessage('已删除。')
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : '删除失败')
+      // T47：被引用时后端返回 409 且带可读原因 → 二次确认后用 force 删（明确知情）
+      const msg = err instanceof Error ? err.message : '删除失败'
+      if (msg.includes('引用') && window.confirm(`${msg}\n\n仍要删除吗？（这些设计稿会缺图）`)) {
+        try {
+          await api(`/api/images/${row.id}?force=true`, { method: 'DELETE' })
+          await load()
+          setMessage('已强制删除（引用它的设计稿会缺图）。')
+          return
+        } catch (forceErr) {
+          setMessage(forceErr instanceof Error ? forceErr.message : '删除失败')
+          return
+        }
+      }
+      setMessage(msg)
     }
   }
 
-  /** 复制图片链接：在画布选中「图片」组件后，属性面板粘贴即可（下一步可做成一键插入）。 */
-  const copyUrl = async (row: AssetRow) => {
+  /** T46b：切换可见性 */
+  const changeVisibility = async (row: AssetRow, visibility: string) => {
     try {
-      await navigator.clipboard.writeText(`${window.location.origin}${row.url}`)
-      setMessage('链接已复制：在画布选中图片组件 → 属性面板粘贴到「图片地址」。')
+      await api(`/api/images/${row.id}/visibility`, {
+        method: 'PATCH',
+        body: JSON.stringify({ visibility }),
+      })
+      await load()
+      setMessage(`「${row.filename}」已设为：${VISIBILITY_LABEL[visibility] ?? visibility}`)
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : '可见性切换失败')
+    }
+  }
+
+  /** 复制图片链接：public-link 复制"带凭证的公开链接"，其余复制需要登录的地址。 */
+  const copyUrl = async (row: AssetRow) => {
+    const target = row.visibility === 'public-link' ? row.public_url : row.url
+    try {
+      await navigator.clipboard.writeText(`${window.location.origin}${target}`)
+      setMessage(
+        row.visibility === 'public-link'
+          ? '公开链接已复制：任何人打开都能看到这张图。'
+          : '链接已复制：对方需登录且能看到引用它的设计稿（或同工作区）才读得到。',
+      )
     } catch {
-      setMessage(`复制失败，请手动复制：${row.url}`)
+      setMessage(`复制失败，请手动复制：${target}`)
     }
   }
 
@@ -131,7 +180,10 @@ export default function AssetsPage() {
         </button>
       </div>
       <p className="mb-3 text-xs text-muted-foreground">
-        支持 png / jpg / webp / gif，单文件 ≤2MB；资产按账号隔离，导出时图片会内联进工程（不会丢图）。
+        支持 png / jpg / webp / gif，单文件 ≤2MB；导出时图片会内联进工程（不会丢图）。
+        <br />
+        可见性：<strong>私有</strong> 只有你能主动打开，但被你共享出去的设计稿引用时，协作者也能读到（否则对方缺图）；
+        <strong>工作区可见</strong> 给同工作区成员；<strong>公开链接</strong> 任何人都能凭「复制链接」得到的地址查看。
       </p>
       {message && (
         <p className="mb-3 text-xs text-muted-foreground" data-testid="assets-msg">
@@ -167,7 +219,22 @@ export default function AssetsPage() {
               <div className="mt-0.5 flex items-center gap-2 text-[11px] text-muted-foreground">
                 <span>{humanSize(row.size)}</span>
                 <span>{row.created_at ? new Date(row.created_at).toLocaleDateString() : ''}</span>
+                {row.referenced_by > 0 && (
+                  <span data-testid={`asset-refs-${row.id}`}>被 {row.referenced_by} 份稿件引用</span>
+                )}
               </div>
+              {/* T46b：可见性（private / workspace / public-link） */}
+              <select
+                className="mt-1.5 h-7 w-full rounded border border-input bg-background px-1 text-[11px]"
+                data-testid={`asset-visibility-${row.id}`}
+                value={row.visibility}
+                title="谁能读到这张图"
+                onChange={(e) => void changeVisibility(row, e.target.value)}
+              >
+                <option value="private">私有（仅自己）</option>
+                <option value="workspace">工作区可见</option>
+                <option value="public-link">公开链接</option>
+              </select>
               <div className="mt-1.5 flex items-center gap-2">
                 <button
                   className="rounded border border-border px-2 py-0.5 text-[11px] hover:bg-accent"
