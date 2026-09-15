@@ -5,6 +5,7 @@
 - GET /api/images/{id}：返回图片文件（id 为自增主键，演示环境放宽免鉴权；
   文件名为 uuid 难枚举，不暴露用户目录结构）
 """
+import json
 import uuid
 from pathlib import Path
 
@@ -15,7 +16,7 @@ from sqlalchemy.orm import Session as DbSession
 
 from ..config import get_settings
 from ..db import get_db
-from ..models import Image
+from ..models import Design, Image
 from ..security import get_current_user
 from .sessions import _owner_id  # T38：复用既有的"用户名 → owner_id"解析（单一实现）
 
@@ -96,12 +97,37 @@ def list_images(db: DbSession = Depends(get_db), _user: str = Depends(get_curren
 
 
 @router.delete("/api/images/{image_id}")
-def delete_image(image_id: int, db: DbSession = Depends(get_db), _user: str = Depends(get_current_user)):
-    """T38：删除自己的资产（同时删文件）；他人资产返回 404（不泄漏存在性）。"""
+def delete_image(
+    image_id: int,
+    force: bool = False,
+    db: DbSession = Depends(get_db),
+    _user: str = Depends(get_current_user),
+):
+    """T38/T47：删除自己的资产（同时删文件）；他人资产返回 404（不泄漏存在性）。
+
+    T47 **引用检查**：若仍有设计稿引用这张图（含协作者的设计稿），默认拒绝并列出引用方，
+    避免"我删了自己的图，协作方那边变缺图"。确实要删时用 `?force=true`。
+    """
     owner = _owner_id(db, _user)
     row = db.get(Image, image_id)
     if row is None or row.owner_id != owner:
         raise HTTPException(status_code=404, detail="资产不存在或无权访问")
+    # T47：按"设计树里 props.src 是否等于本图 URL"精确判定引用。
+    # 不用 SQL LIKE：`%/api/images/1%` 会误匹配 `/api/images/12`，且测试库（SQLite）删除后 id 会复用，
+    # 会出现"新图被判为被引用"的假阳性——解析比对没有这类问题（演示规模下开销可忽略）。
+    wanted = f"/api/images/{image_id}"
+    refs = [
+        (row.id, row.name)
+        for row in db.execute(select(Design)).scalars().all()
+        if _references_image(row.design_json, wanted)
+    ]
+    if refs and not force:
+        names = "、".join(str(r[1]) for r in refs[:3])  # refs 元素是 (id, name) 元组
+        more = "…" if len(refs) > 3 else ""
+        raise HTTPException(
+            status_code=409,
+            detail=f"该图片仍被 {len(refs)} 个设计稿引用（{names}{more}），删除后这些稿会缺图。确认删除请加 ?force=true。",
+        )
     path = Path(get_settings().storage_root) / row.path
     try:
         path.unlink(missing_ok=True)
@@ -110,6 +136,27 @@ def delete_image(image_id: int, db: DbSession = Depends(get_db), _user: str = De
     db.delete(row)
     db.commit()
     return {"ok": True}
+
+
+def _references_image(design_json: str, wanted_src: str) -> bool:
+    """设计树里是否存在 image 组件的 props.src == wanted_src（也接受绝对 URL 结尾匹配）。"""
+    try:
+        tree = json.loads(design_json or "{}")
+    except json.JSONDecodeError:
+        return False
+
+    def walk(node: object) -> bool:
+        if not isinstance(node, dict):
+            return False
+        props = node.get("props")
+        if isinstance(props, dict):
+            src = props.get("src")
+            if isinstance(src, str) and (src == wanted_src or src.endswith(wanted_src)):
+                return True
+        children = node.get("children")
+        return any(walk(child) for child in children) if isinstance(children, list) else False
+
+    return walk(tree)
 
 
 @router.get("/api/images/{image_id}")

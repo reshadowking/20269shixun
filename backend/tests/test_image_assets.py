@@ -50,6 +50,40 @@ class TestAssetOwnership:
             db.close()
 
 
+class TestAssetReference:
+    """T47：被设计稿引用的资产不能静默删除（防"删了自己的图，协作方变缺图"）。"""
+
+    def _design_referencing(self, client, auth_headers, image_id: int):
+        design = {
+            "id": "root",
+            "type": "frame",
+            "children": [
+                {
+                    "id": "img",
+                    "type": "component",
+                    "componentType": "image",
+                    "props": {"src": f"/api/images/{image_id}", "alt": "x"},
+                }
+            ],
+        }
+        return client.post("/api/designs", json={"name": "引用图的设计稿", "design": design}, headers=auth_headers)
+
+    def test_delete_blocked_when_referenced(self, client, auth_headers):
+        image_id = _upload(client, auth_headers).json()["id"]
+        created = self._design_referencing(client, auth_headers, image_id)
+        assert created.status_code == 200
+
+        blocked = client.delete(f"/api/images/{image_id}", headers=auth_headers)
+        assert blocked.status_code == 409
+        assert "仍被" in blocked.json()["detail"]
+        # 强制删除仍然允许（数据可回收，只是不静默）
+        assert client.delete(f"/api/images/{image_id}?force=true", headers=auth_headers).status_code == 200
+
+    def test_delete_allowed_when_not_referenced(self, client, auth_headers):
+        image_id = _upload(client, auth_headers).json()["id"]
+        assert client.delete(f"/api/images/{image_id}", headers=auth_headers).status_code == 200
+
+
 class TestAssetQuota:
     def test_count_quota_blocks_upload(self, client, auth_headers, monkeypatch):
         from app.routers import images as images_router
