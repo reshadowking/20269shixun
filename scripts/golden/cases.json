@@ -1,0 +1,54 @@
+{
+  "$comment": "T27 真实模型黄金集：固定指令 + 固定初始设计树（复用 scripts/designs/login.json）+ 客观阈值。expect.max_touched 只对 ops 路径（命中 ops_applied）生效。",
+  "initial_design": "scripts/designs/login.json",
+  "cases": [
+    {
+      "id": "edit-color",
+      "mode": "edit",
+      "instruction": "把主按钮改成橙色",
+      "expect": { "max_touched": 2, "max_seconds": 45, "max_tokens": 2000 }
+    },
+    {
+      "id": "edit-copy",
+      "mode": "edit",
+      "instruction": "把标题文案改成「欢迎回来」",
+      "expect": { "max_touched": 2, "max_seconds": 45, "max_tokens": 2000 }
+    },
+    {
+      "id": "edit-insert",
+      "mode": "edit",
+      "instruction": "在登录按钮下面加一条提示文字：登录即代表同意服务条款",
+      "expect": { "max_touched": 3, "max_seconds": 45, "max_tokens": 2500 }
+    },
+    {
+      "id": "edit-remove",
+      "mode": "edit",
+      "instruction": "删掉「忘记密码 · 注册账号」那一行",
+      "expect": { "max_touched": 3, "max_seconds": 45, "max_tokens": 2500 }
+    },
+    {
+      "id": "edit-theme",
+      "mode": "edit",
+      "instruction": "把整个页面换成深色主题",
+      "expect": { "max_touched": 10, "max_seconds": 45, "max_tokens": 3000 }
+    },
+    {
+      "id": "edit-long-instruction",
+      "mode": "edit",
+      "instruction": "请在不改变现有结构的前提下做三件事：第一，把标题字号调大到 28；第二，把主按钮改成橙色并略微加大圆角；第三，给登录卡片加一层很轻的阴影。除此之外，其他任何节点的文案、颜色、字号、间距、顺序都不要变，尤其不要动导航和页脚，也不要把整棵树重写一遍，只输出这几处改动。",
+      "expect": { "max_touched": 5, "max_seconds": 45, "max_tokens": 3000 }
+    },
+    {
+      "id": "edit-off-topic",
+      "mode": "edit",
+      "instruction": "今天天气怎么样？",
+      "expect": { "max_touched": 0, "max_seconds": 45, "max_tokens": 1500 }
+    },
+    {
+      "id": "generate-login",
+      "mode": "generate",
+      "instruction": "设计一个简洁的登录页，主色蓝色，含账号/密码输入框与登录按钮",
+      "expect": { "max_touched": 0, "max_seconds": 45, "max_tokens": 8000 }
+    }
+  ]
+}

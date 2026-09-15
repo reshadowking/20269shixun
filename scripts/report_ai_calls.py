@@ -22,12 +22,12 @@ def _pct(values: list[int], q: float) -> int:
 def collect(days: int) -> dict:
     from app.db import SessionLocal
     from app.models import AiCall
-    from sqlalchemy import select
 
     since = datetime.now(UTC) - timedelta(days=days)
     db = SessionLocal()
     try:
-        rows = list(db.execute(select(AiCall).where(AiCall.created_at >= since)).scalars())
+        # 用 ORM Query（不引 sqlalchemy.select）——避免 isort 把第三方/第一方 import 反复重排
+        rows = list(db.query(AiCall).filter(AiCall.created_at >= since).all())
     finally:
         db.close()
 
