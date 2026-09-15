@@ -95,7 +95,10 @@ docs/          开发文档（API 契约、评测口径、部署）
 | `a742371` T19 | 合规兜底不再把非 hex 值刷成 `primary`；`#fff` 归一；组件库 `"card"` 默认值修正 |
 | `14a4a31` T25 | 推荐引擎白名单断言改为引用唯一来源并覆盖 `switch`/`tabs` 分支 |
 | `d33b864` T20 | **AI 生成专用线程池 + 并发闸门 + 整链路时间预算**（画布业务不再被生成拖住） |
+| `0b1a885` T21 | AI 调用记账与溯源：`ai_calls` 表 + 提示词版本哈希 + `scripts/report_ai_calls.py`，MCP 路径一并接入 |
+| `f4a4a54` T22 | 熔断（失败率/连续失败）+ 限流（用户/全局令牌桶）+ 日 token 配额；熔断打开仍出稿不返 5xx |
+| `b2a0df8` T23 | 编辑改输出 **ops 结构化增量**（6 种 op、整批原子、删节点必须显式 remove） |
 
-**测试基线（2026-09-15 实测）**：pytest **435 passed** ｜ vitest **510 passed / 49 文件** ｜ ruff / `tsc -b` / `scripts/precommit.ps1` 全绿。
+**测试基线（2026-09-15 实测）**：pytest **454 passed** ｜ vitest **510 passed / 49 文件** ｜ ruff / `tsc -b` / `scripts/precommit.ps1` 全绿。
 **指标口径变化**：合规率不再把"合法但非令牌的写法（CSS 关键字、3/8 位 hex）"计入违规（同一份设计稿 14.3% → 71.4%），详见 `newdocs/项目度量指标总览.md`。
 **已知限制**：生成网关是**进程内**实现（`--workers>1` 时各 worker 各自计数）；E2E 需本地 docker（y-websocket）+ mock 后端，本轮未在受限环境执行；MCP 路径不带 `session_key`，因而不取会话历史。
