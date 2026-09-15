@@ -58,14 +58,19 @@ services:
       PORT: "1234"
       ROOM: "design-room"
       YPERSISTENCE: "./storage"   # leveldb 持久化，容器重启不丢（与 PG 双保险）
-    ports:
-      - "1234:1234"
+    # 2026-09-16 收紧（§四）：**不再映射到宿主机**。
+    # 原因：它没有鉴权——端口一对外，知道房间名的人就能绕过网关直连写入，"只读访客"形同虚设。
+    # 现在浏览器一律走 collab-gateway（1235，需 JWT），y-websocket 只在 compose 内网可达。
+    # 需要直连（跑 Playwright E2E / 老前端）时叠加开发 override：
+    #   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d y-websocket
+    expose:
+      - "1234"
     volumes:
       - yjsdata:/app/storage
 
-  # T46a-3：协作鉴权网关（默认**不启动**——需要显式 profile 才拉起，保证现有协作不被影响）
+  # T46a-3：协作鉴权网关（需要显式 profile 才拉起）
   #   启用：docker compose --profile collab-auth up -d collab-gateway
-  #   然后把前端 VITE_WS_URL 指向 ws://localhost:1235（并带 token 参数），验证通过后再考虑关掉 1234
+  #   前端指向它：VITE_WS_GATEWAY_URL=ws://localhost:1235（配了它=所有协作流量都过网关）
   collab-gateway:
     build: ./collab-gateway
     container_name: design-collab-gateway

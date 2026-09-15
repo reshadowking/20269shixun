@@ -1,11 +1,10 @@
 /**
  * T46a-3（卡 §三.1）接线测试：协作到底连哪个端点、哪个房间名。
  *
- * 决策（2026-09-15）：
- *   - 已保存稿件 + 配了 `VITE_WS_GATEWAY_URL` + 无显式 `?room=` → 等 `/collab` 签发房间，连**网关**；
- *   - 草稿（没有 design 参数）→ **不走网关**，直连 `VITE_WS_URL`（房间 session-{key}）；
- *   - 没配网关地址 → 与改造前完全一致（直连 design-{id}）；
- *   - 显式 `?room=`（E2E / 多人同稿）→ 直连该房间名。
+ * 决策（2026-09-16 收紧后）：
+ *   - 配了 `VITE_WS_GATEWAY_URL` → **所有**房间都过网关：
+ *       已保存稿件等 `/collab` 签发房间；草稿用 `session-{key}`；显式 `?room=` 用原值；
+ *   - 没配网关地址 → 与改造前完全一致（直连 `VITE_WS_URL`）。
  *
  * 用 FakeWebsocketProvider 记录真实建连参数——不真连 WS。
  */
@@ -109,12 +108,12 @@ describe('§三.1 协作传输决策', () => {
     expect(FakeWebsocketProvider.instances).toHaveLength(0)
   })
 
-  it('草稿：不走网关，直连 VITE_WS_URL（房间 session-{key}）', async () => {
+  it('草稿：也走网关（房间名用本地派生的 session-{key}）', async () => {
     vi.stubGlobal('fetch', mockFetch())
     renderAt('/workspace?from=draft&session=s-draft01')
 
     const provider = await waitForConnect()
-    expect(provider.serverUrl).toBe('ws://direct:1234')
+    expect(provider.serverUrl).toBe('ws://gw:1235')
     expect(provider.roomname).toBe('session-s-draft01')
   })
 
@@ -128,12 +127,12 @@ describe('§三.1 协作传输决策', () => {
     expect(provider.roomname).toBe('design-7')
   })
 
-  it('显式 ?room=（E2E/多人同稿）：直连该房间名，即使配了网关', async () => {
+  it('显式 ?room=（E2E/多人同稿）：过网关，房间名用 ?room= 原值', async () => {
     vi.stubGlobal('fetch', mockFetch())
     renderAt('/workspace?design=7&room=room-e2e')
 
     const provider = await waitForConnect()
-    expect(provider.serverUrl).toBe('ws://direct:1234')
+    expect(provider.serverUrl).toBe('ws://gw:1235')
     expect(provider.roomname).toBe('room-e2e')
   })
 })

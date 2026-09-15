@@ -32,7 +32,7 @@ import { findNode, findParent as findParentOf, genId } from '@/design/tree'
 import type { ComponentType, DesignNode } from '@/design/types'
 import { api } from '@/lib/api'
 import SessionBar from '@/components/chat/SessionBar'
-import { deriveCollabRoom, usesSignedRoom } from '@/lib/collabRoom'
+import { deriveCollabRoom, needsSignedRoom, usesGateway } from '@/lib/collabRoom'
 import { clearSnapshots, deleteSnapshot, loadSnapshots, saveSnapshot, type SessionSnapshot } from '@/lib/sessionSnapshots'
 import { sessionApi, type SessionMeta } from '@/lib/sessionApi'
 import { deriveSessionKey, isSessionKey, randomSessionKey, SESSION_PARAM } from '@/lib/sessionKey'
@@ -88,17 +88,24 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
   }
   const room = roomRef.current
   /**
-   * §三.1 传输决策：已保存稿件 + 配了网关 + 无显式 ?room= → 走**服务端签发房间**。
-   * 签发房间要打一次 /api/designs/{id}/collab，所以拿到之前**先不连**——
-   * 不能"先连可猜的 design-{id}、拿到再换"，那等于把网关绕过去了。
-   * 草稿与显式 ?room= 维持直连（2026-09-15 决策）。
+   * §三.1 + §四 传输决策（2026-09-16 收紧后）：
+   *   ① 配了网关 → **所有**房间都过网关（草稿、显式 ?room= 也一样）；
+   *   ② 其中"已保存稿件"必须等服务端签发房间：拿到之前**先不连**，
+   *      不能"先连可猜的 design-{id}、拿到再换"，那等于把网关绕过去了；
+   *   ③ 草稿/显式 ?room= 用本地房间名（`session-*` / `?room=` 原值），登录即可协作；
+   *   ④ 没配网关 → 与改造前完全一致（直连）。
    */
-  const viaGateway = usesSignedRoom(explicitRoom, designParam, wsGatewayUrl)
-  /** 网关可用（与"当前是不是已保存稿件"无关）：草稿**另存为**正式设计后要不要走签发房间看它 */
-  const gatewayAvailable = Boolean(wsGatewayUrl && !explicitRoom)
+  const gatewayOn = usesGateway(wsGatewayUrl)
+  const signedRoomNeeded = needsSignedRoom(designParam, explicitRoom)
   const [signedRoom, setSignedRoom] = useState<string | null>(null)
-  const connectUrl = viaGateway ? (signedRoom ? wsGatewayUrl : undefined) : wsDirectUrl
-  const connectRoom = viaGateway && signedRoom ? signedRoom : room
+  const connectUrl = !gatewayOn
+    ? wsDirectUrl
+    : signedRoomNeeded
+      ? signedRoom
+        ? wsGatewayUrl
+        : undefined
+      : wsGatewayUrl
+  const connectRoom = signedRoomNeeded && signedRoom ? signedRoom : room
   // D5：presence 昵称（?user= 可区分多标签演示；默认与登录账号一致）
   const userName = searchParams.get('user') ?? 'demo'
   const { design, store } = useDesignStore(connectUrl, DEMO_DESIGNS[0], connectRoom)
@@ -192,14 +199,14 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
       })
       .catch(() => {
         /* 拿不到角色（老数据/未启用网关）就不标角色，不阻塞画布 */
-        if (cancelled || !viaGateway) return
+        if (cancelled || !gatewayOn) return
         // 走网关时拿不到房间就不连——兜底直连等于给"猜房间名"开后门
         setCollabRoomError('未能获取协作房间（服务端未签发），本次未建立协作连接。')
       })
     return () => {
       cancelled = true
     }
-  }, [designParam, loaded, viaGateway])
+  }, [designParam, loaded, gatewayOn])
 
   // 网关 4403 → 明确告知（不静默重连，避免"看着在线其实被拒"）
   useEffect(() => {
@@ -314,7 +321,7 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
       setSavedMeta({ id: r.id, name: r.name })
       // B3-1：新建保存为正式设计后迁移协作房间（保留 ydoc/撤销栈，不整页刷新）。
       // §三.1：配了网关时**不在这里连可猜房间**——先清掉直连端点，等 /collab 签发房间后由传输 effect 连。
-      if (gatewayAvailable) store.reconnectRoom(undefined, `design-${r.id}`)
+      if (gatewayOn) store.reconnectRoom(undefined, `design-${r.id}`)
       else store.reconnectRoom(wsDirectUrl, `design-${r.id}`)
       // 缺陷 4：URL 补 design 参数（刷新后 room 派生一致）+ 会话绑定该设计
       const next = new URLSearchParams(searchParams)
@@ -997,7 +1004,7 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
               连接断开，自动重连中…
             </span>
           )}
-          {viaGateway && !signedRoom && !collabRoomError && (
+          {gatewayOn && signedRoomNeeded && !signedRoom && !collabRoomError && (
             <span className="text-[11px] text-muted-foreground" data-testid="collab-waiting">
               正在获取协作房间…
             </span>

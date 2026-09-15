@@ -66,5 +66,8 @@ class TestAuthorizeEndpoint:
         denied = client.post("/api/collab/authorize", json={"room": room, "username": "nobody-here"}, headers=headers)
         assert denied.json() == {"ok": False, "role": None}
 
+        # 2026-09-16 收紧后语义变化：房间**不对应任何稿件**（草稿 / 共享链接类房间）→ 登录即可协作。
+        # 这条从"拒绝"变成"放行"是有意的：草稿原来走没鉴权的直连，现在也过网关。
+        # 真正的不变量在上面两行——**房间对应到稿件时，必须过成员校验**（非成员仍然被拒）。
         unknown_room = client.post("/api/collab/authorize", json={"room": "x" * 20, "username": "cauth1"}, headers=headers)
-        assert unknown_room.json() == {"ok": False, "role": None}
+        assert unknown_room.json() == {"ok": True, "role": "editor"}

@@ -20,7 +20,6 @@ from .sessions import _owner_id
 
 router = APIRouter(tags=["collab"])
 
-
 @router.get("/api/designs/{design_id}/collab")
 def collab_room(design_id: int, db: DbSession = Depends(get_db), _user: str = Depends(get_current_user)):
     """签发（或返回已存在的）协作房间名 + 我的角色。"""
@@ -76,7 +75,15 @@ def authorize(
     # 兼容当前前端派生出的旧房间名（`design-<id>`）：网关不必等前端切到签名房间名就能先上线
     if design is None and req.room.startswith("design-") and req.room[7:].isdigit():
         design = db.get(Design, int(req.room[7:]))
-    if user is None or design is None:
+    if user is None:
         return {"ok": False, "role": None}
+    if design is None:
+        # 房间不对应任何稿件 = 草稿/共享链接类房间：**登录即可协作**（没有成员表可查，也没有稿件数据可泄漏）。
+        #
+        # 2026-09-16 收紧：这类房间原来走**直连** y-websocket（完全没鉴权），只要那个端口对外，
+        # 谁都能连上写。现在一律过网关、要求合法 JWT，房间名当共享凭证。
+        # 不按前缀（`session-` 等）限制：前缀挡不住"猜房间名"，却会挡住 E2E 的 `?room=e2e-*`。
+        # 真正重要的那条在下面：**房间对应到稿件时必须过成员校验**。
+        return {"ok": True, "role": "editor"}
     role = role_for_design(db, design, user.id)
     return {"ok": role is not None, "role": role}

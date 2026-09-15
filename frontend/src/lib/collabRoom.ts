@@ -22,19 +22,24 @@ export function randomRoom(): string {
 }
 
 /**
- * T46a-3（卡 §三.1）：要不要走「服务端签发房间」这条路。
+ * 协作是否走网关（`VITE_WS_GATEWAY_URL`）。
  *
- * 三个条件全部满足才走网关：
- *   ① 打开的是**已保存稿件**（未保存画布没有稿件行，签发不出房间，也不该放开猜得到的房间）；
- *   ② 配了网关地址（`VITE_WS_GATEWAY_URL`）——不配就与改造前完全一致，全部直连；
- *   ③ 没有显式 `?room=`（E2E / "多人同稿"入口按房间名直连，那是另一个语义）。
+ * 2026-09-16 收紧：**配了网关就所有协作流量都过网关**——包括草稿与显式 `?room=`。
+ * 原来草稿走直连，等于留了个后门：只要 y-websocket 端口对外，谁都能连上写。
+ * 现在网关对草稿房间要求**合法 JWT**（房间名当共享凭证），配合 compose 不再把
+ * y-websocket 暴露到宿主机，直连这条路才真正关掉。
  *
- * 返回 false 时行为 == 改造前：直连 `VITE_WS_URL`，房间名本地派生。
+ * 没配网关时返回 false：行为与改造前完全一致（直连 `VITE_WS_URL`）。
  */
-export function usesSignedRoom(
-  explicitRoom: string | null,
-  designId: string | null,
-  gatewayUrl?: string,
-): boolean {
-  return Boolean(designId && gatewayUrl && !explicitRoom)
+export function usesGateway(gatewayUrl?: string): boolean {
+  return Boolean(gatewayUrl)
+}
+
+/**
+ * 是否必须等**服务端签发**房间名再连：只有"已保存稿件、且没有显式指定房间"才需要。
+ * - 草稿没有稿件行、签不出房间 → 用本地派生的 `session-*`；
+ * - 显式 `?room=`（E2E / 多人同稿入口）优先级最高 → 用它给的名字（仍是过网关）。
+ */
+export function needsSignedRoom(designId: string | null, explicitRoom: string | null): boolean {
+  return Boolean(designId && !explicitRoom)
 }
