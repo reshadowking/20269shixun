@@ -1,0 +1,9 @@
+{
+  "name": "collab-gateway",
+  "private": true,
+  "version": "1.0.0",
+  "description": "T46a-3：y-websocket 鉴权网关（校验 JWT + 房间成员资格；viewer 只读）",
+  "main": "server.js",
+  "scripts": { "start": "node server.js" },
+  "dependencies": { "ws": "^8.18.0" }
+}

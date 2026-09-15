@@ -58,6 +58,25 @@ services:
       PORT: "1234"
       ROOM: "design-room"
       YPERSISTENCE: "./storage"   # leveldb 持久化，容器重启不丢（与 PG 双保险）
+
+  # T46a-3：协作鉴权网关（默认**不启动**——需要显式 profile 才拉起，保证现有协作不被影响）
+  #   启用：docker compose --profile collab-auth up -d collab-gateway
+  #   然后把前端 VITE_WS_URL 指向 ws://localhost:1235（并带 token 参数），验证通过后再考虑关掉 1234
+  collab-gateway:
+    build: ./collab-gateway
+    container_name: design-collab-gateway
+    profiles: ["collab-auth"]
+    environment:
+      PORT: "1235"
+      UPSTREAM_WS: "ws://y-websocket:1234"
+      BACKEND_URL: "http://backend:8000"
+      # 必须与后端一致（后端 .env 的 JWT_SECRET / COLLAB_INTERNAL_TOKEN）
+      JWT_SECRET: "${JWT_SECRET:-dev-secret-change-me-please-32bytes-minimum}"
+      COLLAB_INTERNAL_TOKEN: "${COLLAB_INTERNAL_TOKEN:-}"
+    ports:
+      - "1235:1235"
+    depends_on:
+      - y-websocket
     ports:
       - "1234:1234"
     volumes:
