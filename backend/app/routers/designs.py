@@ -192,10 +192,15 @@ def create_design(req: DesignCreate, _user: str = Depends(get_current_user), db=
     """
     _validate_design_payload(req.design)
     owner_id = _owner_id(db, _user)
+    # T46a-4：新稿件直接归属创建人的个人工作区（此前 workspace_id 为空，只靠"创建人兜底"判定可见性）
+    from ..services.workspaces import create_personal_workspace, personal_workspace_of
+
+    workspace = personal_workspace_of(db, owner_id) or create_personal_workspace(db, owner_id, _user)
     for attempt in (1, 2):
         design = Design(
             name=req.name,
             owner_id=owner_id,
+            workspace_id=workspace.id,
             design_json=json.dumps(req.design, ensure_ascii=False),
         )
         db.add(design)
@@ -256,6 +261,37 @@ def delete_design(design_id: int, _user: str = Depends(get_current_user), db=Dep
     db.delete(design)
     db.commit()
     return {"ok": True}
+
+
+class MoveRequest(BaseModel):
+    workspace_id: int = Field(ge=1)
+
+
+@router.post("/api/designs/{design_id}/move")
+def move_design(
+    design_id: int, req: MoveRequest, _user: str = Depends(get_current_user), db=Depends(get_db)
+):
+    """T46a-4：把稿件移到另一个工作区。
+
+    两条权限都要满足（缺一不可）：
+    - 对**原**位置有写权限（viewer 403）；
+    - 对**目标**工作区有写权限（非成员 404 不泄露存在性、成员但 viewer 403）。
+    """
+    from ..services.workspaces import WRITABLE_ROLES, role_for_design, role_of
+
+    design = _own_design(db, design_id, _user)
+    me = _owner_id(db, _user)
+    if role_for_design(db, design, me) not in WRITABLE_ROLES:
+        raise HTTPException(status_code=403, detail="只读访客：无权移动该设计稿（需要 owner/editor 权限）")
+    target_role = role_of(db, req.workspace_id, me)
+    if target_role is None:
+        raise HTTPException(status_code=404, detail="目标工作区不存在或无权访问")
+    if target_role not in WRITABLE_ROLES:
+        raise HTTPException(status_code=403, detail="只读成员：无权把稿件移入该工作区")
+    design.workspace_id = req.workspace_id
+    db.commit()
+    db.refresh(design)
+    return _design_meta(design)
 
 
 @router.get("/api/designs/{design_id}/versions")
