@@ -39,6 +39,7 @@ def init_db() -> None:
     Base.metadata.create_all(bind=engine)
     _ensure_version_unique_index()
     _ensure_image_owner_column()
+    _ensure_image_visibility_column()
     _ensure_workspace_columns()
     _ensure_collab_room_column()
     _seed_personal_workspaces()
@@ -114,6 +115,22 @@ def _ensure_image_owner_column() -> None:
     with engine.begin() as conn:
         _add_column(conn, "images", "owner_id", "ALTER TABLE images ADD COLUMN owner_id INTEGER DEFAULT 0")
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_images_owner_id ON images (owner_id)"))
+
+
+def _ensure_image_visibility_column() -> None:
+    """T46b：给既有库的 images 补 visibility（幂等）。
+
+    老资产一律落到 `private`（最保守），但"被某份我看得见的稿件引用"仍然可读
+    （见 `routers/images.py` 的读取判定），所以升级后协作方不会突然缺图。
+    """
+    with engine.begin() as conn:
+        _add_column(
+            conn,
+            "images",
+            "visibility",
+            "ALTER TABLE images ADD COLUMN visibility VARCHAR(16) DEFAULT 'private'",
+        )
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_images_visibility ON images (visibility)"))
 
 
 def _ensure_version_unique_index() -> None:

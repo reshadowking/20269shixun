@@ -70,6 +70,8 @@ class Image(Base):
     owner_id: Mapped[int] = mapped_column(Integer, default=0, index=True)
     # T46a：归属工作区（与 designs 同口径）
     workspace_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    # T46b：资产可见性——private(仅自己) / workspace(工作区成员) / public-link(凭链接任何人)
+    visibility: Mapped[str] = mapped_column(String(16), default="private", index=True)
     filename: Mapped[str] = mapped_column(String(255))
     path: Mapped[str] = mapped_column(String(512))  # 相对 volume 路径
     design_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)

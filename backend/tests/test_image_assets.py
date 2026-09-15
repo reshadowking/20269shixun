@@ -16,8 +16,10 @@ class TestAssetOwnership:
         up = _upload(client, auth_headers)
         assert up.status_code == 200
         body = client.get("/api/images", headers=auth_headers).json()
-        assert [img["id"] for img in body["images"]] == [up.json()["id"]]
-        assert body["used_bytes"] == len(PNG)
+        # 断言"我上传的这条在列表里"——不要断言列表恰好只有一条：
+        # 同一个库里前面别的用例（如 test_images.py）也会用 demo 上传，断言相等会变成顺序耦合。
+        assert up.json()["id"] in [img["id"] for img in body["images"]]
+        assert body["used_bytes"] >= len(PNG)  # 同上：只保证"包含我这张"，不断言总量
         assert body["limit_count"] > 0 and body["limit_bytes"] > 0
 
     def test_upload_records_owner(self, client, auth_headers):

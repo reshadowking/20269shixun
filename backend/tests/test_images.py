@@ -15,11 +15,18 @@ class TestImageUpload:
         assert body["url"].startswith("/api/images/")
         img_id = body["id"]
 
-        # GET 读取（免鉴权，uuid 文件名防枚举）
-        got = client.get(f"/api/images/{img_id}")
+        # T46b：读取要过可见性判定——上传者用 Bearer 读得到
+        got = client.get(f"/api/images/{img_id}", headers=auth_headers)
         assert got.status_code == 200
         assert got.headers["content-type"] == "image/png"
         assert got.content.startswith(b"\x89PNG")
+
+    def test_private_image_not_public(self, client, auth_headers):
+        """T46b：默认 private 的资产，匿名请求读不到（此前是无条件公开）。"""
+        img_id = client.post(
+            "/api/images", files={"file": ("a.png", PNG_BYTES, "image/png")}, headers=auth_headers
+        ).json()["id"]
+        assert client.get(f"/api/images/{img_id}").status_code == 404
 
     def test_upload_rejects_disallowed_type(self, client, auth_headers):
         resp = client.post(
