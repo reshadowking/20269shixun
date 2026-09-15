@@ -39,6 +39,36 @@ def init_db() -> None:
     Base.metadata.create_all(bind=engine)
     _ensure_version_unique_index()
     _ensure_image_owner_column()
+    _ensure_workspace_columns()
+    _seed_personal_workspaces()
+
+
+def _ensure_workspace_columns() -> None:
+    """T46a：给既有库的 designs/images 补 workspace_id（幂等）。"""
+    with engine.begin() as conn:
+        for table in ("designs", "images"):
+            try:
+                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN workspace_id INTEGER"))
+            except Exception as exc:
+                if "duplicate column" not in str(exc).lower():
+                    logger.error("%s.workspace_id 迁移失败：%s", table, exc)
+                    raise
+            conn.execute(text(f"CREATE INDEX IF NOT EXISTS ix_{table}_workspace_id ON {table} (workspace_id)"))
+
+
+def _seed_personal_workspaces() -> None:
+    """T46a：启动时补齐个人工作区并把无归属老数据迁进去（幂等，失败不阻塞启动）。"""
+    from .services.workspaces import ensure_personal_workspaces
+
+    session = SessionLocal()
+    try:
+        migrated = ensure_personal_workspaces(session)
+        if migrated:
+            logger.info("工作区迁移：%s 个设计稿归入个人工作区", migrated)
+    except Exception as exc:  # noqa: BLE001 - 迁移失败要让服务能起来，但错误必须可见
+        logger.error("个人工作区初始化失败：%s", exc)
+    finally:
+        session.close()
 
 
 def _ensure_image_owner_column() -> None:

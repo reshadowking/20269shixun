@@ -9,6 +9,7 @@ from ..config import get_settings
 from ..db import get_db
 from ..models import User
 from ..security import create_token, get_current_user, hash_password, verify_password_full
+from ..services.workspaces import create_personal_workspace
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,25 @@ def me(_user: str = Depends(get_current_user)):
     消除"看着已登录、实际请求全 401"的中间态；配合前端 401 统一处理（清凭证 + 跳转）。
     """
     return {"username": _user}
+
+
+class RegisterRequest(BaseModel):
+    username: str = Field(min_length=3, max_length=64, pattern="^[A-Za-z0-9_-]+$")
+    password: str = Field(min_length=6, max_length=128)
+
+
+@router.post("/api/auth/register", response_model=LoginResponse)
+def register(req: RegisterRequest, db: Session = Depends(get_db)):
+    """T46a：开放注册——建用户 + **个人工作区**（owner），并直接返回 token。"""
+    if db.query(User).filter(User.username == req.username).first() is not None:
+        raise HTTPException(status_code=409, detail="用户名已被占用")
+    user = User(username=req.username, password_hash=hash_password(req.password))
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    create_personal_workspace(db, user.id, user.username)
+    logger.info("新用户注册：%s（已创建个人工作区）", user.username)
+    return LoginResponse(token=create_token(req.username), username=req.username)
 
 
 @router.post("/api/auth/login", response_model=LoginResponse)
