@@ -3,11 +3,14 @@ import os
 import sys
 from pathlib import Path
 
+BACKEND = Path(__file__).resolve().parent.parent
+
 # 必须在导入 app 之前设置：所有模块级 engine 都基于此 URL
-os.environ["PG_URL"] = "sqlite:///./test_ai_native.db"
+# 用**绝对路径**：无论从 `backend/` 还是仓库根目录调用 pytest，测试库都指向同一个文件
+# （相对路径会随 cwd 漂移——根目录跑时曾出现 3 个"莫名其妙"的失败）
+os.environ["PG_URL"] = f"sqlite:///{(BACKEND / 'test_ai_native.db').as_posix()}"
 os.environ["LLM_MODE"] = "mock"
 
-BACKEND = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BACKEND))
 
 import pytest
