@@ -113,12 +113,13 @@ class TestFreeGeneration:
 
     def test_llm_free_output_schema_invalid_falls_back(self):
         """自由生成产物修复后仍不合法 → 回退自由兜底稿。
-        （T8 后 type:"not-a-type" 可降级为 frame；改用仍不可修复的形态：根节点缺 id。）"""
+        （T8 后 type:"not-a-type" 可降级为 frame；T17 后"根节点缺 id"也已被抢救——
+        见 test_unwrap.py。本用例改用仍然不可抢救的形态：整个对象不是设计节点。）"""
         import json
 
         class Responder:
             def __call__(self, system: str, user: str) -> str:
-                return json.dumps({"type": "frame", "content": "x"}, ensure_ascii=False) if "设计生成器" in system else ""
+                return json.dumps({"explanation": "x"}, ensure_ascii=False) if "设计生成器" in system else ""
 
         result = generate_design("自由生成一个页面", LLMClient(mock_responder=Responder()))
         assert result.fallback is False

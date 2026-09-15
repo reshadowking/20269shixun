@@ -70,10 +70,13 @@ class TestGeneratePipeline:
 
     def test_fill_invalid_schema_falls_back(self):
         """LLM 产物修复后仍不合法 → 回退模板，不把脏数据上画布。
-        （T8 后 type:"not-a-type" 可降级为 frame；改用仍不可修复的形态：根节点缺 id。）"""
+        （T8 后 type:"not-a-type" 可降级为 frame；T17 后"根节点缺 id"也已被抢救——
+        见 test_unwrap.py::TestUnwrapDesign::test_missing_root_id_rescued 与
+        TestUnwrapDesignPipeline::test_missing_root_id_adopted_end_to_end。
+        本用例改用仍然不可抢救的形态：整个对象不是设计节点。"""
         mock = MockResponder(
             intent={"template": "login", "theme": "default", "components": [], "copy_intent": "x", "style_intent": "y", "tone": "z"},
-            fill={"type": "frame", "content": "x"},  # 修复后仍非法（缺 id）
+            fill={"explanation": "x", "steps": []},  # 非设计节点：解包/修复后仍缺 id
         )
         result = generate_design("登录页", _client(mock))
         assert result.fallback is False
@@ -433,3 +436,51 @@ class TestT9ComponentsNotDegraded:
         assert result.design["children"][1]["componentType"] == "tabs"
         assert result.design["children"][1]["props"]["active"] == 1
         assert result.degraded == []
+
+
+class TestUnwrapDesignPipeline:
+    """T17 端到端：包裹形态不再整稿回退。
+
+    必须置为真实模式才能观察到 fallback/error——mock 模式会把非编辑路径的 fallback 复位为 False
+    （见 generate.py 的 mock 收尾），这也是"演示模式掩盖真实失败"的已知特性。
+    """
+
+    @staticmethod
+    def _force_real(monkeypatch, payload: dict) -> None:
+        """零网络模拟真实模型：is_mock=False + _real_chat 直接返回预设 payload。"""
+        import json
+
+        from app.services import llm as llm_module
+
+        monkeypatch.setattr(llm_module.LLMClient, "is_mock", property(lambda self: False))
+        monkeypatch.setattr(
+            llm_module.LLMClient,
+            "_real_chat",
+            lambda self, system, user, temperature: json.dumps(payload, ensure_ascii=False),
+        )
+
+    def test_wrapped_tree_adopted_end_to_end(self, monkeypatch):
+        tree = {
+            "id": "wrapped-root", "type": "frame", "style": {"layout": "column"},
+            "children": [{"id": "t", "type": "text", "props": {"text": "标题"}}],
+        }
+        self._force_real(monkeypatch, {"design": tree, "explanation": "here you go"})
+        result = generate_design("设计一个登录页", LLMClient())
+        assert result.fallback is False, result.error
+        assert result.design == tree
+
+    def test_non_design_payload_still_falls_back(self, monkeypatch):
+        """完全非设计形态仍回退（解包不得变成"乱造设计稿"）。"""
+        self._force_real(monkeypatch, {"explanation": "no", "steps": [{"id": "1", "type": "button"}]})
+        result = generate_design("设计一个登录页", LLMClient())
+        assert result.fallback is True
+        assert "Schema 校验" in result.error
+
+    def test_missing_root_id_adopted_end_to_end(self, monkeypatch):
+        """T17 行为变化：顶层是设计节点形状但缺 id → 补 id="root" 采用（此前会整稿回退模板）。"""
+        tree = {"type": "frame", "style": {"layout": "column"}, "children": []}
+        self._force_real(monkeypatch, tree)
+        result = generate_design("设计一个登录页", LLMClient())
+        assert result.fallback is False, result.error
+        assert result.design["id"] == "root"
+        assert result.design["type"] == "frame"

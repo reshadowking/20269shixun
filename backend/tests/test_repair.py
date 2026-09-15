@@ -195,12 +195,12 @@ class TestGenerateWithRepair:
 
     def test_unrepairable_output_still_falls_back(self):
         """修复后仍非法 → 回退模板，脏数据不上画布。
-        （T8 后 type/componentType 未知可降级，不再属于此类；改用仍不可修复的形态：
-        根节点缺 id——repair 不派生根 id，validator required=["id","type"] 实测拒绝。）"""
+        （T8 后 type/componentType 未知可降级；T17 后"根节点缺 id"也已被抢救——
+        见 test_unwrap.py。本用例改用仍然不可抢救的形态：整个对象不是设计节点。）"""
 
         class Responder:
             def __call__(self, system: str, user: str) -> str:
-                return json.dumps({"type": "frame", "content": "x"}, ensure_ascii=False) if "设计生成器" in system else ""
+                return json.dumps({"explanation": "x"}, ensure_ascii=False) if "设计生成器" in system else ""
 
         result = generate_design("登录页", LLMClient(mock_responder=Responder()))
         assert result.fallback is False  # mock 模式不标记降级（回退模板仍生效）

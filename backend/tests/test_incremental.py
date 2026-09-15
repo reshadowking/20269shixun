@@ -75,8 +75,8 @@ class TestIncrementalEdit:
         assert result.template == "edit"
 
     def test_edit_schema_invalid_returns_original(self):
-        """T8 后 type:"whatever" 可降级、不再属于坏输入；改用仍不可修复的形态
-        （根节点缺 id——repair 不派生根 id），深层意图「不可修复才回退」不变。"""
+        """T8 后 type:"whatever" 可降级；T17 后"缺根 id"会被补成 root，但该树**没有任何子节点**，
+        因而被 T16 结构闸门拒绝（无法用空壳树替换画布）——「画布保持原样」的意图不变。"""
 
         class BadResponder:
             def __call__(self, system: str, user: str) -> str:

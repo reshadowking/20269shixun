@@ -332,6 +332,54 @@ def repair_design(node: dict, degraded: list[str] | None = None) -> dict:
             node["children"] = repaired
     return node
 
+
+# ---- T17：LLM 输出解包与根节点抢救 ----
+# 模型常把整棵树包一层（{"design": {...}}）或漏掉根 id，旧行为是直接判 Schema 失败 → 整稿回退模板
+# （generate.log 全量统计：76 次 Schema 失败的原因全部是 "<root>: 'id' is a required property"）。
+_WRAPPER_KEYS = ("design", "design_node", "root", "tree", "result", "data", "page", "output")
+
+
+def _looks_like_design(node: Any) -> bool:
+    """设计节点形状：dict + 字符串 id + 已知 type（含"组件名误写进 type"，交由 repair 转正）。"""
+    if not isinstance(node, dict) or not isinstance(node.get("id"), str):
+        return False
+    node_type = node.get("type")
+    return node_type in KNOWN_NODE_TYPES or node_type in COMPONENT_TYPE_NAMES
+
+
+def unwrap_design(payload: Any) -> tuple[dict[str, Any] | None, str]:
+    """把 LLM 输出还原成 DesignNode 根；返回 (根节点 | None, 命中来源说明)。
+
+    判定顺序（命中即返回，全部限定"设计节点形状"，不做"抓第一个带 id 的 dict"这种宽松兜底）：
+    ① 顶层即设计节点 → "root"；
+    ② 已知包裹键下是设计节点 → 键名；
+    ③ 包裹键再下探一层（{"result": {"design": …}}）→ "键.键"；
+    ④ 顶层是设计节点形状但缺 id → 补 id="root"；
+    ⑤ 其余 → (None, "")，交给既有回退链路（不许把任意 JSON 硬造成设计稿）。
+    """
+    if _looks_like_design(payload):
+        return payload, "root"
+    if isinstance(payload, dict):
+        for key in _WRAPPER_KEYS:
+            value = payload.get(key)
+            if _looks_like_design(value):
+                return value, key
+        for key in _WRAPPER_KEYS:  # 只下探这一层（再深容易误抓，见 test_unwrap.py 的深度用例）
+            value = payload.get(key)
+            if not isinstance(value, dict):
+                continue
+            for inner_key in _WRAPPER_KEYS:
+                inner = value.get(inner_key)
+                if _looks_like_design(inner):
+                    return inner, f"{key}.{inner_key}"
+        node_type = payload.get("type")
+        if node_type in KNOWN_NODE_TYPES or node_type in COMPONENT_TYPE_NAMES:
+            rescued = dict(payload)
+            rescued["id"] = "root"
+            return rescued, "补根 id"
+    return None, ""
+
+
 # 自由生成触发词（E3-1：显式指令优先于模板匹配）
 FREE_TRIGGER_KEYWORDS = ("自由生成", "不用模板", "不要模板", "自由发挥", "随意发挥")
 
@@ -639,6 +687,12 @@ def generate_design(
                 error = "参数填充未返回有效 JSON（模型限流或超时）"
             filled = default
         else:
+            # T17：模型常把整棵树包一层——先解包再修复，避免"只差一层壳"整稿回退模板
+            unwrapped, source = unwrap_design(filled)
+            if unwrapped is not None:
+                if source != "root":
+                    gen_logger.info("LLM 输出已解包（%s）", source)
+                filled = unwrapped
             # LLM 产物先宽容修复常见格式错误（type 误写/数值超界/枚举非法/props 类型），
             # T8 起未知组件/未知类型降级、未知键裁剪（不再整树回退），再过 Schema
             filled = repair_design(filled, degraded)
