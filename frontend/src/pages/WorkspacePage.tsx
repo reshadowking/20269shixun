@@ -31,7 +31,7 @@ import { findNode, findParent as findParentOf, genId } from '@/design/tree'
 import type { ComponentType, DesignNode } from '@/design/types'
 import { api } from '@/lib/api'
 import SessionBar from '@/components/chat/SessionBar'
-import { deriveCollabRoom } from '@/lib/collabRoom'
+import { deriveCollabRoom, usesSignedRoom } from '@/lib/collabRoom'
 import { clearSnapshots, deleteSnapshot, loadSnapshots, saveSnapshot, type SessionSnapshot } from '@/lib/sessionSnapshots'
 import { sessionApi, type SessionMeta } from '@/lib/sessionApi'
 import { deriveSessionKey, isSessionKey, randomSessionKey, SESSION_PARAM } from '@/lib/sessionKey'
@@ -72,19 +72,35 @@ export default function WorkspacePage() {
 
 /** 工作台内部：组件面板 + 画布 + 右侧活动栏（P1：活动栏图标 + 展开面板） */
 function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
-  const wsUrl = import.meta.env.VITE_WS_URL ?? 'ws://localhost:1234'
+  /** 直连端点（草稿 / 显式 ?room= 用；未配置网关时也是唯一端点） */
+  const wsDirectUrl = import.meta.env.VITE_WS_URL ?? 'ws://localhost:1234'
+  /** §三.1：协作网关地址。**不设时行为与改造前完全一致**（全部直连，房间名本地派生） */
+  const wsGatewayUrl = import.meta.env.VITE_WS_GATEWAY_URL || undefined
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const designParam = searchParams.get('design')
+  const explicitRoom = searchParams.get('room')
   // 协作 room（P0-4 + 缺陷 4）：?room= > design-{id} > session-{sessionKey}（不再每标签随机）
   const roomRef = useRef<string | null>(null)
   if (roomRef.current === null) {
-    roomRef.current = deriveCollabRoom(searchParams.get('room'), designParam, sessionKey)
+    roomRef.current = deriveCollabRoom(explicitRoom, designParam, sessionKey)
   }
   const room = roomRef.current
+  /**
+   * §三.1 传输决策：已保存稿件 + 配了网关 + 无显式 ?room= → 走**服务端签发房间**。
+   * 签发房间要打一次 /api/designs/{id}/collab，所以拿到之前**先不连**——
+   * 不能"先连可猜的 design-{id}、拿到再换"，那等于把网关绕过去了。
+   * 草稿与显式 ?room= 维持直连（2026-09-15 决策）。
+   */
+  const viaGateway = usesSignedRoom(explicitRoom, designParam, wsGatewayUrl)
+  /** 网关可用（与"当前是不是已保存稿件"无关）：草稿**另存为**正式设计后要不要走签发房间看它 */
+  const gatewayAvailable = Boolean(wsGatewayUrl && !explicitRoom)
+  const [signedRoom, setSignedRoom] = useState<string | null>(null)
+  const connectUrl = viaGateway ? (signedRoom ? wsGatewayUrl : undefined) : wsDirectUrl
+  const connectRoom = viaGateway && signedRoom ? signedRoom : room
   // D5：presence 昵称（?user= 可区分多标签演示；默认与登录账号一致）
   const userName = searchParams.get('user') ?? 'demo'
-  const { design, store } = useDesignStore(wsUrl, DEMO_DESIGNS[0], room)
+  const { design, store } = useDesignStore(connectUrl, DEMO_DESIGNS[0], connectRoom)
   /** 转自由画布（P1-13）：测量需要画布的 DOM 与缩放状态，因此由画布暴露能力 */
   const canvasRef = useRef<DesignCanvasHandle>(null)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
@@ -154,23 +170,29 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
   }, [])
 
   // T46a-3d：协作角色（owner/editor/viewer）。写入阻断由协作网关负责，这里只做"如实告知"。
+  // §三.1：同一个请求把**签发房间**也拿回来（一次调用两样东西，避免重复打接口）。
   const [collabRole, setCollabRole] = useState<string | null>(null)
+  const [collabRoomError, setCollabRoomError] = useState('')
   useEffect(() => {
-    const designParam = searchParams.get('design')
     if (!designParam || !loaded) return
     let cancelled = false
-    api<{ role: string }>(`/api/designs/${designParam}/collab`)
+    api<{ role: string; room: string }>(`/api/designs/${designParam}/collab`)
       .then((r) => {
-        if (!cancelled) setCollabRole(r.role)
+        if (cancelled) return
+        setCollabRole(r.role)
+        setCollabRoomError('')
+        if (r.room) setSignedRoom(r.room)
       })
       .catch(() => {
         /* 拿不到角色（老数据/未启用网关）就不标角色，不阻塞画布 */
+        if (cancelled || !viaGateway) return
+        // 走网关时拿不到房间就不连——兜底直连等于给"猜房间名"开后门
+        setCollabRoomError('未能获取协作房间（服务端未签发），本次未建立协作连接。')
       })
     return () => {
       cancelled = true
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loaded])
+  }, [designParam, loaded, viaGateway])
 
   // 网关 4403 → 明确告知（不静默重连，避免"看着在线其实被拒"）
   useEffect(() => {
@@ -283,8 +305,10 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
         body: JSON.stringify({ name: name.trim(), design }),
       })
       setSavedMeta({ id: r.id, name: r.name })
-      // B3-1：新建保存为正式设计后迁移到 design-{id} 协作房间（保留 ydoc/撤销栈，不整页刷新）
-      store.reconnectRoom(wsUrl, `design-${r.id}`)
+      // B3-1：新建保存为正式设计后迁移协作房间（保留 ydoc/撤销栈，不整页刷新）。
+      // §三.1：配了网关时**不在这里连可猜房间**——先清掉直连端点，等 /collab 签发房间后由传输 effect 连。
+      if (gatewayAvailable) store.reconnectRoom(undefined, `design-${r.id}`)
+      else store.reconnectRoom(wsDirectUrl, `design-${r.id}`)
       // 缺陷 4：URL 补 design 参数（刷新后 room 派生一致）+ 会话绑定该设计
       const next = new URLSearchParams(searchParams)
       next.set('design', String(r.id))
@@ -949,6 +973,16 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
           {connStatus === 'disconnected' && (
             <span className="text-[11px] text-amber-600" data-testid="presence-reconnecting">
               连接断开，自动重连中…
+            </span>
+          )}
+          {viaGateway && !signedRoom && !collabRoomError && (
+            <span className="text-[11px] text-muted-foreground" data-testid="collab-waiting">
+              正在获取协作房间…
+            </span>
+          )}
+          {collabRoomError && (
+            <span className="text-[11px] text-amber-600" data-testid="collab-room-error">
+              {collabRoomError}
             </span>
           )}
           <Link to="/" className="hover:text-foreground" data-testid="go-home">← 主页</Link>

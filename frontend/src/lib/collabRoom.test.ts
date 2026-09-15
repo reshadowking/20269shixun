@@ -3,7 +3,7 @@
  */
 import { describe, expect, it } from 'vitest'
 
-import { deriveCollabRoom, randomRoom } from './collabRoom'
+import { deriveCollabRoom, randomRoom, usesSignedRoom } from './collabRoom'
 
 describe('deriveCollabRoom', () => {
   it('显式 ?room=（E2E/多人同稿）最高优先', () => {
@@ -23,5 +23,26 @@ describe('deriveCollabRoom', () => {
 
   it('randomRoom 每次生成不同（防两标签共用草稿 room）', () => {
     expect(randomRoom()).not.toBe(randomRoom())
+  })
+})
+
+describe('usesSignedRoom（§三.1：已保存稿件走签发房间，草稿不走网关）', () => {
+  const GW = 'ws://localhost:1235'
+
+  it('已保存稿件 + 配了网关 + 无显式 room → 走签发房间', () => {
+    expect(usesSignedRoom(null, '42', GW)).toBe(true)
+  })
+
+  it('草稿（没有 design 参数）→ 不走网关', () => {
+    expect(usesSignedRoom(null, null, GW)).toBe(false)
+  })
+
+  it('没配网关地址 → 行为与改造前一致（全部直连）', () => {
+    expect(usesSignedRoom(null, '42', undefined)).toBe(false)
+    expect(usesSignedRoom(null, '42', '')).toBe(false)
+  })
+
+  it('显式 ?room=（E2E / 多人同稿入口）→ 保持直连', () => {
+    expect(usesSignedRoom('room-e2e', '42', GW)).toBe(false)
   })
 })
