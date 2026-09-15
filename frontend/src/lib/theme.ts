@@ -7,15 +7,13 @@
  */
 const THEME_KEY = 'design-tool-theme'
 
+import { readStorage, writeStorage } from './storage'
+
 export type AppTheme = 'light' | 'dark'
 
 function stored(): AppTheme | null {
-  try {
-    const value = localStorage.getItem(THEME_KEY)
-    return value === 'light' || value === 'dark' ? value : null
-  } catch {
-    return null
-  }
+  const value = readStorage(THEME_KEY)
+  return value === 'light' || value === 'dark' ? value : null
 }
 
 /** 当前主题：优先用户显式选择，其次跟随系统。 */
@@ -30,11 +28,7 @@ export function getTheme(): AppTheme {
 /** 应用主题并持久化（所有页面共用一份，切页不再丢）。 */
 export function applyTheme(theme: AppTheme): AppTheme {
   document.documentElement.classList.toggle('dark', theme === 'dark')
-  try {
-    localStorage.setItem(THEME_KEY, theme)
-  } catch {
-    /* 隐私模式下写不进去也不影响本次生效 */
-  }
+  writeStorage(THEME_KEY, theme) // 写不进去（隐私模式/配额）也不影响本次生效
   return theme
 }
 

@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { applyTheme, getTheme, initTheme, toggleTheme } from './theme'
+import { readStorage, writeStorage } from './storage'
 
 describe('theme', () => {
   afterEach(() => {
@@ -13,7 +14,7 @@ describe('theme', () => {
   it('显式选择优先并持久化', () => {
     applyTheme('dark')
     expect(document.documentElement.classList.contains('dark')).toBe(true)
-    expect(localStorage.getItem('design-tool-theme')).toBe('dark')
+    expect(readStorage('design-tool-theme')).toBe('dark') // T41：断言走适配器（window 不再被写）
     expect(getTheme()).toBe('dark') // 换页面重新读取仍是 dark —— 修掉"切页变亮"
 
     applyTheme('light')
@@ -30,7 +31,7 @@ describe('theme', () => {
     applyTheme('light')
     expect(toggleTheme()).toBe('dark')
     expect(toggleTheme()).toBe('light')
-    localStorage.setItem('design-tool-theme', 'dark')
+    writeStorage('design-tool-theme', 'dark')
     expect(initTheme()).toBe('dark')
     expect(document.documentElement.classList.contains('dark')).toBe(true)
   })

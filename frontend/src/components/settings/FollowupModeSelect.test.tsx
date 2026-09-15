@@ -5,6 +5,7 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import FollowupModeSelect from './FollowupModeSelect'
+import { readStorage } from '@/lib/storage'
 
 describe('FollowupModeSelect', () => {
   afterEach(() => {
@@ -21,7 +22,8 @@ describe('FollowupModeSelect', () => {
     fireEvent.change(select, { target: { value: 'off' } })
 
     expect(select.value).toBe('off') // 修复点：不再需要整页重渲染才显示
-    expect(localStorage.getItem('design-followup-mode')).toBe('off')
+    // T41：断言走存储适配器（每个用例注入独立内存后端，window.localStorage 不再被写）
+    expect(readStorage('design-followup-mode')).toBe('off')
     expect(fetchMock).not.toHaveBeenCalled() // 该设置是纯前端偏好，永远不发请求
   })
 

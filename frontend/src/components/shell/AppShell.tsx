@@ -9,6 +9,7 @@ import { useRef, useState, type ReactNode } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 
 import { getTheme, toggleTheme, type AppTheme } from '@/lib/theme'
+import { readStorage, removeStorage, writeStorage } from '@/lib/storage'
 
 import './appShell.css'
 
@@ -31,22 +32,14 @@ export const NAV_ITEMS: NavItem[] = [
 ]
 
 function readWallpaper(): string | null {
-  try {
-    return localStorage.getItem(WALLPAPER_KEY)
-  } catch {
-    return null
-  }
+  return readStorage(WALLPAPER_KEY)
 }
 
 export default function AppShell({ children }: { children: ReactNode }) {
   const navigate = useNavigate()
   const { pathname } = useLocation()
   const [collapsed, setCollapsed] = useState(() => {
-    try {
-      return localStorage.getItem(COLLAPSE_KEY) === '1'
-    } catch {
-      return false
-    }
+    return readStorage(COLLAPSE_KEY) === '1'
   })
   const [wallpaper, setWallpaper] = useState<string | null>(() => readWallpaper())
   // T31：主题切换入口（令牌与持久化在 lib/theme.ts，这里只负责 UI 与回显）
@@ -56,31 +49,19 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const toggleCollapsed = () => {
     setCollapsed((prev) => {
       const next = !prev
-      try {
-        localStorage.setItem(COLLAPSE_KEY, next ? '1' : '0')
-      } catch {
-        /* 忽略：仅影响记忆 */
-      }
+      writeStorage(COLLAPSE_KEY, next ? '1' : '0') // 写不进去仅影响"记忆"，不影响本次折叠
       return next
     })
   }
 
   const saveWallpaper = (dataUrl: string) => {
     setWallpaper(dataUrl)
-    try {
-      localStorage.setItem(WALLPAPER_KEY, dataUrl)
-    } catch {
-      /* 图片过大时不落盘，仅本次生效 */
-    }
+    writeStorage(WALLPAPER_KEY, dataUrl) // 图片过大时不落盘，仅本次生效
   }
 
   const clearWallpaper = () => {
     setWallpaper(null)
-    try {
-      localStorage.removeItem(WALLPAPER_KEY)
-    } catch {
-      /* 忽略 */
-    }
+    removeStorage(WALLPAPER_KEY)
   }
 
   const isActive = (item: NavItem) => (item.to === '/' ? pathname === '/' : pathname.startsWith(item.to))
