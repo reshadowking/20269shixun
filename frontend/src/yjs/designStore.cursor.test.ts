@@ -83,4 +83,30 @@ describe('光标 presence（DesignStore）', () => {
     expect(store.remoteCursors[0].color).toBe(cursors[0].color)
     store.destroy()
   })
+
+  it('广播"正在编辑什么"：有选中就写 selection，空选择清掉；标签透传给队友光标', () => {
+    const { store, provider } = connectedStore()
+    store.publishSelection('按钮「提交」')
+    expect(provider.awareness.setLocalStateField).toHaveBeenLastCalledWith('selection', { label: '按钮「提交」' })
+    store.publishSelection('')
+    expect(provider.awareness.setLocalStateField).toHaveBeenLastCalledWith('selection', null)
+
+    provider.awareness.getStates = vi.fn(
+      () =>
+        new Map([
+          [5, { user: { name: '小张' }, cursor: { x: 10, y: 10 }, selection: { label: '卡片「订单」' } }],
+          [6, { user: { name: '小李' }, cursor: { x: 20, y: 20 } }], // 没有 selection
+        ]) as never,
+    )
+    const cursors = store.remoteCursors
+    expect(cursors.find((c) => c.clientId === 5)?.label).toBe('卡片「订单」')
+    expect(cursors.find((c) => c.clientId === 6)?.label).toBeUndefined()
+    store.destroy()
+  })
+
+  it('本地模式（无 provider）广播 selection 是静默 no-op', () => {
+    const store = new DesignStore(undefined, DESIGN, 'room-local')
+    expect(() => store.publishSelection('按钮')).not.toThrow()
+    store.destroy()
+  })
 })

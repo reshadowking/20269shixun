@@ -68,6 +68,9 @@ export interface DesignCanvasHandle {
   measureFreeze(parentId: string, childIds: string[]): FreezeMeasureResult
 }
 
+/** 队友停止移动多久之后淡出光标（避免"幽灵光标"一直停在原地；再动就会回来） */
+const CURSOR_FADE_MS = 4000
+
 export default function DesignCanvas({ design, store, selectedIds, onSelectionChange, onDropComponent, showGrid = true, onContextMenu, highlightIds, readOnly = false, onReadOnlyDragAttempt, ref }: DesignCanvasProps) {
   const [view, setView] = useState<ViewTransform>(DEFAULT_VIEW)
   /** 2026-09-16：队友光标（presence 的 cursor 字段；订阅 awareness 变化后重算） */
@@ -79,10 +82,45 @@ export default function DesignCanvas({ design, store, selectedIds, onSelectionCh
   const readOnlyHintRef = useRef<{ x: number; y: number; fired: boolean } | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
 
+  /**
+   * 光标淡出：awareness 只在状态**变化**时推送，队友停手后不会再收到消息——
+   * 所以要在本地记"最后一次看到的位置/时间"，超过 CURSOR_FADE_MS 就不画（再动会立刻回来）。
+   *
+   * 记账必须发生在 **setState 之前**：否则本次渲染用的还是旧时间戳，"
+   * 队友又动了"要等下一个 tick 才显示出来（曾经踩过）。
+   * 每秒一次 tick 只驱动重算，不产生网络流量。
+   */
+  const cursorSeenRef = useRef(new Map<number, { pos: string; at: number }>())
+  const [, forceCursorTick] = useState(0)
+
   // 队友光标：订阅 awareness 变化（subscribePresence 会立即回调一次，无需额外初始化）
   useEffect(() => {
-    return store.subscribePresence(() => setRemoteCursors(store.remoteCursors))
+    return store.subscribePresence(() => {
+      const cursors = store.remoteCursors
+      const now = Date.now()
+      const seen = cursorSeenRef.current
+      const alive = new Set<number>()
+      for (const c of cursors) {
+        alive.add(c.clientId)
+        const pos = `${c.x},${c.y}`
+        const prev = seen.get(c.clientId)
+        // 位置变了 → 刷新时间戳；没变 → 保留原时间戳（用于淡出计时）
+        if (!prev || prev.pos !== pos) seen.set(c.clientId, { pos, at: now })
+      }
+      for (const id of [...seen.keys()]) if (!alive.has(id)) seen.delete(id)
+      setRemoteCursors(cursors)
+    })
   }, [store])
+
+  useEffect(() => {
+    const timer = window.setInterval(() => forceCursorTick((n) => n + 1), 1000)
+    return () => window.clearInterval(timer)
+  }, [])
+
+  const visibleCursors = remoteCursors.filter((c) => {
+    const seen = cursorSeenRef.current.get(c.clientId)
+    return !seen || Date.now() - seen.at < CURSOR_FADE_MS
+  })
 
   // 转自由画布：测量必须走画布自己的 DOM 与缩放（屏幕像素 ÷ view.scale）
   useImperativeHandle(
@@ -454,10 +492,10 @@ export default function DesignCanvas({ design, store, selectedIds, onSelectionCh
           />
         </div>
         {/* 2026-09-16：队友光标（世界坐标系内绘制，跟着画布平移/缩放一起动） */}
-        {remoteCursors.map((c) => (
+        {visibleCursors.map((c) => (
           <div
             key={c.clientId}
-            className="pointer-events-none absolute z-50"
+            className="pointer-events-none absolute z-50 transition-opacity duration-500"
             style={{ left: c.x, top: c.y }}
             data-testid={`cursor-${c.clientId}`}
           >
@@ -469,6 +507,8 @@ export default function DesignCanvas({ design, store, selectedIds, onSelectionCh
               style={{ background: c.color }}
             >
               {c.name}
+              {/* "正在编辑哪段文案"：队友选中的元素描述 */}
+              {c.label && <span className="ml-1 opacity-90">· {c.label}</span>}
             </span>
           </div>
         ))}

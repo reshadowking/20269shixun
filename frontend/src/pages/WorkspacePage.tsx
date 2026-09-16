@@ -227,6 +227,20 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
   }, [collabRole])
 
   /**
+   * 2026-09-16：把"我正在编辑什么"广播给队友（显示在对方光标标签里，如 `小张 · 按钮「提交」`）。
+   * 只在**标签真的变了**时才写 awareness——否则每次文档更新都会推一条 presence。
+   */
+  const lastSelLabelRef = useRef('')
+  useEffect(() => {
+    const only = selectedIds.size === 1 ? findNode(design, [...selectedIds][0]) : null
+    const text = typeof only?.props?.text === 'string' ? String(only.props.text).slice(0, 8) : ''
+    const label = only ? `${only.componentType ?? only.type}${text ? `「${text}」` : ''}` : ''
+    if (label === lastSelLabelRef.current) return
+    lastSelLabelRef.current = label
+    store.publishSelection(label)
+  }, [store, selectedIds, design])
+
+  /**
    * T46a-3e：只读访客的写入口一律关掉（拖拽 / 属性 / AI / 美化 / 保存）。
    * 三层防护：① 网关丢弃 viewer 的写消息（服务端）；② 写接口 403（服务端）；
    * ③ store 写入层拒绝 + UI 禁用（这里）——③ 的意义是"立刻可见"，而不是拖完才发现没动。

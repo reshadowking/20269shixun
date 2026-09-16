@@ -4,7 +4,7 @@
  * - 队友光标按世界坐标绘制在世界层里（跟着画布一起平移缩放）；
  * - 指针移出画布 → 清掉自己的光标（队友不会看到"幽灵"停在原地）。
  */
-import { fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { DesignNode } from '@/design/types'
@@ -53,6 +53,7 @@ describe('DesignCanvas 光标 presence', () => {
     vi.stubGlobal('ResizeObserver', RO)
   })
   afterEach(() => {
+    vi.useRealTimers()
     vi.unstubAllGlobals()
     vi.restoreAllMocks()
   })
@@ -84,6 +85,43 @@ describe('DesignCanvas 光标 presence', () => {
     expect(cursor).toHaveTextContent('小张')
     expect(screen.queryByTestId('cursor-1')).not.toBeInTheDocument() // 自己
     expect(screen.queryByTestId('cursor-43')).not.toBeInTheDocument() // 无 cursor
+    store.destroy()
+  })
+
+  it('光标标签带上"正在编辑什么"（队友的 selection）', () => {
+    const states = new Map([
+      [42, { user: { name: '小张' }, cursor: { x: 10, y: 10 }, selection: { label: '按钮「提交」' } }],
+    ])
+    const { store } = setup(states)
+    const chip = screen.getByTestId('cursor-42')
+    expect(chip).toHaveTextContent('小张')
+    expect(chip).toHaveTextContent('按钮「提交」')
+    store.destroy()
+  })
+
+  it('光标淡出：停止移动超过 4 秒后不再渲染，重新移动会回来', () => {
+    vi.useFakeTimers()
+    const states = new Map([[42, { user: { name: '小张' }, cursor: { x: 10, y: 10 } }]])
+    const { store, provider } = setup(states)
+    expect(screen.getByTestId('cursor-42')).toBeInTheDocument()
+
+    // 队友停手：计时器走到 5 秒后应淡出（不画）
+    act(() => {
+      vi.advanceTimersByTime(5000)
+    })
+    expect(screen.queryByTestId('cursor-42')).not.toBeInTheDocument()
+
+    // 队友又动了：位置变化 → 立刻回来（真实场景由 awareness 'change' 驱动；
+    // FakeWebsocketProvider 的 on() 是桩，这里取出注册的回调手动触发）
+    provider.awareness.getStates = vi.fn(
+      () => new Map([[42, { user: { name: '小张' }, cursor: { x: 99, y: 99 } }]]) as never,
+    )
+    const onChange = (provider.awareness.on as unknown as { mock: { calls: Array<[string, () => void]> } }).mock.calls.find(
+      (call) => call[0] === 'change',
+    )?.[1]
+    expect(onChange, 'DesignStore 应把 awareness change 挂到 provider 上').toBeTruthy()
+    act(() => onChange?.())
+    expect(screen.getByTestId('cursor-42')).toHaveStyle({ left: '99px', top: '99px' })
     store.destroy()
   })
 })

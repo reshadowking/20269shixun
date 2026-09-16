@@ -29,6 +29,8 @@ export interface RemoteCursor extends CursorPos {
   clientId: number
   name: string
   color: string
+  /** 队友当前选中的元素（如 `按钮「提交」`）——光标标签里带上，回答"在改哪儿" */
+  label?: string
 }
 
 /** 由 clientId 推导一个稳定颜色（同一队友每次进来颜色一致） */
@@ -273,6 +275,15 @@ export class DesignStore {
     this.provider.awareness.setLocalStateField('cursor', pos)
   }
 
+  /**
+   * 广播"我正在编辑什么"（选中元素的简短描述，如 `按钮「提交」`）。
+   * 空选择就清掉——队友不该看到你早已不看的元素还挂着一个标签。
+   */
+  publishSelection(label: string): void {
+    if (!this.provider) return
+    this.provider.awareness.setLocalStateField('selection', label ? { label } : null)
+  }
+
   /** 队友光标（排除自己）：只有同时带 cursor 与昵称的状态才会画出来 */
   get remoteCursors(): RemoteCursor[] {
     const awareness = this.provider?.awareness
@@ -283,7 +294,15 @@ export class DesignStore {
       const cursor = (state as { cursor?: CursorPos | null } | undefined)?.cursor
       const name = (state as { user?: { name?: unknown } } | undefined)?.user?.name
       if (!cursor || typeof cursor.x !== 'number' || typeof cursor.y !== 'number') continue
-      out.push({ clientId, x: cursor.x, y: cursor.y, name: typeof name === 'string' && name ? name : '队友', color: cursorColor(clientId) })
+      const label = (state as { selection?: { label?: unknown } | null } | undefined)?.selection?.label
+      out.push({
+        clientId,
+        x: cursor.x,
+        y: cursor.y,
+        name: typeof name === 'string' && name ? name : '队友',
+        color: cursorColor(clientId),
+        label: typeof label === 'string' && label ? label : undefined,
+      })
     }
     return out
   }
