@@ -31,6 +31,8 @@ interface FolderRow {
   id: number
   name: string
   count: number
+  /** 2026-09-16 多层目录：父级（顶层 = null） */
+  parent_id?: number | null
 }
 
 interface FolderList {
@@ -41,6 +43,36 @@ interface FolderList {
 
 /** T44：当前浏览范围——全部 / 未分组 / 某个文件夹 */
 type Scope = 'all' | 'none' | number
+
+/** 把扁平文件夹列表摊成带层级的顺序（深度优先），侧边栏据此缩进渲染 */
+export function flattenFolders(folders: FolderRow[]): Array<FolderRow & { depth: number }> {
+  const byParent = new Map<number | null, FolderRow[]>()
+  for (const f of folders) {
+    const key = f.parent_id ?? null
+    byParent.set(key, [...(byParent.get(key) ?? []), f])
+  }
+  const out: Array<FolderRow & { depth: number }> = []
+  const walk = (parent: number | null, depth: number) => {
+    for (const f of byParent.get(parent) ?? []) {
+      out.push({ ...f, depth })
+      walk(f.id, depth + 1)
+    }
+  }
+  walk(null, 1)
+  return out
+}
+
+/** folder 是否在 ancestor 的子树里（用于过滤"不能选的父级"） */
+function isDescendant(folder: FolderRow, ancestorId: number, all: FolderRow[]): boolean {
+  let cur: number | null | undefined = folder.parent_id ?? null
+  const seen = new Set<number>()
+  while (cur !== null && cur !== undefined && !seen.has(cur)) {
+    if (cur === ancestorId) return true
+    seen.add(cur)
+    cur = all.find((f) => f.id === cur)?.parent_id ?? null
+  }
+  return false
+}
 
 const VISIBILITY_LABEL: Record<string, string> = {
   private: '私有（仅自己可读）',
@@ -268,16 +300,19 @@ export default function AssetsPage() {
   // ---- T44：文件夹（一层目录）----
 
   const createFolder = async () => {
-    const name = window.prompt('新建文件夹（一层目录，最多 32 字）')
+    // 多层目录：当前正浏览某个文件夹时，新建的是它的**子目录**（顶层则建在顶层）
+    const parentId = typeof scope === 'number' ? scope : null
+    const parentName = parentId === null ? '顶层' : (folders.folders.find((f) => f.id === parentId)?.name ?? '当前文件夹')
+    const name = window.prompt(`在「${parentName}」下新建文件夹（最多 32 字、最多三层）`)
     if (!name?.trim()) return
     try {
       const created = await api<FolderRow>('/api/asset-folders', {
         method: 'POST',
-        body: JSON.stringify({ name: name.trim() }),
+        body: JSON.stringify({ name: name.trim(), parent_id: parentId }),
       })
       await loadFolders()
       setScope(created.id)
-      setMessage(`已创建文件夹「${created.name}」。`)
+      setMessage(`已在「${parentName}」下创建「${created.name}」。`)
     } catch (err) {
       setMessage(err instanceof Error ? err.message : '新建文件夹失败')
     }
@@ -296,15 +331,33 @@ export default function AssetsPage() {
   }
 
   const removeFolder = async (folder: FolderRow) => {
-    const hint = folder.count > 0 ? `\n其中 ${folder.count} 张图片会回到「未分组」（不会被删除）。` : ''
+    const hint =
+      folder.count > 0
+        ? `\n其中 ${folder.count} 张图片会**上提一层**（不会被删除）。`
+        : ''
     if (!window.confirm(`删除文件夹「${folder.name}」？${hint}`)) return
     try {
       await api(`/api/asset-folders/${folder.id}`, { method: 'DELETE' })
       if (scope === folder.id) setScope('all')
       await load()
-      setMessage('已删除文件夹（里面的图片已回到未分组）。')
+      setMessage('已删除文件夹（里面的图片与子目录已上提一层）。')
     } catch (err) {
       setMessage(err instanceof Error ? err.message : '删除文件夹失败')
+    }
+  }
+
+  /** 多层目录：改变父级（不能选自己/自己的子目录——后端也会 422 兜住） */
+  const moveFolderTo = async (folder: FolderRow, value: string) => {
+    const parentId = value === '' ? null : Number(value)
+    try {
+      await api(`/api/asset-folders/${folder.id}/parent`, {
+        method: 'PATCH',
+        body: JSON.stringify({ parent_id: parentId }),
+      })
+      await loadFolders()
+      setMessage(parentId === null ? '已移到顶层。' : '已移入目标文件夹。')
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : '移动失败')
     }
   }
 
@@ -421,13 +474,14 @@ export default function AssetsPage() {
               </span>
             </button>
           </li>
-          {folders.folders.map((f) => (
+          {flattenFolders(folders.folders).map((f) => (
             <li
               key={f.id}
-              className="flex items-center gap-0.5"
+              className="flex flex-col"
               onDragOver={(e) => e.preventDefault()}
               onDrop={() => void reorderFolders(f.id)}
             >
+              <div className="flex items-center gap-0.5" style={{ paddingLeft: (f.depth - 1) * 10 }}>
               <span
                 className="cursor-grab select-none px-0.5 text-[11px] text-muted-foreground"
                 data-testid={`folder-grip-${f.id}`}
@@ -441,10 +495,14 @@ export default function AssetsPage() {
               <button
                 className={scopeBtnCls(scope === f.id)}
                 data-testid={`folder-${f.id}`}
+                data-depth={f.depth}
                 title={f.name}
                 onClick={() => setScope(f.id)}
               >
-                <span className="truncate">{f.name}</span>
+                <span className="truncate">
+                  {f.depth > 1 && <span className="mr-0.5 text-muted-foreground">↳</span>}
+                  {f.name}
+                </span>
                 <span className="text-[11px] text-muted-foreground" data-testid={`folder-count-${f.id}`}>
                   {f.count}
                 </span>
@@ -465,11 +523,30 @@ export default function AssetsPage() {
               >
                 ✕
               </button>
+              </div>
+              {/* 多层目录：改变父级（排除自己与自己的子目录，避免成环） */}
+              <select
+                className="ml-4 h-5 rounded border border-input bg-background px-1 text-[10px] text-muted-foreground"
+                data-testid={`folder-parent-${f.id}`}
+                value={f.parent_id ?? ''}
+                title="移到哪个文件夹下（嵌套）"
+                onChange={(e) => void moveFolderTo(f, e.target.value)}
+              >
+                <option value="">顶层</option>
+                {folders.folders
+                  .filter((cand) => cand.id !== f.id && !isDescendant(cand, f.id, folders.folders))
+                  .map((cand) => (
+                    <option key={cand.id} value={cand.id}>
+                      {cand.name}
+                    </option>
+                  ))}
+              </select>
             </li>
           ))}
         </ul>
         <p className="mt-3 text-[11px] leading-relaxed text-muted-foreground">
-          进入文件夹后上传的图片会直接放进该文件夹；删除文件夹不会删除图片。
+          进入文件夹后上传的图片会直接放进该文件夹；删除文件夹不会删内容——里面的图片与子目录**上提一层**。
+          用每个文件夹下方的下拉可把它**移到别的目录下**（最多三层）。列表只显示当前目录的文件，不含子目录。
         </p>
         {scope === 'all' ? (
           <p className="mt-2 text-[11px] text-muted-foreground" data-testid="asset-order-hint">

@@ -42,6 +42,7 @@ def init_db() -> None:
     _ensure_image_visibility_column()
     _ensure_image_folder_column()
     _ensure_asset_sort_columns()
+    _ensure_asset_folder_parent_column()
     _ensure_workspace_columns()
     _ensure_collab_room_column()
     _seed_personal_workspaces()
@@ -155,6 +156,16 @@ def _ensure_asset_sort_columns() -> None:
         for table in ("images", "asset_folders"):
             _add_column(conn, table, "sort_order", f"ALTER TABLE {table} ADD COLUMN sort_order INTEGER DEFAULT 0")
             conn.execute(text(f"CREATE INDEX IF NOT EXISTS ix_{table}_sort_order ON {table} (sort_order)"))
+
+
+def _ensure_asset_folder_parent_column() -> None:
+    """2026-09-16：给既有库的 asset_folders 补 parent_id（多层目录；幂等）。
+
+    老文件夹一律是顶层（NULL），行为不变。
+    """
+    with engine.begin() as conn:
+        _add_column(conn, "asset_folders", "parent_id", "ALTER TABLE asset_folders ADD COLUMN parent_id INTEGER")
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_asset_folders_parent_id ON asset_folders (parent_id)"))
 
 
 def _ensure_version_unique_index() -> None:

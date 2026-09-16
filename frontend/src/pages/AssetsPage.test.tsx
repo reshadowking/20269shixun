@@ -228,7 +228,7 @@ describe('AssetsPage（T44 文件夹）', () => {
     })
   })
 
-  it('删除文件夹要二次确认，并说明图片会回到未分组', async () => {
+  it('删除文件夹要二次确认，并说明内容会上提一层（不删东西）', async () => {
     const fetchMock = mockFetch(
       { images: [], used_bytes: 0, limit_count: 50, limit_bytes: 20971520 },
       { folders: FOLDERS },
@@ -242,7 +242,7 @@ describe('AssetsPage（T44 文件夹）', () => {
     await waitFor(() => {
       expect(fetchMock.mock.calls.some((c) => String(c[0]) === '/api/asset-folders/1' && c[1]?.method === 'DELETE')).toBe(true)
     })
-    expect(String(confirm.mock.calls[0][0])).toContain('未分组')
+    expect(String(confirm.mock.calls[0][0])).toContain('上提一层')
   })
 })
 
@@ -391,6 +391,79 @@ describe('AssetsPage（拖拽排序）', () => {
       const call = fetchMock.mock.calls.find((c) => String(c[0]) === '/api/asset-folders/order')
       expect(call).toBeTruthy()
       expect(JSON.parse(String(call?.[1]?.body)).ids).toEqual([2, 1])
+    })
+  })
+
+  it('多层目录：子目录按层级缩进渲染，父级下拉可选"顶层"与其它目录（排除自己）', async () => {
+    const fetchMock = vi.fn(async (url: string, options?: RequestInit) => {
+      const path = String(url)
+      if (path.includes('/api/asset-folders')) {
+        if (options?.method === 'PATCH') return { ok: true, status: 200, json: async () => ({ ok: true }) }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            folders: [
+              { id: 1, name: '素材', count: 0, parent_id: null },
+              { id: 2, name: '图标', count: 0, parent_id: 1 },
+            ],
+            ungrouped: 0,
+            limit_folders: 30,
+          }),
+        }
+      }
+      return { ok: true, status: 200, json: async () => ({ images: [], used_bytes: 0, limit_count: 50, limit_bytes: 1 }) }
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    renderPage()
+
+    expect(await screen.findByTestId('folder-1')).toHaveAttribute('data-depth', '1')
+    expect(screen.getByTestId('folder-2')).toHaveAttribute('data-depth', '2')
+    // 子目录的父级下拉：当前是"素材"，候选里有"顶层"，但**没有它自己**
+    const parentSelect = screen.getByTestId('folder-parent-2')
+    expect(parentSelect).toHaveValue('1')
+    const values = Array.from(parentSelect.querySelectorAll('option')).map((o) => o.getAttribute('value'))
+    expect(values).toEqual(['', '1'])
+
+    // 改父级 → PATCH /parent
+    fireEvent.change(parentSelect, { target: { value: '' } })
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find((c) => String(c[0]) === '/api/asset-folders/2/parent')
+      expect(call).toBeTruthy()
+      expect(String(call?.[1]?.body)).toContain('"parent_id":null')
+    })
+  })
+
+  it('在选中的文件夹里新建：POST 带 parent_id（子目录）', async () => {
+    const fetchMock = vi.fn(async (url: string, options?: RequestInit) => {
+      const path = String(url)
+      if (path.includes('/api/asset-folders')) {
+        if (options?.method === 'POST') return { ok: true, status: 200, json: async () => ({ id: 9, name: '新子目录' }) }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            folders: [{ id: 1, name: '素材', count: 0, parent_id: null }],
+            ungrouped: 0,
+            limit_folders: 30,
+          }),
+        }
+      }
+      return { ok: true, status: 200, json: async () => ({ images: [], used_bytes: 0, limit_count: 50, limit_bytes: 1 }) }
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('prompt', () => '新子目录')
+    renderPage()
+
+    // 先进入"素材"，再新建 → 建的应该是它的子目录
+    fireEvent.click(await screen.findByTestId('folder-1'))
+    fireEvent.click(screen.getByTestId('folder-create'))
+
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find((c) => String(c[0]) === '/api/asset-folders' && c[1]?.method === 'POST')
+      expect(call).toBeTruthy()
+      const body = JSON.parse(String(call?.[1]?.body))
+      expect(body).toEqual({ name: '新子目录', parent_id: 1 })
     })
   })
 })

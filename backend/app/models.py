@@ -96,6 +96,8 @@ class AssetFolder(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     owner_id: Mapped[int] = mapped_column(Integer, index=True)
     name: Mapped[str] = mapped_column(String(64))
+    # 2026-09-16：多层目录（NULL = 顶层）。深度上限与"防环"在路由层校验。
+    parent_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     # 2026-09-16：文件夹自身的拖拽排序
     sort_order: Mapped[int] = mapped_column(Integer, default=0, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
