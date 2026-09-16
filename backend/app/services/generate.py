@@ -177,6 +177,25 @@ def component_contract_section() -> str:
     return "\n".join(lines) + COMPONENT_FEW_SHOT
 
 
+def form_page_section() -> str:
+    """表单页三条约束（2026-09-16，来自导出产物验收）。
+
+    都是"模型能一眼改对、但没人指出来就会一直犯"的写法问题：
+    ① 输入框双边框/双高度——模型把控件级样式写在节点上，与组件默认样式叠加；
+    ② 表单页初始态就带红字错误提示——错误态属于交互后状态，静态稿不该默认展示；
+    ③ 正文被塞进标题组件（渲染成 h6 之类）——层级语义错，样式还得靠 style 硬拗。
+    """
+    return (
+        "\n\n## 表单页约束（生成/修改表单类页面时逐条遵守）\n"
+        "- input 组件的**控件级样式**（height / border / borderRadius / padding）由组件默认样式负责，"
+        "**不要**写在节点 style 上；节点 style 只写布局与颜色类（width、gap、background、color）。"
+        "写了会出现双边框、双高度。\n"
+        "- 表单页的**初始态不要输出错误态文案**（红字提示、\"密码错误\"、\"必填\"这类）："
+        "错误态是用户交互后才出现的状态，静态设计稿默认展示会让人误以为页面坏了。\n"
+        "- 正文/说明文字用 text 类型；title-text 只用于页面标题与区块标题（它渲染成标题标签，正文用它会造成层级混乱）。"
+    )
+
+
 # 样式数值边界（与 shared/design-schema.json 一致；超界自动 clamp，不整树回退）
 STYLE_BOUNDS = {
     "fontSize": (8, 96),
@@ -572,6 +591,7 @@ def incremental_system(locked: bool = False) -> str:
         + vocabulary_text()
         + icon_prompt_section()
         + component_contract_section()
+        + form_page_section()
         + (ops_prompt_section() if get_settings().prompt_ops_enabled else "")
         + HISTORY_USAGE_SECTION
     )
@@ -582,12 +602,12 @@ def incremental_system(locked: bool = False) -> str:
 
 def fill_system_text() -> str:
     """FILL_SYSTEM + 运行期注入段（图标 T9 + 组件字段契约 T18 + 对话上下文规则 T24）。"""
-    return FILL_SYSTEM + icon_prompt_section() + component_contract_section() + HISTORY_USAGE_SECTION
+    return FILL_SYSTEM + icon_prompt_section() + component_contract_section() + form_page_section() + HISTORY_USAGE_SECTION
 
 
 def free_system_text() -> str:
     """FREE_SYSTEM + 运行期注入段（图标 T9 + 组件字段契约 T18 + 对话上下文规则 T24）。"""
-    return FREE_SYSTEM + icon_prompt_section() + component_contract_section() + HISTORY_USAGE_SECTION
+    return FREE_SYSTEM + icon_prompt_section() + component_contract_section() + form_page_section() + HISTORY_USAGE_SECTION
 
 SUMMARY_SYSTEM = """你是需求摘要器。把用户的长篇设计需求压缩为简洁的结构化需求描述（200 字以内），供下游生成设计稿。
 硬约束：

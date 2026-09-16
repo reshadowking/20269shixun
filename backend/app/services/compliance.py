@@ -28,6 +28,11 @@ _BRAND_MIN_SATURATION = 0.05  # 仅排除纯灰（浅蓝/深蓝灰饱和度低�
 # 中性色豁免：低饱和度灰阶（文本/边框通用色）不算品牌违规
 _NEUTRAL_MAX_SATURATION = 0.2
 
+# 2026-09-16（导出产物验收）：input 的控件级样式由组件默认样式负责，写在节点 style 上会出现双边框/双高度。
+# ⚠️ 只**告警、不改值、不计违规**——理由见 enforce_compliance 文档串：拉了会改视觉，
+# 计违规会动到 ≥85% 这个已经在风险线上的指标。预防靠提示词（form_page_section）。
+INPUT_CONTROL_STYLE_KEYS = ("height", "border", "borderRadius", "padding")
+
 
 @dataclass
 class ComplianceFix:
@@ -108,6 +113,9 @@ def enforce_compliance(design: dict[str, Any], allowed_extra: list[str] | None =
     违规 = 非令牌值，自动拉回最近令牌色并记录 ComplianceFix（node_id/field/original/corrected）。
     allowed_extra：用户明确指定的品牌色（#hex）——精确或相近色不拉回（v2.2 §4.5）；
     其余违规色优先拉回用户品牌色（视觉保持用户主题）。
+
+    另有一条**不计分**的结构性告警：input 节点上写了控件级样式（height/border/borderRadius/padding）时只记日志
+    （改了会动视觉、计违规会动指标；预防交给提示词 form_page_section）。见 `_warn_input_control_style`。
     """
     extra = [c.upper() for c in (allowed_extra or [])]
     design = copy.deepcopy(design)
@@ -119,6 +127,7 @@ def enforce_compliance(design: dict[str, Any], allowed_extra: list[str] | None =
         node_id = str(node.get("id") or "?")
         style = node.get("style")
         if isinstance(style, dict):
+            _warn_input_control_style(node, node_id, style)
             for key, value in style.items():
                 if key in COLOR_FIELDS and isinstance(value, str):
                     total += 1
@@ -150,6 +159,20 @@ def enforce_compliance(design: dict[str, Any], allowed_extra: list[str] | None =
 
     walk(design)
     return design, fixes, total
+
+
+def _warn_input_control_style(node: dict[str, Any], node_id: str, style: dict[str, Any]) -> None:
+    """input 写了控件级样式 → 记一条可排查的告警（不改值、不计违规，见 enforce_compliance 文档串）。"""
+    if node.get("type") != "component" or node.get("componentType") != "input":
+        return
+    hit = [k for k in INPUT_CONTROL_STYLE_KEYS if k in style]
+    if hit:
+        logger.warning(
+            "input 节点 %s 写了控件级样式 %s —— 会与组件默认样式叠加（双边框/双高度）；"
+            "该样式由组件默认样式负责，提示词已约束，此处仅告警不修改",
+            node_id,
+            "/".join(hit),
+        )
 
 
 def compliance_rate(violations: int, total: int) -> float:
