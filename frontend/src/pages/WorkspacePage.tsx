@@ -219,6 +219,24 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
     }
   }, [store])
 
+  /**
+   * 2026-09-16 撤销的并发口径（实测收窄版）：
+   * - 属性步骤若已被队友改成别的值 → store 跳过并回调 `onUndoBlocked`，这里提示（不弹框）；
+   * - 结构性步骤（新增/删除/换父级）若涉及的节点之后被队友改过 → 先 `window.confirm` 再撤。
+   * `window.confirm` 是阻塞式的，所以按住 Ctrl+Z 不会叠出多个对话框。
+   */
+  useEffect(() => {
+    store.onUndoBlocked = (reason) => {
+      setLockHint(reason)
+      window.setTimeout(() => setLockHint(''), 6000)
+    }
+    store.onUndoConfirm = (reason) => window.confirm(reason)
+    return () => {
+      store.onUndoBlocked = undefined
+      store.onUndoConfirm = undefined
+    }
+  }, [store])
+
   // viewer 角色：进画布即提示"只读"（真实写入阻断在协作网关，这里负责让人知道自己是只读）
   useEffect(() => {
     if (collabRole !== 'viewer') return
@@ -945,7 +963,7 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
             className="h-7 text-xs"
             data-testid="undo-op"
             disabled={!store.canUndo}
-            title="撤销（Ctrl+Z）"
+            title="撤销（Ctrl+Z）· 只影响你自己的操作"
             onClick={handleUndoOp}
           >
             ↩ 撤销

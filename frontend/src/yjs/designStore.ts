@@ -12,6 +12,7 @@ import * as Y from 'yjs'
 import { WebsocketProvider } from 'y-websocket'
 
 import { LOCKED_EDITABLE_STYLE_KEYS } from '@/design/beautify'
+import { findNode as findPlainNode } from '@/design/tree'
 import type { DesignNode } from '@/design/types'
 
 const DESIGN_MAP = 'design'
@@ -19,6 +20,52 @@ const ROOT_KEY = 'root'
 
 /** 光标节流：awareness 是逐帧可写的，但没必要（60ms ≈ 16fps 已经足够顺滑） */
 const CURSOR_THROTTLE_MS = 60
+
+/**
+ * 撤销步骤的元数据（挂在 Yjs `stackItem.meta` 上）。
+ * 用途：撤销前判断"这一步还该不该照原样执行"——见 `undo()`。
+ */
+const UNDO_META = 'design-undo-meta'
+
+interface UndoMeta {
+  kind: 'property' | 'structural'
+  /** 我这一步写进去的值（用于判断"是否已被队友覆盖"） */
+  writes: Array<{ nodeId: string; key: string; value: unknown }>
+  /** 结构性步骤涉及的节点（用于判断"之后是否被队友改过"） */
+  nodeIds: string[]
+  at: number
+  /**
+   * 这一步的**单调序号**（不是时间戳！）。
+   * 踩过：同一毫秒内的"本地步 → 远端改"用 `Date.now()` 比较会漏判（`>` 不成立），
+   * 于是该弹的确认不弹。序号比较没有这个问题。
+   */
+  seq: number
+}
+
+/** 属性值比较：原始值直接比，对象/数组比序列化（props 里可能存对象） */
+function sameValue(a: unknown, b: unknown): boolean {
+  if (a === b) return true
+  try {
+    return JSON.stringify(a) === JSON.stringify(b)
+  } catch {
+    return false
+  }
+}
+
+/** 我这一步改了哪些字段（用于判断"是否还被队友覆盖"） */
+function diffWrites(nodeId: string, prev: DesignNode, next: DesignNode): UndoMeta['writes'] {
+  const out: UndoMeta['writes'] = []
+  if (prev.x !== next.x) out.push({ nodeId, key: 'x', value: next.x })
+  if (prev.y !== next.y) out.push({ nodeId, key: 'y', value: next.y })
+  if (prev.hidden !== next.hidden) out.push({ nodeId, key: 'hidden', value: next.hidden })
+  for (const [k, v] of Object.entries(next.props ?? {})) {
+    if ((prev.props ?? {})[k] !== v) out.push({ nodeId, key: `props.${k}`, value: v })
+  }
+  for (const [k, v] of Object.entries(next.style ?? {})) {
+    if ((prev.style ?? {})[k] !== v) out.push({ nodeId, key: `style.${k}`, value: v })
+  }
+  return out
+}
 
 export interface CursorPos {
   x: number
@@ -120,6 +167,23 @@ export class DesignStore {
   provider: WebsocketProvider | null = null
   /** T46a-3d：网关拒绝连接（4403）时的回调——由上层显示"无权进入该协作房间"。 */
   onForbidden?: () => void
+  /**
+   * 2026-09-16：撤销的两种"要人拍板"的情况，交给页面做 UI（store 不弹窗）。
+   * - `onUndoBlocked`：这一步写进去的值已被队友改掉 → **跳过并告知**（Yjs 的撤销在这种情况下会静默失效）；
+   * - `onUndoConfirm`：结构性步骤（新增/删除/换父级）涉及的节点之后被队友改过 →
+   *   撤销会连队友的改动一起撤掉，必须先确认（返回 false = 取消，栈保留）。
+   */
+  onUndoBlocked?: (reason: string) => void
+  onUndoConfirm?: (reason: string) => boolean
+
+  /** 当前步骤的元数据（在事务内写入，事务结束时由 stack-item-added 取走） */
+  private pendingUndoMeta: Omit<UndoMeta, 'at' | 'seq'> | null = null
+  /** 单调递增的操作序号：本地步骤与远端改动共用一条线，用来判断"谁在谁之后" */
+  private opSeq = 0
+  /** 节点最近一次"被远端改过"的序号（节点级，避免把不相关的节点算进来） */
+  private lastRemoteChangeSeq = new Map<string, number>()
+  /** 上一次的节点快照（用于 diff 出远端改了哪些节点） */
+  private nodeSnapshots = new Map<string, string>()
 
   /**
    * T46a-3c：把登录 JWT 作为 WS 查询参数带上（网关用它验签 + 查成员资格）。
@@ -193,9 +257,30 @@ export class DesignStore {
       captureTimeout: 0, // 画布操作是离散事务，无需合并窗口，保证 canUndo 即时可用
     })
     // 缓存失效与订阅解耦：任何 update（本地事务/协作同步）都使快照失效
-    this.ydoc.on('update', () => {
+    this.ydoc.on('update', (_update, origin) => {
       this.cached = null
+      // 2026-09-16：只有**远端**改动才记账（本地/重置/撤销自身都不算"队友改的"）
+      if (origin === RESET_ORIGIN) {
+        // 整树替换（打开稿件/AI 恢复）：只更新基线，别把全树算成"队友改的"
+        this._trackRemoteChanges(false)
+        return
+      }
+      if (this._isLocalOrigin(origin)) return
+      this._trackRemoteChanges(true)
     })
+    // 撤销步骤的元数据：事务结束时把 pendingUndoMeta 挂到栈项上
+    this.undoManager.on('stack-item-added', (event: { stackItem: { meta: Map<unknown, unknown> } }) => {
+      if (!this.pendingUndoMeta) return
+      event.stackItem.meta.set(UNDO_META, {
+        ...this.pendingUndoMeta,
+        at: Date.now(),
+        seq: ++this.opSeq,
+      } satisfies UndoMeta)
+      this.pendingUndoMeta = null
+    })
+    // 初始化基线快照：构造期写入初始设计时 update 处理器还没挂上，这里补一次，
+    // 否则第一笔"远端改动"会被当成基线更新（跳过记账），结构性步骤就永远不弹确认。
+    this._trackRemoteChanges(false)
   }
 
   destroy() {
@@ -421,9 +506,79 @@ export class DesignStore {
 
   /** 操作级撤销（P0-1）：回退最近一次本地用户操作；无可撤销返回 false */
   undo(): boolean {
+    // 2026-09-16：撤销前先看这一步**还该不该照原样执行**（实测结论见卡 §撤销的并发口径）
+    const top = this.undoManager.undoStack[this.undoManager.undoStack.length - 1]
+    const meta = top?.meta?.get(UNDO_META) as UndoMeta | undefined
+    if (meta) {
+      if (meta.kind === 'property') {
+        // 属性类：该字段已被队友改成别的值 → Yjs 的撤销会静默失效（实测：按钮消耗掉、界面无变化）。
+        // 与其"按了没反应、再按一次跳到更早一步"，不如丢掉这一步并明确告诉他。
+        const covered = meta.writes.some((w) => !sameValue(this._currentValue(w.nodeId, w.key), w.value))
+        if (covered) {
+          this.undoManager.undoStack.pop()
+          this.undoManager.redoStack.length = 0
+          this.onUndoBlocked?.('这一步已被队友的修改覆盖，撤销不生效（已跳过；再按 Ctrl+Z 会撤销你更早的一步）')
+          return false
+        }
+      } else {
+        // 结构性：撤销"我加的节点"会连带删掉队友在它上面做的一切（不可逆）→ 必须先问
+        const touched = meta.nodeIds.some((id) => (this.lastRemoteChangeSeq.get(id) ?? 0) > meta.seq)
+        if (touched && !(this.onUndoConfirm?.('这一步新增/删除的节点之后被队友改过，撤销会连他的改动一起撤掉。仍要撤销吗？') ?? true)) {
+          return false // 取消：栈保留，下次再问
+        }
+      }
+    }
     if (!this.undoManager.canUndo()) return false
     this.undoManager.undo()
     return true
+  }
+
+  /** 队友改了这个节点的哪些值？——节点级作用域，不相关节点不算（见 undo 的噪声检查） */
+  private _currentValue(nodeId: string, key: string): unknown {
+    const node = findPlainNode(this.getDesign(), nodeId)
+    if (!node) return undefined
+    if (key === 'x' || key === 'y' || key === 'hidden') return node[key]
+    if (key.startsWith('props.')) return node.props?.[key.slice('props.'.length)]
+    if (key.startsWith('style.')) return node.style?.[key.slice('style.'.length)]
+    return undefined
+  }
+
+  /** 本地来源（本地操作/重置/撤销重做自身）——这些不算"队友改的" */
+  private _isLocalOrigin(origin: unknown): boolean {
+    return origin === LOCAL_ORIGIN || origin === RESET_ORIGIN || origin === this.undoManager
+  }
+
+  /**
+   * 远端改动记账：diff 出"哪些节点变了"并打时间戳。
+   * mark=false 时只更新基线（用于 resetDesign 这类本地整体替换，避免下次 diff 把全树算成"队友改的"）。
+   */
+  private _trackRemoteChanges(mark: boolean): void {
+    const next = new Map<string, string>()
+    const collect = (node: DesignNode): void => {
+      next.set(node.id, JSON.stringify(node))
+      for (const child of node.children ?? []) collect(child)
+    }
+    collect(this.getDesign())
+    const first = this.nodeSnapshots.size === 0
+    if (mark && !first) {
+      const seq = ++this.opSeq
+      for (const [id, json] of next) {
+        if (this.nodeSnapshots.get(id) !== json) this.lastRemoteChangeSeq.set(id, seq)
+      }
+    }
+    this.nodeSnapshots = next
+  }
+
+  /**
+   * 测试专用缝隙：模拟"队友改了某个节点"（与 `__setStorageForTests` 同一套约定）。
+   * 走真实 Yjs 事务 + 非本地 origin，因此和线上远端改动的落地路径一致。
+   */
+  __applyRemoteForTests(nodeId: string, updater: (node: DesignNode) => DesignNode): void {
+    this.ydoc.transact(() => {
+      const root = this.designMap.get(ROOT_KEY) as YNode | undefined
+      const target = root ? findYNode(root, nodeId) : null
+      if (target) this._applyUpdate(target, updater(yToPlain(target)))
+    }, 'remote-test-origin')
   }
 
   /** 操作级重做（P0-1）：恢复被撤销的操作；无重做返回 false */
@@ -457,6 +612,7 @@ export class DesignStore {
           return
         }
         this._applyUpdate(target, next)
+        this.pendingUndoMeta = { kind: 'property', writes: diffWrites(id, prev, next), nodeIds: [id] }
       },
       LOCAL_ORIGIN,
     )
@@ -483,6 +639,11 @@ export class DesignStore {
           return
         }
         for (const t of targets) this._applyUpdate(t.target, t.next)
+        this.pendingUndoMeta = {
+          kind: 'property',
+          writes: targets.flatMap((t) => diffWrites(t.target.get('id') as string, t.prev, t.next)),
+          nodeIds: targets.map((t) => t.target.get('id') as string),
+        }
       },
       LOCAL_ORIGIN,
     )
@@ -543,6 +704,7 @@ export class DesignStore {
 
         this._applyUpdate(parent, nextParent)
         for (const t of targets) this._applyUpdate(t.target, t.next)
+        this.pendingUndoMeta = { kind: 'structural', writes: [], nodeIds: [parentId, ...updates.map((u) => u.id)] }
         ok = true
       },
       LOCAL_ORIGIN,
@@ -582,6 +744,7 @@ export class DesignStore {
   removeNode(id: string) {
     if (this._blockedByRole('删除节点')) return
     if (this._blockStructuralWhileLocked()) return
+    this.pendingUndoMeta = { kind: 'structural', writes: [], nodeIds: [id] }
     this.ydoc.transact(
       () => {
         const root = this.designMap.get(ROOT_KEY) as YNode | undefined
@@ -601,6 +764,7 @@ export class DesignStore {
   duplicateNode(id: string) {
     if (this._blockedByRole('复制节点')) return
     if (this._blockStructuralWhileLocked()) return
+    this.pendingUndoMeta = { kind: 'structural', writes: [], nodeIds: [id] }
     this.ydoc.transact(
       () => {
         const root = this.designMap.get(ROOT_KEY) as YNode | undefined
@@ -648,6 +812,7 @@ export class DesignStore {
   insertChild(parentId: string, node: DesignNode, index?: number) {
     if (this._blockedByRole('添加组件')) return
     if (this._blockStructuralWhileLocked()) return
+    this.pendingUndoMeta = { kind: 'structural', writes: [], nodeIds: [node.id, parentId] }
     this.ydoc.transact(
       () => {
         const root = this.designMap.get(ROOT_KEY) as YNode | undefined
@@ -692,6 +857,7 @@ export class DesignStore {
   moveNodeTo(nodeId: string, newParentId: string, index: number) {
     if (this._blockedByRole('移动图层')) return
     if (this._blockStructuralWhileLocked()) return
+    this.pendingUndoMeta = { kind: 'structural', writes: [], nodeIds: [nodeId, newParentId] }
     this.ydoc.transact(
       () => {
         const root = this.designMap.get(ROOT_KEY) as YNode | undefined
@@ -730,6 +896,7 @@ export class DesignStore {
   moveChild(childId: string, parentId: string, targetIndex: number) {
     if (this._blockedByRole('调整顺序')) return
     if (this._blockStructuralWhileLocked()) return
+    this.pendingUndoMeta = { kind: 'structural', writes: [], nodeIds: [childId, parentId] }
     this.ydoc.transact(
       () => {
         const root = this.designMap.get(ROOT_KEY) as YNode | undefined
