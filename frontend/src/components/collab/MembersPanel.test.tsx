@@ -156,5 +156,8 @@ describe('T46a-4：成员与邀请面板', () => {
     expect(await screen.findByTestId('member-row-demo')).toBeInTheDocument()
     expect(screen.getByTestId('invite-create')).toBeDisabled()
     expect(screen.getByTestId('invite-create')).toHaveAttribute('title', '只有 owner / editor 可以生成邀请')
+    // 输入框也禁用（不能"能打字但没后果"），并说明为什么入口仍然可点
+    expect(screen.getByTestId('invite-username')).toBeDisabled()
+    expect(screen.getByTestId('invite-viewer-note')).toHaveTextContent('可以查看成员')
   })
 })

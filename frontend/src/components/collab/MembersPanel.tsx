@@ -238,6 +238,11 @@ export default function MembersPanel({
             你是可编辑成员：只能邀请**只读访客**（可写成员的增删由 owner 决定）。
           </p>
         )}
+        {myRole === 'viewer' && (
+          <p className="text-[11px] text-muted-foreground" data-testid="invite-viewer-note">
+            你是只读访客：可以查看成员与角色，但不能邀请或移除成员。顶栏这个入口保留可点，正是为了让你看得到名单。
+          </p>
+        )}
         {inviteLink && (
           <div className="flex items-center gap-2">
             <input
@@ -265,6 +270,8 @@ export default function MembersPanel({
             data-testid="invite-username"
             value={inviteUsername}
             placeholder="对方登录账号，例如 alice"
+            // 无邀请权限时直接禁用：按钮禁用但输入框能打字，会让人以为"打完字就有用"
+            disabled={!canInvite}
             onChange={(e) => setInviteUsername(e.target.value)}
           />
           <Button
