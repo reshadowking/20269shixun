@@ -113,7 +113,10 @@ describe('导出安全（P0-1）', () => {
       children: [],
     }
     const code = designToReactApp(evil, false)
-    const styleLiterals = [...code.matchAll(/style=\{\{(\{.*?\})\}\}/gs)].map((m) => m[1])
+    // 注意形状：只能是 `style={ <JSON 对象> }`（一层花括号 + JSON.stringify 自带的 {}）。
+    // 旧断言写的是 `style={{…}}`（三层花括号）——那正是 2026-09-16 抓到的 P0（产物编译不过），
+    // 这条正则当时把 bug 固化成了"期望形状"。
+    const styleLiterals = [...code.matchAll(/style=\{(\{.*?\})\}/gs)].map((m) => m[1])
     expect(styleLiterals.length).toBeGreaterThan(0)
     // 恶意 style 字面量必须能被 JSON.parse 完整解析（引号由 JSON 规则包裹，无法提前闭合执行）
     const evilObj = styleLiterals.find((s) => s.includes('__pwned'))

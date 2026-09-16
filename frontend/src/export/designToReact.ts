@@ -18,6 +18,17 @@ function styleLiteral(style: DesignNode['style']): string {
   return JSON.stringify(styleToCss(style))
 }
 
+/**
+ * 把「已是 JSON 对象的字符串」拼成 React 的 style 表达式：`style={{"color":"#000"}}`。
+ *
+ * ⚠️ 一定要走这个函数，别手写 `style={{${x}}}`——`JSON.stringify` 的结果**自带一层花括号**，
+ * 手写会多出一层变成 `style={{{…}}}`，产物直接**编译不过**（TS1136/TS1005）。
+ * 2026-09-16 验收方用 tsc 实测抓到这个 P0，本文件当时 5 处模板都写错了。
+ */
+function reactStyleAttr(jsonStyle: string): string {
+  return jsonStyle === '{}' ? '' : ` style={${jsonStyle}}`
+}
+
 const VOID_TAGS = new Set(['img', 'input', 'hr', 'br'])
 
 /** 属性值解析：src 命中内联映射时替换为 dataURL（ADR-008 图片导出内联） */
@@ -29,7 +40,7 @@ function resolveAttr(name: string, value: string, assets?: AssetMap): string {
 /** B1：React 序列化 ExportElement——根元素（componentType 有值）带 data-component；子元素递归不带 */
 function serializeReactElement(el: ExportElement, componentType?: string, assets?: AssetMap): string {
   const dc = componentType ? ` data-component="${componentType}"` : ''
-  const styleStr = Object.keys(el.style).length > 0 ? ` style={{${JSON.stringify(el.style)}}}` : ''
+  const styleStr = Object.keys(el.style).length > 0 ? ` style={${JSON.stringify(el.style)}}` : ''
   const attrsStr = Object.entries(el.attrs)
     .map(([k, v]) => ` ${k}="${escapeHtml(resolveAttr(k, v, assets))}"`)
     .join('')
@@ -55,7 +66,7 @@ function componentTag(node: DesignNode, assets?: AssetMap): string {
   const ccontent = typeof props.content === 'string' ? props.content : ''
   const ctext = text ? `<p>${text}</p>` : ''
   const inner = `${ctext}${ctitle ? `<h3>${escapeHtml(ctitle)}</h3>` : ''}${ccontent ? `<p>${escapeHtml(ccontent)}</p>` : ''}`
-  return `<div data-component="${node.componentType ?? 'card'}" style={{${style}}}>${inner}</div>`
+  return `<div data-component="${node.componentType ?? 'card'}"${reactStyleAttr(style)}>${inner}</div>`
 }
 
 /** 递归生成节点 JSX（frame/text/component） */
@@ -65,7 +76,7 @@ function nodeToJsx(node: DesignNode, depth: number, assets?: AssetMap): string {
 
   if (node.type === 'text') {
     const text = escapeHtml(typeof node.props?.text === 'string' ? node.props.text : '')
-    return `${pad}<div style={{${style}}}>${text}</div>`
+    return `${pad}<div${reactStyleAttr(style)}>${text}</div>`
   }
   if (node.type === 'component') {
     const tag = componentTag(node, assets)
@@ -79,8 +90,8 @@ function nodeToJsx(node: DesignNode, depth: number, assets?: AssetMap): string {
     .filter((c) => !c.hidden)
     .map((c) => nodeToJsx(c, depth + 1, assets))
     .join('\n')
-  if (!children) return `${pad}<div style={{${style}}}></div>`
-  return `${pad}<div style={{${style}}}>\n${children}\n${pad}</div>`
+  if (!children) return `${pad}<div${reactStyleAttr(style)}></div>`
+  return `${pad}<div${reactStyleAttr(style)}>\n${children}\n${pad}</div>`
 }
 
 /**
