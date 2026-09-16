@@ -41,6 +41,7 @@ def init_db() -> None:
     _ensure_image_owner_column()
     _ensure_image_visibility_column()
     _ensure_image_folder_column()
+    _ensure_asset_sort_columns()
     _ensure_workspace_columns()
     _ensure_collab_room_column()
     _seed_personal_workspaces()
@@ -142,6 +143,18 @@ def _ensure_image_folder_column() -> None:
     with engine.begin() as conn:
         _add_column(conn, "images", "folder_id", "ALTER TABLE images ADD COLUMN folder_id INTEGER")
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_images_folder_id ON images (folder_id)"))
+
+
+def _ensure_asset_sort_columns() -> None:
+    """2026-09-16：给既有库补拖拽排序用的 sort_order（images / asset_folders，幂等）。
+
+    `asset_folders` 表本身由 create_all 建出（新表自带该列）；老库只补列，默认 0——
+    全 0 时列表按 (sort_order, id) 排，等价于原来的"按 id 升序"，行为不变。
+    """
+    with engine.begin() as conn:
+        for table in ("images", "asset_folders"):
+            _add_column(conn, table, "sort_order", f"ALTER TABLE {table} ADD COLUMN sort_order INTEGER DEFAULT 0")
+            conn.execute(text(f"CREATE INDEX IF NOT EXISTS ix_{table}_sort_order ON {table} (sort_order)"))
 
 
 def _ensure_version_unique_index() -> None:

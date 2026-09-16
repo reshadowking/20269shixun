@@ -35,7 +35,11 @@ def list_folders(db: DbSession = Depends(get_db), _user: str = Depends(get_curre
     """我的文件夹 + 每个文件夹的资产数 + 未分组数量。"""
     owner = _owner_id(db, _user)
     folders = (
-        db.execute(select(AssetFolder).where(AssetFolder.owner_id == owner).order_by(AssetFolder.id.asc()))
+        db.execute(
+            select(AssetFolder)
+            .where(AssetFolder.owner_id == owner)
+            .order_by(AssetFolder.sort_order.asc(), AssetFolder.id.asc())
+        )
         .scalars()
         .all()
     )
@@ -89,6 +93,29 @@ def create_folder(req: FolderRequest, db: DbSession = Depends(get_db), _user: st
     return {"id": folder.id, "name": folder.name, "count": 0}
 
 
+class OrderRequest(BaseModel):
+    """拖拽排序：按数组顺序写入 sort_order（0..n-1）。"""
+
+    ids: list[int] = Field(min_length=1, max_length=200)
+
+
+# 注意：这条必须声明在 `/{folder_id}` 之前——FastAPI 按声明顺序匹配，
+# 否则 "/api/asset-folders/order" 会先撞上 `folder_id: int` 解析失败（返回 422）。
+@router.patch("/api/asset-folders/order")
+def reorder_folders(req: OrderRequest, db: DbSession = Depends(get_db), _user: str = Depends(get_current_user)):
+    """文件夹手工排序（仅自己的文件夹；传进来的 id 必须全部属于我，否则 404）。"""
+    owner = _owner_id(db, _user)
+    mine = {f.id for f in db.execute(select(AssetFolder).where(AssetFolder.owner_id == owner)).scalars().all()}
+    if any(i not in mine for i in req.ids):
+        raise HTTPException(status_code=404, detail="文件夹不存在或无权访问")
+    for index, folder_id in enumerate(req.ids):
+        folder = db.get(AssetFolder, folder_id)
+        if folder is not None:
+            folder.sort_order = index
+    db.commit()
+    return {"ok": True, "count": len(req.ids)}
+
+
 @router.patch("/api/asset-folders/{folder_id}")
 def rename_folder(
     folder_id: int, req: FolderRequest, db: DbSession = Depends(get_db), _user: str = Depends(get_current_user)
@@ -126,6 +153,41 @@ class MoveAssetRequest(BaseModel):
     """folder_id 为 null = 移出到"未分组"。"""
 
     folder_id: int | None = None
+
+
+class AssetOrderRequest(OrderRequest):
+    """资产排序：必须指定**作用域**（某个文件夹或未分组），避免把别的文件夹的顺序搅乱。"""
+
+    folder_id: int | None = None
+
+
+@router.patch("/api/images/order")
+def reorder_assets(
+    req: AssetOrderRequest, db: DbSession = Depends(get_db), _user: str = Depends(get_current_user)
+):
+    """文件夹内（或未分组）资产手工排序。
+
+    校验两条：① 每个 id 都是我的资产；② 每个 id 当前就在该作用域内。
+    否则拒绝——拖拽排序绝不能改到别的文件夹里去。
+    """
+    owner = _owner_id(db, _user)
+    if req.folder_id is not None:
+        target = db.get(AssetFolder, req.folder_id)
+        if target is None or target.owner_id != owner:
+            raise HTTPException(status_code=404, detail="文件夹不存在或无权访问")
+    rows = db.execute(select(Image).where(Image.id.in_(req.ids))).scalars().all()
+    if len(rows) != len(set(req.ids)):
+        raise HTTPException(status_code=404, detail="资产不存在或无权访问")
+    # 两种拒绝口径分开：不是我的资产 → 404（不泄漏存在性）；是我的但不在该作用域 → 409（如实说明）
+    if any(row.owner_id != owner for row in rows):
+        raise HTTPException(status_code=404, detail="资产不存在或无权访问")
+    if any(row.folder_id != req.folder_id for row in rows):
+        raise HTTPException(status_code=409, detail="资产不属于该文件夹，排序未生效")
+    by_id = {row.id: row for row in rows}
+    for index, image_id in enumerate(req.ids):
+        by_id[image_id].sort_order = index
+    db.commit()
+    return {"ok": True, "count": len(req.ids)}
 
 
 @router.patch("/api/images/{image_id}/folder")

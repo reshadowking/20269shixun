@@ -162,6 +162,9 @@ export default function AssetsPage() {
   /** T45：展示方式（记住上次选择） */
   const [view, setView] = useState<AssetView>(() => readAssetView())
   const [folders, setFolders] = useState<FolderList>({ folders: [], ungrouped: 0, limit_folders: 0 })
+  /** 2026-09-16 拖拽排序：记录正在拖的 id（用 state 而不是 dataTransfer——jsdom 里也可测） */
+  const [draggingAssetId, setDraggingAssetId] = useState<number | null>(null)
+  const [draggingFolderId, setDraggingFolderId] = useState<number | null>(null)
 
   /**
    * T44：文件夹单独取，失败也不拖垮资产列表（后端版本落后 / 接口 404 时，
@@ -319,6 +322,49 @@ export default function AssetsPage() {
     }
   }
 
+  /**
+   * 2026-09-16 拖拽排序（资产）：只在**单个作用域内**允许（某个文件夹或未分组）。
+   * "全部素材"视图混着各文件夹的资产，排序没有明确语义，所以那里不给拖（见 asset-order-hint）。
+   */
+  const reorderAssets = async (targetId: number) => {
+    if (draggingAssetId === null || draggingAssetId === targetId) return
+    if (scope === 'all') return
+    const ids = (data?.images ?? []).map((r) => r.id)
+    const from = ids.indexOf(draggingAssetId)
+    const to = ids.indexOf(targetId)
+    if (from < 0 || to < 0) return
+    ids.splice(to, 0, ...ids.splice(from, 1))
+    setDraggingAssetId(null)
+    try {
+      await api('/api/images/order', {
+        method: 'PATCH',
+        body: JSON.stringify({ ids, folder_id: scope === 'none' ? null : scope }),
+      })
+      await load()
+      setMessage('已保存新的排序。')
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : '排序失败')
+    }
+  }
+
+  /** 文件夹自身的拖拽排序（与资产同理，只在侧边栏内部重排） */
+  const reorderFolders = async (targetId: number) => {
+    if (draggingFolderId === null || draggingFolderId === targetId) return
+    const ids = folders.folders.map((f) => f.id)
+    const from = ids.indexOf(draggingFolderId)
+    const to = ids.indexOf(targetId)
+    if (from < 0 || to < 0) return
+    ids.splice(to, 0, ...ids.splice(from, 1))
+    setDraggingFolderId(null)
+    try {
+      await api('/api/asset-folders/order', { method: 'PATCH', body: JSON.stringify({ ids }) })
+      await loadFolders()
+      setMessage('已保存文件夹顺序。')
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : '文件夹排序失败')
+    }
+  }
+
   /** 复制图片链接：public-link 复制"带凭证的公开链接"，其余复制需要登录的地址。 */
   const copyUrl = async (row: AssetRow) => {
     const target = row.visibility === 'public-link' ? row.public_url : row.url
@@ -376,7 +422,22 @@ export default function AssetsPage() {
             </button>
           </li>
           {folders.folders.map((f) => (
-            <li key={f.id} className="flex items-center gap-0.5">
+            <li
+              key={f.id}
+              className="flex items-center gap-0.5"
+              onDragOver={(e) => e.preventDefault()}
+              onDrop={() => void reorderFolders(f.id)}
+            >
+              <span
+                className="cursor-grab select-none px-0.5 text-[11px] text-muted-foreground"
+                data-testid={`folder-grip-${f.id}`}
+                title="拖动调整文件夹顺序"
+                draggable
+                onDragStart={() => setDraggingFolderId(f.id)}
+                onDragEnd={() => setDraggingFolderId(null)}
+              >
+                ⠿
+              </span>
               <button
                 className={scopeBtnCls(scope === f.id)}
                 data-testid={`folder-${f.id}`}
@@ -410,6 +471,15 @@ export default function AssetsPage() {
         <p className="mt-3 text-[11px] leading-relaxed text-muted-foreground">
           进入文件夹后上传的图片会直接放进该文件夹；删除文件夹不会删除图片。
         </p>
+        {scope === 'all' ? (
+          <p className="mt-2 text-[11px] text-muted-foreground" data-testid="asset-order-hint">
+            进入某个文件夹（或「未分组」）后可拖 ⠿ 排序——"全部素材"里混着各文件夹，排序没有明确语义。
+          </p>
+        ) : (
+          <p className="mt-2 text-[11px] text-muted-foreground" data-testid="asset-order-hint">
+            拖 ⠿ 调整顺序（仅当前范围）。
+          </p>
+        )}
       </aside>
 
       <div className="min-w-0 flex-1">
@@ -487,11 +557,31 @@ export default function AssetsPage() {
         {view === 'details' ? (
           <div className="divide-y divide-border rounded-xl border border-border" data-testid="asset-details">
             {(data?.images ?? []).map((row) => (
-              <div key={row.id} className="flex items-center gap-3 px-3 py-2" data-testid={`asset-row-${row.id}`}>
+              <div
+                key={row.id}
+                className="flex items-center gap-3 px-3 py-2"
+                data-testid={`asset-row-${row.id}`}
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={() => void reorderAssets(row.id)}
+              >
                 <img src={row.url} alt={row.filename} className="h-9 w-9 shrink-0 rounded object-cover" />
                 <div className="min-w-0 flex-1">
-                  <div className="truncate text-[13px] font-medium" title={row.filename}>
-                    {row.filename}
+                  <div className="flex items-center gap-1">
+                    {scope !== 'all' && (
+                      <span
+                        className="cursor-grab select-none text-[11px] text-muted-foreground"
+                        data-testid={`asset-grip-${row.id}`}
+                        title="拖动调整顺序"
+                        draggable
+                        onDragStart={() => setDraggingAssetId(row.id)}
+                        onDragEnd={() => setDraggingAssetId(null)}
+                      >
+                        ⠿
+                      </span>
+                    )}
+                    <div className="truncate text-[13px] font-medium" title={row.filename}>
+                      {row.filename}
+                    </div>
                   </div>
                   <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
                     <span>{humanSize(row.size)}</span>
@@ -529,6 +619,8 @@ export default function AssetsPage() {
                 key={row.id}
                 className="overflow-hidden rounded-xl border border-border bg-card"
                 data-testid={`asset-card-${row.id}`}
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={() => void reorderAssets(row.id)}
               >
                 <div
                   className={`flex items-center justify-center bg-muted/40 p-2 ${
@@ -538,8 +630,22 @@ export default function AssetsPage() {
                   <img src={row.url} alt={row.filename} className="max-h-full max-w-full object-contain" />
                 </div>
                 <div className="border-t border-border px-3 py-2">
-                  <div className="truncate text-[13px] font-medium" title={row.filename}>
-                    {row.filename}
+                  <div className="flex items-center gap-1">
+                    {scope !== 'all' && (
+                      <span
+                        className="cursor-grab select-none text-[11px] text-muted-foreground"
+                        data-testid={`asset-grip-${row.id}`}
+                        title="拖动调整顺序"
+                        draggable
+                        onDragStart={() => setDraggingAssetId(row.id)}
+                        onDragEnd={() => setDraggingAssetId(null)}
+                      >
+                        ⠿
+                      </span>
+                    )}
+                    <div className="truncate text-[13px] font-medium" title={row.filename}>
+                      {row.filename}
+                    </div>
                   </div>
                   <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
                     <span>{humanSize(row.size)}</span>

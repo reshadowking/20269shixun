@@ -74,6 +74,8 @@ class Image(Base):
     visibility: Mapped[str] = mapped_column(String(16), default="private", index=True)
     # T44：所属资产文件夹（NULL = 根目录/未分组；删除文件夹时回落 NULL，不删资产）
     folder_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    # 2026-09-16：文件夹内手工排序（拖拽）；同值时按 id 兜底，顺序始终确定
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, index=True)
     filename: Mapped[str] = mapped_column(String(255))
     path: Mapped[str] = mapped_column(String(512))  # 相对 volume 路径
     design_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
@@ -94,6 +96,8 @@ class AssetFolder(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     owner_id: Mapped[int] = mapped_column(Integer, index=True)
     name: Mapped[str] = mapped_column(String(64))
+    # 2026-09-16：文件夹自身的拖拽排序
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 

@@ -228,7 +228,8 @@ def list_images(
         if target is None or target.owner_id != owner:
             raise HTTPException(status_code=404, detail="文件夹不存在或无权访问")
         stmt = stmt.where(Image.folder_id == target.id)
-    rows = db.execute(stmt.order_by(Image.id.desc())).scalars().all()
+    # 2026-09-16 拖拽排序：手工 sort_order 优先，未排过的（全 0）仍按新→旧展示
+    rows = db.execute(stmt.order_by(Image.sort_order.asc(), Image.id.desc())).scalars().all()
     index = _reference_index(db)
     return {
         "images": [_row_payload(db, r, index.get(r.id, [])) for r in rows],

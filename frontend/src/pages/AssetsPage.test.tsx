@@ -304,3 +304,93 @@ describe('AssetsPage（T45 展示方式）', () => {
     )
   })
 })
+
+describe('AssetsPage（拖拽排序）', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    localStorage.clear()
+  })
+
+  const TWO = {
+    images: [
+      { ...IMAGE, id: 7, folder_id: 1, sort_order: 0 },
+      { ...IMAGE, id: 8, filename: 'second.png', folder_id: 1, sort_order: 1 },
+    ],
+    used_bytes: 4096,
+    limit_count: 50,
+    limit_bytes: 20971520,
+  }
+
+  function mockWithOrder() {
+    return vi.fn(async (url: string, options?: RequestInit) => {
+      const path = String(url)
+      const method = options?.method ?? 'GET'
+      if (path.includes('/api/asset-folders')) {
+        if (method === 'PATCH') return { ok: true, status: 200, json: async () => ({ ok: true, count: 2 }) }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            folders: [
+              { id: 1, name: '图标', count: 2 },
+              { id: 2, name: '背景', count: 0 },
+            ],
+            ungrouped: 0,
+            limit_folders: 30,
+          }),
+        }
+      }
+      if (method === 'PATCH') return { ok: true, status: 200, json: async () => ({ ok: true, count: 2 }) }
+      return { ok: true, status: 200, json: async () => TWO }
+    })
+  }
+
+  it('文件夹内拖动资产：按落点重排并 PATCH /api/images/order（带 folder_id）', async () => {
+    const fetchMock = mockWithOrder()
+    vi.stubGlobal('fetch', fetchMock)
+    renderPage()
+
+    // 进入文件夹 1（才有排序语义）
+    fireEvent.click(await screen.findByTestId('folder-1'))
+    const grip = await screen.findByTestId('asset-grip-7')
+
+    fireEvent.dragStart(grip)
+    fireEvent.dragOver(screen.getByTestId('asset-card-8'))
+    fireEvent.drop(screen.getByTestId('asset-card-8'))
+
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find((c) => String(c[0]) === '/api/images/order')
+      expect(call).toBeTruthy()
+      expect(call?.[1]?.method).toBe('PATCH')
+      const body = JSON.parse(String(call?.[1]?.body))
+      expect(body.ids).toEqual([8, 7]) // 7 拖到 8 之后 → 8 在前
+      expect(body.folder_id).toBe(1)
+    })
+  })
+
+  it('"全部素材"视图不给拖拽入口，并说明原因', async () => {
+    vi.stubGlobal('fetch', mockWithOrder())
+    renderPage()
+
+    expect(await screen.findByTestId('asset-card-7')).toBeInTheDocument()
+    expect(screen.queryByTestId('asset-grip-7')).not.toBeInTheDocument()
+    expect(screen.getByTestId('asset-order-hint')).toHaveTextContent('进入某个文件夹')
+  })
+
+  it('侧边栏拖动文件夹：PATCH /api/asset-folders/order', async () => {
+    const fetchMock = mockWithOrder()
+    vi.stubGlobal('fetch', fetchMock)
+    renderPage()
+
+    const grip = await screen.findByTestId('folder-grip-1')
+    fireEvent.dragStart(grip)
+    fireEvent.dragOver(screen.getByTestId('folder-2'))
+    fireEvent.drop(screen.getByTestId('folder-2'))
+
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find((c) => String(c[0]) === '/api/asset-folders/order')
+      expect(call).toBeTruthy()
+      expect(JSON.parse(String(call?.[1]?.body)).ids).toEqual([2, 1])
+    })
+  })
+})
