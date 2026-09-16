@@ -53,6 +53,12 @@ interface DesignCanvasProps {
   highlightIds?: Set<string>
   /** T46a-3e：只读访客——不开始拖拽/缩放，也不写回组件内部交互 */
   readOnly?: boolean
+  /**
+   * T46a-3e：只读访客**尝试拖动**时回调一次（父层弹可读提示）。
+   * 为什么要它：只读时拖拽压根不进入流程，若不提示，用户看到的是"拖了完全没反应"，
+   * 与"卡顿/坏了"无从区分。
+   */
+  onReadOnlyDragAttempt?: () => void
   /** 转自由画布（P1-13）：由画布自己持有 DOM 与缩放状态，向父组件暴露测量能力 */
   ref?: React.Ref<DesignCanvasHandle>
 }
@@ -62,11 +68,13 @@ export interface DesignCanvasHandle {
   measureFreeze(parentId: string, childIds: string[]): FreezeMeasureResult
 }
 
-export default function DesignCanvas({ design, store, selectedIds, onSelectionChange, onDropComponent, showGrid = true, onContextMenu, highlightIds, readOnly = false, ref }: DesignCanvasProps) {
+export default function DesignCanvas({ design, store, selectedIds, onSelectionChange, onDropComponent, showGrid = true, onContextMenu, highlightIds, readOnly = false, onReadOnlyDragAttempt, ref }: DesignCanvasProps) {
   const [view, setView] = useState<ViewTransform>(DEFAULT_VIEW)
   const dragRef = useRef<DragState | null>(null)
   const resizeRef = useRef<ResizeState | null>(null)
   const panRef = useRef<{ x: number; y: number } | null>(null)
+  /** 只读拖拽提示：记录按下点，位移超过阈值才提示（避免单纯点选也弹） */
+  const readOnlyHintRef = useRef<{ x: number; y: number; fired: boolean } | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
 
   // 转自由画布：测量必须走画布自己的 DOM 与缩放（屏幕像素 ÷ view.scale）
@@ -141,6 +149,7 @@ export default function DesignCanvas({ design, store, selectedIds, onSelectionCh
   const handleNodeSelectOnly = useCallback(
     (e: React.PointerEvent, id: string) => {
       e.stopPropagation()
+      readOnlyHintRef.current = { x: e.clientX, y: e.clientY, fired: false }
       if (e.ctrlKey || e.metaKey) {
         const next = new Set(selectedIds)
         if (next.has(id)) next.delete(id)
@@ -247,6 +256,13 @@ export default function DesignCanvas({ design, store, selectedIds, onSelectionCh
         return
       }
 
+      // 只读：拖动不生效，但给一次明确反馈（否则"拖了没反应"会被当成卡顿）
+      const hint = readOnlyHintRef.current
+      if (hint && !hint.fired && (Math.abs(e.clientX - hint.x) > 4 || Math.abs(e.clientY - hint.y) > 4)) {
+        hint.fired = true
+        onReadOnlyDragAttempt?.()
+      }
+
       // 空白平移：先算 delta（闭包内快照），再 setView —— 避免 updater 延迟执行时读到已更新的 ref（白屏根因）
       if (panRef.current) {
         const dx = e.clientX - panRef.current.x
@@ -304,6 +320,7 @@ export default function DesignCanvas({ design, store, selectedIds, onSelectionCh
     dragRef.current = null
     resizeRef.current = null
     panRef.current = null
+    readOnlyHintRef.current = null
   }, [])
 
   // ---- 空白：平移 + 取消选中（节点 / 工具条之外均可平移，含画布白纸内空白）----

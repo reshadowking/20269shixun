@@ -37,6 +37,7 @@ function dragBy30() {
 function renderCanvas(readOnly: boolean) {
   const store = new DesignStore(undefined, freeDesign())
   const onSelectionChange = vi.fn()
+  const onReadOnlyDragAttempt = vi.fn()
   const blocked: string[] = []
   store.subscribeBlocked((reason) => blocked.push(reason))
   render(
@@ -46,9 +47,10 @@ function renderCanvas(readOnly: boolean) {
       selectedIds={new Set()}
       onSelectionChange={onSelectionChange}
       readOnly={readOnly}
+      onReadOnlyDragAttempt={onReadOnlyDragAttempt}
     />,
   )
-  return { store, onSelectionChange, blocked }
+  return { store, onSelectionChange, blocked, onReadOnlyDragAttempt }
 }
 
 describe('DesignCanvas 拖拽（T46a-3e 只读）', () => {
@@ -72,7 +74,7 @@ describe('DesignCanvas 拖拽（T46a-3e 只读）', () => {
   })
 
   it('只读访客：拖拽不进入拖拽流程（位置不变），但仍可选中查看', () => {
-    const { store, onSelectionChange, blocked } = renderCanvas(true)
+    const { store, onSelectionChange, blocked, onReadOnlyDragAttempt } = renderCanvas(true)
     dragBy30()
 
     // 节点没动：只读时压根没开始拖拽
@@ -85,6 +87,24 @@ describe('DesignCanvas 拖拽（T46a-3e 只读）', () => {
     expect([...selected]).toEqual(['a'])
     // 不是"先拖再被写入层拒绝"——没有产生 blocked 事件
     expect(blocked).toEqual([])
+    // 但必须给一次明确反馈：否则"拖了没反应"与卡顿无从区分
+    expect(onReadOnlyDragAttempt).toHaveBeenCalledTimes(1)
     store.destroy()
+  })
+
+  it('零位移的点击（<4px）不触发只读提示——单纯点选不该报"不能拖"', () => {
+    const { onReadOnlyDragAttempt } = renderCanvas(true)
+    const node = screen.getByTestId('node-a')
+    const container = screen.getByTestId('design-canvas')
+    fireEvent.pointerDown(node, { clientX: 0, clientY: 0 })
+    fireEvent.pointerMove(container, { clientX: 2, clientY: 1 })
+    fireEvent.pointerUp(container, { clientX: 2, clientY: 1 })
+    expect(onReadOnlyDragAttempt).not.toHaveBeenCalled()
+  })
+
+  it('可编辑时不触发只读提示（提示只属于只读路径）', () => {
+    const { onReadOnlyDragAttempt } = renderCanvas(false)
+    dragBy30()
+    expect(onReadOnlyDragAttempt).not.toHaveBeenCalled()
   })
 })

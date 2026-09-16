@@ -1063,6 +1063,14 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
             highlightIds={highlightIds}
             canvasRef={canvasRef}
             readOnly={readOnly}
+            onReadOnlyDragAttempt={
+              readOnly
+                ? () => {
+                    setLockHint('只读访客：拖动/缩放不会生效（需要 owner / editor 权限）。')
+                    window.setTimeout(() => setLockHint(''), 4000)
+                  }
+                : undefined
+            }
           />
           {auditIssues !== null && (
             <div
@@ -1467,6 +1475,7 @@ function CanvasWithSelection({
   highlightIds,
   canvasRef,
   readOnly,
+  onReadOnlyDragAttempt,
 }: {
   design: DesignNode
   store: ReturnType<typeof useDesignStore>['store']
@@ -1478,6 +1487,7 @@ function CanvasWithSelection({
   highlightIds?: Set<string>
   canvasRef?: React.Ref<DesignCanvasHandle>
   readOnly?: boolean
+  onReadOnlyDragAttempt?: () => void
 }) {
   return (
     <DesignCanvas
@@ -1491,6 +1501,7 @@ function CanvasWithSelection({
       onContextMenu={onCanvasContextMenu}
       highlightIds={highlightIds}
       readOnly={readOnly}
+      onReadOnlyDragAttempt={onReadOnlyDragAttempt}
     />
   )
 }

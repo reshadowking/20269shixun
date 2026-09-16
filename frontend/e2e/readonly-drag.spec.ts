@@ -126,6 +126,9 @@ test('T46a-3e：owner 拖得动（对照组），viewer 拖不动且位置分毫
 
     expect(Math.abs(afterViewer!.x - beforeViewer!.x)).toBeLessThanOrEqual(1)
     expect(Math.abs(afterViewer!.y - beforeViewer!.y)).toBeLessThanOrEqual(1)
+    // 给了一次明确反馈（而不是"拖了完全没反应"）。注意不要用 "只读访客：" 这种宽泛匹配——
+    // 进页面时那条"可以查看实时协作…"的提示也含它，会假绿；这里匹配拖拽专属措辞。
+    await expect(viewer.getByText(/拖动\/缩放不会生效/)).toBeVisible()
 
     // 刷新后仍是原位置（排除"只是本地没重渲染"）
     await viewer.reload()
