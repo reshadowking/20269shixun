@@ -33,6 +33,20 @@ def _member(db: DbSession, workspace_id: int, user_id: int) -> WorkspaceMember |
     ).scalar_one_or_none()
 
 
+def _require_invite_rights(inviter_role: str, target_role: str) -> None:
+    """谁能邀请谁（2026-09-16 决策：放宽到 editor，但**可邀角色上限为 viewer**）。
+
+    - owner：可发 editor / viewer；
+    - editor：只能发 viewer——"谁能写"始终由 owner 决定，避免 editor 再造 editor 把权限链延长
+      （当前没有审计、没有成员变更通知，出事不好收敛）；
+    - viewer / 非成员：不能邀请。
+    """
+    if inviter_role not in ("owner", "editor"):
+        raise HTTPException(status_code=403, detail="只有 owner / editor 可以邀请成员")
+    if inviter_role == "editor" and target_role != "viewer":
+        raise HTTPException(status_code=403, detail="可编辑成员只能邀请只读访客（可写成员的增删由 owner 决定）")
+
+
 @router.get("/api/workspaces")
 def list_workspaces(db: DbSession = Depends(get_db), _user: str = Depends(get_current_user)):
     """我参与的工作区 + 我的角色（owner 排前）。"""
@@ -55,15 +69,14 @@ class InviteRequest(BaseModel):
 def create_invite(
     workspace_id: int, req: InviteRequest, db: DbSession = Depends(get_db), _user: str = Depends(get_current_user)
 ):
-    """生成一次性邀请链接（仅 owner）。"""
+    """生成一次性邀请链接（owner 可发 editor/viewer；editor 只能发 viewer）。"""
     me = _owner_id(db, _user)
     member = _member(db, workspace_id, me)
     if member is None:
         raise HTTPException(status_code=404, detail="工作区不存在或无权访问")
-    if member.role != "owner":
-        raise HTTPException(status_code=403, detail="只有 owner 可以生成邀请")
     if req.role not in INVITE_ROLES:
         raise HTTPException(status_code=422, detail=f"role 必须是 {'/'.join(INVITE_ROLES)} 之一")
+    _require_invite_rights(member.role, req.role)
     token = secrets.token_urlsafe(24)
     db.add(
         WorkspaceInvite(
@@ -97,7 +110,7 @@ def invite_by_username(
     """T46a-4 第 3 件：直接按用户名把对方加为成员（省掉"发链接→对方点开"两步）。
 
     口径：
-    - 仅 owner 可邀请（与链接邀请一致）；
+    - owner 可发 editor / viewer；**editor 只能发 viewer**（与链接邀请同一套规则，见 `_require_invite_rights`）；
     - 对方**必须已注册**（不存在 → 404，提示先注册；不自动建号，避免悄悄给别人开账号）；
     - 已是成员 → 409（不静默改角色，让邀请方自己决策）；
     - 不能邀请自己（422）。
@@ -106,10 +119,9 @@ def invite_by_username(
     member = _member(db, workspace_id, me)
     if member is None:
         raise HTTPException(status_code=404, detail="工作区不存在或无权访问")
-    if member.role != "owner":
-        raise HTTPException(status_code=403, detail="只有 owner 可以邀请成员")
     if req.role not in INVITE_ROLES:
         raise HTTPException(status_code=422, detail=f"role 必须是 {'/'.join(INVITE_ROLES)} 之一")
+    _require_invite_rights(member.role, req.role)
 
     target = db.execute(select(User).where(User.username == req.username)).scalar_one_or_none()
     if target is None:

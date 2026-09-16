@@ -81,14 +81,15 @@ describe('T46a-4：成员与邀请面板', () => {
     expect(screen.getByTestId('members-msg')).toHaveTextContent('已复制')
   })
 
-  it('非 owner（editor）：生成邀请与移除都禁用，并说明原因', async () => {
+  it('editor（带工作区选择器）：可邀请但只能邀 viewer；移除成员仍禁用', async () => {
     // 工作区列表里只有"我是 editor"的那个 → 不是 owner
     vi.stubGlobal('fetch', mockFetch({ workspaces: [WORKSPACES[1]] }))
     render(<MembersPanel />)
 
     expect(await screen.findByTestId('member-row-demo')).toBeInTheDocument()
-    expect(screen.getByTestId('invite-create')).toBeDisabled()
-    expect(screen.getByTestId('invite-create')).toHaveAttribute('title', '只有工作区所有者可以生成邀请')
+    expect(screen.getByTestId('invite-create')).toBeEnabled()
+    expect(screen.getByTestId('invite-role-cap')).toBeInTheDocument()
+    expect(screen.getByTestId('invite-role')).toHaveValue('viewer')
     expect(screen.getByTestId('member-remove-guest')).toBeDisabled()
   })
 
@@ -126,14 +127,34 @@ describe('T46a-4：成员与邀请面板', () => {
     expect(await screen.findByTestId('members-msg')).toHaveTextContent('guest')
   })
 
-  it('T46a-4：固定工作区模式隐藏选择器，非 owner 时按用户名邀请禁用', async () => {
-    // 固定到"我是 editor"的工作区 → 不是 owner
+  it('T46a-4：固定工作区模式隐藏选择器；editor 可邀但只能邀 viewer', async () => {
+    // 固定到"我是 editor"的工作区
     vi.stubGlobal('fetch', mockFetch({ workspaces: [WORKSPACES[1]] }))
     render(<MembersPanel fixedWorkspaceId={9} onClose={() => {}} />)
 
     expect(await screen.findByTestId('member-row-demo')).toBeInTheDocument()
     expect(screen.queryByTestId('members-workspace-select')).not.toBeInTheDocument()
-    expect(screen.getByTestId('invite-username-submit')).toBeDisabled()
     expect(screen.getByTestId('members-close')).toBeInTheDocument()
+
+    // 2026-09-16：editor 可以邀请，但角色选择只有"只读访客"，并给出说明
+    expect(screen.getByTestId('invite-role-cap')).toHaveTextContent('只能邀请')
+    const roleSelect = screen.getByTestId('invite-role')
+    expect(Array.from(roleSelect.querySelectorAll('option')).map((o) => o.getAttribute('value'))).toEqual(['viewer'])
+    expect(roleSelect).toHaveValue('viewer')
+    // 移除成员仍仅 owner
+    expect(screen.getByTestId('member-remove-guest')).toBeDisabled()
+
+    // 输入用户名后"直接邀请"可用（不再是 owner-only）
+    fireEvent.change(screen.getByTestId('invite-username'), { target: { value: 'newbie' } })
+    expect(screen.getByTestId('invite-username-submit')).toBeEnabled()
+  })
+
+  it('T46a-4：viewer 视角不能邀请（按钮禁用）', async () => {
+    vi.stubGlobal('fetch', mockFetch({ workspaces: [{ ...WORKSPACES[1], role: 'viewer' }] }))
+    render(<MembersPanel />)
+
+    expect(await screen.findByTestId('member-row-demo')).toBeInTheDocument()
+    expect(screen.getByTestId('invite-create')).toBeDisabled()
+    expect(screen.getByTestId('invite-create')).toHaveAttribute('title', '只有 owner / editor 可以生成邀请')
   })
 })

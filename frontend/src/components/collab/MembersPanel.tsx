@@ -67,7 +67,16 @@ export default function MembersPanel({
   }, [workspaceId, loadMembers])
 
   const current = workspaces.find((w) => w.id === workspaceId) ?? null
-  const isOwner = current?.role === 'owner'
+  const myRole = current?.role ?? null
+  const isOwner = myRole === 'owner'
+  /**
+   * 2026-09-16 决策：邀请放宽到 editor，但**可邀角色上限是 viewer**（后端同规则）。
+   * 这里同步把角色选择锁成 viewer，让"点不动的按钮"变成"看得懂的选择"。
+   */
+  const canInvite = isOwner || myRole === 'editor'
+  useEffect(() => {
+    if (myRole && myRole !== 'owner') setInviteRole('viewer')
+  }, [myRole])
 
   const createInvite = async () => {
     if (workspaceId === null) return
@@ -210,19 +219,25 @@ export default function MembersPanel({
             value={inviteRole}
             onChange={(e) => setInviteRole(e.target.value as 'editor' | 'viewer')}
           >
-            <option value="editor">可编辑（editor）</option>
+            {/* editor 视角下不提供"可编辑"选项：谁能写由 owner 决定 */}
+            {isOwner && <option value="editor">可编辑（editor）</option>}
             <option value="viewer">只读访客（viewer）</option>
           </select>
           <Button
             size="sm"
             data-testid="invite-create"
-            disabled={busy || !isOwner || workspaceId === null}
-            title={isOwner ? undefined : '只有工作区所有者可以生成邀请'}
+            disabled={busy || !canInvite || workspaceId === null}
+            title={canInvite ? undefined : '只有 owner / editor 可以生成邀请'}
             onClick={createInvite}
           >
             生成邀请链接
           </Button>
         </div>
+        {myRole === 'editor' && (
+          <p className="text-[11px] text-muted-foreground" data-testid="invite-role-cap">
+            你是可编辑成员：只能邀请**只读访客**（可写成员的增删由 owner 决定）。
+          </p>
+        )}
         {inviteLink && (
           <div className="flex items-center gap-2">
             <input
@@ -256,8 +271,8 @@ export default function MembersPanel({
             size="sm"
             className="h-8 text-xs"
             data-testid="invite-username-submit"
-            disabled={busy || !isOwner || workspaceId === null || !inviteUsername.trim()}
-            title={isOwner ? undefined : '只有工作区所有者可以邀请成员'}
+            disabled={busy || !canInvite || workspaceId === null || !inviteUsername.trim()}
+            title={canInvite ? undefined : '只有 owner / editor 可以邀请成员'}
             onClick={inviteByUsername}
           >
             直接邀请

@@ -78,15 +78,48 @@ def test_invite_by_username_existing_member_409(client):
     assert member  # 保留引用：member 账号本身没别的用途，避免 linter 误判未使用
 
 
-def test_editor_cannot_invite(client):
+def test_editor_can_only_invite_viewer(client):
+    """2026-09-16 决策：放宽到 editor，但**可邀角色上限为 viewer**（"谁能写"始终由 owner 决定）。"""
     owner = _register(client, "byn_owner5")
     editor = _register(client, "byn_editor5")
-    third = _register(client, "byn_third5")
+    _register(client, "byn_watcher5")
+    _register(client, "byn_another5")
     workspace_id = _owned_workspace(client, owner)
 
     assert _invite(client, owner, workspace_id, "byn_editor5", "editor").status_code == 200
-    assert _invite(client, editor, workspace_id, "byn_third5").status_code == 403
-    assert third  # 同上：仅用于确保账号已创建
+    # editor 邀 viewer：允许
+    assert _invite(client, editor, workspace_id, "byn_watcher5", "viewer").status_code == 200
+    # editor 邀 editor：拒绝（否则权限链可以无限延长）
+    denied = _invite(client, editor, workspace_id, "byn_another5", "editor")
+    assert denied.status_code == 403, denied.text
+    assert "只读" in denied.json()["detail"]
+    # 被拒的那位确实没进成员表；被允许的 viewer 在
+    usernames = {m["username"] for m in _members(client, owner, workspace_id)}
+    assert "byn_watcher5" in usernames and "byn_another5" not in usernames
+
+
+def test_editor_can_only_create_viewer_link(client):
+    """链接邀请与按用户名邀请同一套规则（不能一条路宽一条路窄）。"""
+    owner = _register(client, "byn_owner7")
+    editor = _register(client, "byn_editor7")
+    workspace_id = _owned_workspace(client, owner)
+    assert _invite(client, owner, workspace_id, "byn_editor7", "editor").status_code == 200
+
+    ok = client.post(f"/api/workspaces/{workspace_id}/invites", headers=editor, json={"role": "viewer"})
+    assert ok.status_code == 200, ok.text
+    denied = client.post(f"/api/workspaces/{workspace_id}/invites", headers=editor, json={"role": "editor"})
+    assert denied.status_code == 403, denied.text
+
+
+def test_viewer_cannot_invite_at_all(client):
+    """只读访客不是邀请方——404/403 都不能过（口径：owner / editor 才可邀请）。"""
+    owner = _register(client, "byn_owner8")
+    viewer = _register(client, "byn_viewer8")
+    workspace_id = _owned_workspace(client, owner)
+    assert _invite(client, owner, workspace_id, "byn_viewer8", "viewer").status_code == 200
+
+    assert _invite(client, viewer, workspace_id, "byn_owner8").status_code == 403
+    assert client.post(f"/api/workspaces/{workspace_id}/invites", headers=viewer, json={"role": "viewer"}).status_code == 403
 
 
 def test_collab_endpoint_exposes_workspace_id(client):
