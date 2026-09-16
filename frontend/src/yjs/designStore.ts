@@ -17,6 +17,25 @@ import type { DesignNode } from '@/design/types'
 const DESIGN_MAP = 'design'
 const ROOT_KEY = 'root'
 
+/** 光标节流：awareness 是逐帧可写的，但没必要（60ms ≈ 16fps 已经足够顺滑） */
+const CURSOR_THROTTLE_MS = 60
+
+export interface CursorPos {
+  x: number
+  y: number
+}
+
+export interface RemoteCursor extends CursorPos {
+  clientId: number
+  name: string
+  color: string
+}
+
+/** 由 clientId 推导一个稳定颜色（同一队友每次进来颜色一致） */
+function cursorColor(clientId: number): string {
+  return `hsl(${(clientId * 47) % 360} 72% 45%)`
+}
+
 /** 本地用户操作的 origin（操作级 UndoManager 只跟踪它；AI 生成/协作远程/快照恢复不记录） */
 export const LOCAL_ORIGIN = 'local-user-op'
 const RESET_ORIGIN = 'reset-design'
@@ -134,6 +153,8 @@ export class DesignStore {
   private roomName: string
   /** T2：最近一次广播的 presence 昵称，provider 重建（重挂/重连）后自动写回 */
   private presenceName: string | null = null
+  /** 2026-09-16：最近一次光标节流时间（见 publishCursor） */
+  private lastCursorAt = 0
 
   private handleAwareness = (): void => {
     this.presenceCbs.forEach((cb) => cb())
@@ -234,6 +255,37 @@ export class DesignStore {
     if (this.presenceName !== null && this.provider) {
       this.provider.awareness.setLocalStateField('user', { name: this.presenceName })
     }
+  }
+
+  // ---- 2026-09-16：光标级 presence（把"谁在线"变成"谁在哪"）----
+
+  /**
+   * 广播本地光标（画布世界坐标）；传 null 表示离开画布（立即清掉，不受节流影响）。
+   * 无 provider（本地模式/单测）时静默跳过——与 presence 的处理一致。
+   */
+  publishCursor(pos: CursorPos | null): void {
+    if (!this.provider) return
+    if (pos !== null) {
+      const now = Date.now()
+      if (now - this.lastCursorAt < CURSOR_THROTTLE_MS) return
+      this.lastCursorAt = now
+    }
+    this.provider.awareness.setLocalStateField('cursor', pos)
+  }
+
+  /** 队友光标（排除自己）：只有同时带 cursor 与昵称的状态才会画出来 */
+  get remoteCursors(): RemoteCursor[] {
+    const awareness = this.provider?.awareness
+    if (!awareness) return []
+    const out: RemoteCursor[] = []
+    for (const [clientId, state] of awareness.getStates()) {
+      if (clientId === awareness.clientID) continue
+      const cursor = (state as { cursor?: CursorPos | null } | undefined)?.cursor
+      const name = (state as { user?: { name?: unknown } } | undefined)?.user?.name
+      if (!cursor || typeof cursor.x !== 'number' || typeof cursor.y !== 'number') continue
+      out.push({ clientId, x: cursor.x, y: cursor.y, name: typeof name === 'string' && name ? name : '队友', color: cursorColor(clientId) })
+    }
+    return out
   }
 
   /** 订阅 awareness 变化（他人进出/状态更新）；无 provider（本地模式）时立即回调一次 */

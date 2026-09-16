@@ -70,12 +70,19 @@ export interface DesignCanvasHandle {
 
 export default function DesignCanvas({ design, store, selectedIds, onSelectionChange, onDropComponent, showGrid = true, onContextMenu, highlightIds, readOnly = false, onReadOnlyDragAttempt, ref }: DesignCanvasProps) {
   const [view, setView] = useState<ViewTransform>(DEFAULT_VIEW)
+  /** 2026-09-16：队友光标（presence 的 cursor 字段；订阅 awareness 变化后重算） */
+  const [remoteCursors, setRemoteCursors] = useState(store.remoteCursors)
   const dragRef = useRef<DragState | null>(null)
   const resizeRef = useRef<ResizeState | null>(null)
   const panRef = useRef<{ x: number; y: number } | null>(null)
   /** 只读拖拽提示：记录按下点，位移超过阈值才提示（避免单纯点选也弹） */
   const readOnlyHintRef = useRef<{ x: number; y: number; fired: boolean } | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
+
+  // 队友光标：订阅 awareness 变化（subscribePresence 会立即回调一次，无需额外初始化）
+  useEffect(() => {
+    return store.subscribePresence(() => setRemoteCursors(store.remoteCursors))
+  }, [store])
 
   // 转自由画布：测量必须走画布自己的 DOM 与缩放（屏幕像素 ÷ view.scale）
   useImperativeHandle(
@@ -228,6 +235,8 @@ export default function DesignCanvas({ design, store, selectedIds, onSelectionCh
       const el = containerRef.current
       if (!el) return
       const rect = el.getBoundingClientRect()
+      // 2026-09-16：光标 presence——任何指针移动都广播世界坐标（节流在 store 内）
+      store.publishCursor(viewportToCanvas(e.clientX - rect.left, e.clientY - rect.top, view))
 
       // 缩放（resize 手柄）
       const resize = resizeRef.current
@@ -402,6 +411,7 @@ export default function DesignCanvas({ design, store, selectedIds, onSelectionCh
       }}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
+      onPointerLeave={() => store.publishCursor(null)}
       onPointerDown={handleBackgroundPointerDown}
       onDragOver={handleDragOver}
       onDrop={handleDrop}
@@ -443,6 +453,25 @@ export default function DesignCanvas({ design, store, selectedIds, onSelectionCh
             }
           />
         </div>
+        {/* 2026-09-16：队友光标（世界坐标系内绘制，跟着画布平移/缩放一起动） */}
+        {remoteCursors.map((c) => (
+          <div
+            key={c.clientId}
+            className="pointer-events-none absolute z-50"
+            style={{ left: c.x, top: c.y }}
+            data-testid={`cursor-${c.clientId}`}
+          >
+            <svg width="14" height="18" viewBox="0 0 14 18" aria-hidden>
+              <path d="M1 1 L1 15 L5 11 L7.5 16.5 L10 15.2 L7.6 10 L12.5 10 Z" fill={c.color} stroke="#fff" strokeWidth="1" />
+            </svg>
+            <span
+              className="ml-2 whitespace-nowrap rounded px-1.5 py-0.5 text-[10px] font-medium text-white shadow"
+              style={{ background: c.color }}
+            >
+              {c.name}
+            </span>
+          </div>
+        ))}
       </div>
 
       {/* 缩放工具条 */}

@@ -19,12 +19,16 @@ export class FakeWebsocketProvider {
   roomname: string
   doc: unknown
   destroyed = false
+  /** presence/awareness 的本地 clientId（真实 provider 也有这个字段） */
+  clientID = 1
 
   /** provider 自身的 on/off（DesignStore.bindProviderEvents 用它挂 status 事件） */
   on = vi.fn()
   off = vi.fn()
 
   awareness = {
+    /** 本地 clientId：DesignStore 用它排除"自己的光标"（真实 awareness 也有） */
+    clientID: 1,
     on: vi.fn(),
     off: vi.fn(),
     setLocalStateField: vi.fn(),
