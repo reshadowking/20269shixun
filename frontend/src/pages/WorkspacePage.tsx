@@ -1296,7 +1296,11 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
                       onAddRecommend={handleRecommendAdd}
                     />
                   ) : (
-                    <CanvasSettings root={design} onUpdate={(updater) => store.updateNode(design.id, updater)} />
+                    <CanvasSettings
+                      root={design}
+                      readOnly={readOnly}
+                      onUpdate={(updater) => store.updateNode(design.id, updater)}
+                    />
                   )
                 )}
                 {activePanel === 'ai' && (
