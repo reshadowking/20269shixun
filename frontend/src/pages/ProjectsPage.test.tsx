@@ -7,6 +7,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import ProjectsPage from './ProjectsPage'
+import { readProjectSort, writeProjectSort } from '@/lib/projectSort'
 
 const DESIGN = {
   id: 7,
@@ -189,5 +190,21 @@ describe('ProjectsPage（列表搜索与排序）', () => {
     await waitFor(() => expect(fetchMock.mock.calls.some((c) => String(c[0]).includes('sort=name_asc'))).toBe(true))
     const last = String(fetchMock.mock.calls.at(-1)?.[0] ?? '')
     expect(last).toContain('offset=0')
+  })
+
+  it('排序方式被记住：预置后首次请求就带上，切换后写回存储', async () => {
+    writeProjectSort('name_asc')
+    const fetchMock = mockFetch({ workspaces: [] })
+    vi.stubGlobal('fetch', fetchMock)
+    renderPage()
+
+    // 记忆生效：**第一次**请求就带 sort=name_asc（不是"先默认再纠正"）
+    await waitFor(() => expect(fetchMock.mock.calls.some((c) => String(c[0]).includes('sort=name_asc'))).toBe(true))
+    const first = String(fetchMock.mock.calls[0][0])
+    expect(first).toContain('sort=name_asc')
+    expect(screen.getByTestId('projects-sort')).toHaveValue('name_asc')
+
+    fireEvent.change(screen.getByTestId('projects-sort'), { target: { value: 'created_desc' } })
+    expect(readProjectSort()).toBe('created_desc')
   })
 })

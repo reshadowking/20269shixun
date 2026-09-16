@@ -8,6 +8,7 @@ import { useNavigate } from 'react-router-dom'
 import DesignThumbnail from '@/components/chat/DesignThumbnail'
 import WorkspaceBadges from '@/components/collab/WorkspaceBadges'
 import { api } from '@/lib/api'
+import { readProjectSort, writeProjectSort, type ProjectSort } from '@/lib/projectSort'
 import type { DesignNode } from '@/design/types'
 
 interface DesignRow {
@@ -33,7 +34,7 @@ interface WorkspaceRow {
 
 const PAGE_SIZE = 12
 
-const SORT_OPTIONS = [
+const SORT_OPTIONS: Array<{ value: ProjectSort; label: string }> = [
   { value: 'updated_desc', label: '最近修改' },
   { value: 'updated_asc', label: '最早修改' },
   { value: 'name_asc', label: '名称 A→Z' },
@@ -50,7 +51,8 @@ export default function ProjectsPage() {
   /** 2026-09-16：搜索与排序（搜索带 300ms 防抖，避免每敲一个字打一次接口） */
   const [q, setQ] = useState('')
   const [debouncedQ, setDebouncedQ] = useState('')
-  const [sort, setSort] = useState('updated_desc')
+  /** 排序方式**记住**（刷新后保持）——否则会让人以为排序是前端假的 */
+  const [sort, setSort] = useState<ProjectSort>(() => readProjectSort())
   /** T46a-4：可写入的工作区（owner/editor）——只有多于一个时才显示"移动"入口 */
   const [workspaces, setWorkspaces] = useState<WorkspaceRow[]>([])
 
@@ -147,7 +149,11 @@ export default function ProjectsPage() {
           data-testid="projects-sort"
           value={sort}
           title="排序方式"
-          onChange={(e) => setSort(e.target.value)}
+          onChange={(e) => {
+            const next = e.target.value as ProjectSort
+            setSort(next)
+            writeProjectSort(next)
+          }}
         >
           {SORT_OPTIONS.map((o) => (
             <option key={o.value} value={o.value}>
