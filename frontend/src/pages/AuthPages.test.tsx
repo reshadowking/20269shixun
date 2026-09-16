@@ -61,6 +61,50 @@ describe('T46a-4：注册页', () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
+  it('密码太短：本地拦下并说清要求（不打接口，也不再甩后端校验 JSON）', () => {
+    const fetchMock = vi.fn(async (_url: string, _options?: RequestInit) => okJson({}))
+    renderRegister(fetchMock)
+
+    fireEvent.change(screen.getByTestId('register-username'), { target: { value: 'alice' } })
+    fireEvent.change(screen.getByTestId('register-password'), { target: { value: '111' } })
+    fireEvent.change(screen.getByTestId('register-confirm'), { target: { value: '111' } })
+    fireEvent.click(screen.getByTestId('register-submit'))
+
+    expect(screen.getByTestId('register-error')).toHaveTextContent('密码至少 6 位')
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('后端校验失败时显示人话（不再是原始 JSON 数组）', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: false,
+        status: 422,
+        json: async () => ({
+          detail: [
+            { type: 'string_too_short', loc: ['body', 'password'], msg: 'String should have at least 6 characters', ctx: { min_length: 6 } },
+          ],
+        }),
+      })),
+    )
+    render(
+      <MemoryRouter initialEntries={['/register']}>
+        <Routes>
+          <Route path="/register" element={<RegisterPage />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    fireEvent.change(screen.getByTestId('register-username'), { target: { value: 'alice' } })
+    fireEvent.change(screen.getByTestId('register-password'), { target: { value: 'alice123' } })
+    fireEvent.change(screen.getByTestId('register-confirm'), { target: { value: 'alice123' } })
+    fireEvent.click(screen.getByTestId('register-submit'))
+
+    const error = await screen.findByTestId('register-error')
+    expect(error).toHaveTextContent('密码：至少需要 6 个字符')
+    expect(error.textContent).not.toContain('string_too_short')
+  })
+
   it('用户名被占用：把后端原因显示出来（不吞错）', async () => {
     vi.stubGlobal(
       'fetch',

@@ -30,6 +30,15 @@ export default function RegisterPage() {
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setError('')
+    // 本地先拦一道（与后端口径一致）：省一次往返，也让提示更直白
+    if (username.trim().length < 3) {
+      setError('账号至少 3 个字符（只允许字母、数字、下划线、连字符）')
+      return
+    }
+    if (password.length < 6) {
+      setError('密码至少 6 位')
+      return
+    }
     if (password !== confirm) {
       setError('两次输入的密码不一致')
       return

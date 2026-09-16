@@ -4,7 +4,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { ApiError, api, getToken, handleUnauthorized, setAuth } from './api'
+import { ApiError, api, formatApiDetail, getToken, handleUnauthorized, setAuth } from './api'
 import { sessionApi } from './sessionApi'
 
 function jsonResponse(status: number, body: unknown) {
@@ -80,5 +80,47 @@ describe('sessionApi.ensure 在途去重（P0-2）', () => {
     vi.stubGlobal('fetch', fetchMock)
     await Promise.all([sessionApi.ensure('s-a'), sessionApi.ensure('s-b')])
     expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('formatApiDetail（2026-09-16：别把校验 JSON 甩给用户）', () => {
+  it('把 Pydantic 校验错误翻成人话（就是用户填 "111" 那个场景）', () => {
+    const detail = [
+      {
+        type: 'string_too_short',
+        loc: ['body', 'password'],
+        msg: 'String should have at least 6 characters',
+        ctx: { min_length: 6 },
+      },
+    ]
+    expect(formatApiDetail(detail)).toBe('密码：至少需要 6 个字符')
+  })
+
+  it('多条错误合并；超过三条只列前三条并注明还有几项', () => {
+    const err = (field: string, type = 'string_too_short', ctx: Record<string, unknown> = { min_length: 3 }) => ({
+      type,
+      loc: ['body', field],
+      ctx,
+    })
+    expect(formatApiDetail([err('username'), err('password', 'string_too_short', { min_length: 6 })])).toBe(
+      '账号：至少需要 3 个字符；密码：至少需要 6 个字符',
+    )
+    expect(formatApiDetail([err('a'), err('b'), err('c'), err('d')])).toContain('（还有 1 项）')
+  })
+
+  it('字符串 detail 原样返回（业务错误文案不受影响）', () => {
+    expect(formatApiDetail('用户名已被占用')).toBe('用户名已被占用')
+  })
+
+  it('没登记的类型退回后端 msg，未登记字段用原字段名', () => {
+    expect(formatApiDetail([{ type: 'value_error', loc: ['body', 'custom_field'], msg: 'Value error, 自定义校验失败' }])).toBe(
+      'custom_field：自定义校验失败',
+    )
+  })
+
+  it('未知形状不抛错（宁可显示"请求失败"也不能崩）', () => {
+    expect(formatApiDetail(undefined)).toBe('请求失败')
+    expect(formatApiDetail({})).toBe('请求失败')
+    expect(formatApiDetail([null, 42])).toBe('null；42')
   })
 })

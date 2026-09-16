@@ -57,6 +57,66 @@ export class ApiError extends Error {
   }
 }
 
+/** 字段名 → 中文（只列前端能触达的；没登记的字段直接用原名） */
+const FIELD_LABELS: Record<string, string> = {
+  username: '账号',
+  password: '密码',
+  name: '名称',
+  role: '角色',
+  visibility: '可见性',
+  folder_id: '文件夹',
+  ids: '排序列表',
+  token: '邀请链接',
+  design: '设计稿',
+  note: '备注',
+  q: '搜索词',
+  sort: '排序方式',
+  limit: '条数',
+  offset: '偏移量',
+}
+
+/** Pydantic 校验类型 → 人话（ctx 里带上下限等参数） */
+const TYPE_HINTS: Record<string, (ctx: Record<string, unknown>) => string> = {
+  string_too_short: (ctx) => `至少需要 ${ctx.min_length ?? ''} 个字符`,
+  string_too_long: (ctx) => `最多 ${ctx.max_length ?? ''} 个字符`,
+  string_pattern_mismatch: () => '格式不正确（只允许字母、数字、下划线、连字符）',
+  missing: () => '不能为空',
+  int_parsing: () => '必须是整数',
+  int_type: () => '必须是整数',
+  bool_parsing: () => '必须是布尔值',
+  greater_than_equal: (ctx) => `不能小于 ${ctx.ge ?? ''}`,
+  less_than_equal: (ctx) => `不能大于 ${ctx.le ?? ''}`,
+}
+
+/**
+ * 把后端错误体转成**人话**（2026-09-16）。
+ *
+ * 之前 `api()` 对非字符串 detail 直接 `JSON.stringify` —— 注册时密码填 "111"，
+ * 用户看到的是一整串 `[{"type":"string_too_short","loc":["body","password"],…}]`，
+ * 完全不知道该怎么办。这里把 Pydantic 的校验错误逐条翻译成"字段：原因"。
+ */
+export function formatApiDetail(detail: unknown): string {
+  if (typeof detail === 'string') return detail
+  if (Array.isArray(detail)) {
+    const parts = detail.slice(0, 3).map((item) => {
+      if (!item || typeof item !== 'object') return String(item)
+      const err = item as { type?: string; loc?: unknown[]; msg?: string; ctx?: Record<string, unknown> }
+      const field = Array.isArray(err.loc) ? String(err.loc[err.loc.length - 1] ?? '') : ''
+      const label = field ? (FIELD_LABELS[field] ?? field) : ''
+      const hint = err.type ? TYPE_HINTS[err.type]?.(err.ctx ?? {}) : undefined
+      const text = (hint ?? err.msg ?? '格式不正确').replace(/^Value error,\s*/i, '')
+      return label ? `${label}：${text}` : text
+    })
+    const more = detail.length > 3 ? `（还有 ${detail.length - 3} 项）` : ''
+    return parts.join('；') + more
+  }
+  if (detail && typeof detail === 'object') {
+    const msg = (detail as { msg?: unknown }).msg
+    if (typeof msg === 'string') return msg
+  }
+  return '请求失败'
+}
+
 /**
  * 401 统一处理（P0-3）：清凭证 + 跳登录页。
  *
@@ -93,7 +153,7 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
     let detail = `请求失败（${resp.status}）`
     try {
       const body = await resp.json()
-      if (body.detail) detail = typeof body.detail === 'string' ? body.detail : JSON.stringify(body.detail)
+      if (body.detail) detail = formatApiDetail(body.detail)
     } catch {
       /* 非 JSON 响应，保留默认错误 */
     }
