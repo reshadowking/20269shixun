@@ -9,7 +9,7 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
 
 from ..db import get_db
@@ -23,6 +23,14 @@ router = APIRouter(tags=["designs"])
 MAX_VERSIONS = 30
 # 入库前体积上限（P0-3 存储边界防线；schema 单字段已限 5000 字符/500 子节点，此为总量兜底）
 MAX_DESIGN_JSON_BYTES = 2_000_000
+
+# 列表排序白名单（不开放任意列排序：避免"按 owner_id 排"这类把内部字段暴露成接口语义）
+DESIGN_SORTS = {
+    "updated_desc": (Design.updated_at.desc(), Design.id.desc()),
+    "updated_asc": (Design.updated_at.asc(), Design.id.asc()),
+    "name_asc": (Design.name.asc(), Design.id.asc()),
+    "created_desc": (Design.created_at.desc(), Design.id.desc()),
+}
 
 
 def _validate_design_payload(design: dict) -> None:
@@ -150,6 +158,8 @@ def list_designs(
     limit: int | None = Query(default=None, ge=1, le=200, description="返回条数上限；缺省返回全部"),
     offset: int = Query(default=0, ge=0, description="跳过的条数"),
     with_preview: bool = Query(default=False, description="T36：为列表项附带设计树，用于缩略图预览"),
+    q: str | None = Query(default=None, max_length=64, description="按稿件名模糊搜索（不区分大小写）"),
+    sort: str = Query(default="updated_desc", description="排序：updated_desc/updated_asc/name_asc/created_desc"),
     _user: str = Depends(get_current_user),
     db=Depends(get_db),
 ):
@@ -164,10 +174,11 @@ def list_designs(
     权限上能看到、界面上却**发现不了**（我的项目显示 0 份），邀请流程在 UI 上等于断的。
     现在改为"**我所在工作区的稿件** ∪ 我创建的稿件"，并逐行带上 `workspace_name` 与 `my_role`，
     前端据此显示工作区徽标与角色（viewer 标只读）。
+
+    2026-09-16（列表搜索/排序）：新增 `q`（名称模糊搜索，**与访问作用域叠加**——搜不到别人的稿件）
+    与 `sort`（白名单，非法值 422 而不是静默忽略）；`total` 跟随 `q` 一起变，前端分页才不会错位。
     """
     owner = _owner_id(db, _user)
-    from sqlalchemy import or_
-
     from ..models import Workspace, WorkspaceMember
 
     memberships = {
@@ -181,14 +192,15 @@ def list_designs(
     if memberships:
         conds.append(Design.workspace_id.in_(list(memberships)))
     scope = or_(*conds)
+    if q and q.strip():
+        scope = and_(scope, func.lower(Design.name).like(f"%{q.strip().lower()}%"))
+
+    if sort not in DESIGN_SORTS:
+        raise HTTPException(status_code=422, detail=f"sort 必须是 {'/'.join(DESIGN_SORTS)} 之一")
+    order_by = DESIGN_SORTS[sort]
 
     total = db.execute(select(func.count()).select_from(Design).where(scope)).scalar_one()
-    stmt = (
-        select(Design)
-        .where(scope)
-        .order_by(Design.updated_at.desc(), Design.id.desc())
-        .offset(offset)
-    )
+    stmt = select(Design).where(scope).order_by(*order_by).offset(offset)
     if limit is not None:
         stmt = stmt.limit(limit)
     designs = db.execute(stmt).scalars().all()

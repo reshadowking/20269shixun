@@ -33,6 +33,13 @@ interface WorkspaceRow {
 
 const PAGE_SIZE = 12
 
+const SORT_OPTIONS = [
+  { value: 'updated_desc', label: '最近修改' },
+  { value: 'updated_asc', label: '最早修改' },
+  { value: 'name_asc', label: '名称 A→Z' },
+  { value: 'created_desc', label: '最近创建' },
+]
+
 export default function ProjectsPage() {
   const navigate = useNavigate()
   const [rows, setRows] = useState<DesignRow[]>([])
@@ -40,6 +47,10 @@ export default function ProjectsPage() {
   const [offset, setOffset] = useState(0)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  /** 2026-09-16：搜索与排序（搜索带 300ms 防抖，避免每敲一个字打一次接口） */
+  const [q, setQ] = useState('')
+  const [debouncedQ, setDebouncedQ] = useState('')
+  const [sort, setSort] = useState('updated_desc')
   /** T46a-4：可写入的工作区（owner/editor）——只有多于一个时才显示"移动"入口 */
   const [workspaces, setWorkspaces] = useState<WorkspaceRow[]>([])
 
@@ -47,9 +58,14 @@ export default function ProjectsPage() {
     setLoading(true)
     setError('')
     try {
-      const resp = await api<{ designs: DesignRow[]; total: number }>(
-        `/api/designs?limit=${PAGE_SIZE}&offset=${nextOffset}&with_preview=true`,
-      )
+      const params = new URLSearchParams({
+        limit: String(PAGE_SIZE),
+        offset: String(nextOffset),
+        with_preview: 'true',
+        sort,
+      })
+      if (debouncedQ) params.set('q', debouncedQ)
+      const resp = await api<{ designs: DesignRow[]; total: number }>(`/api/designs?${params.toString()}`)
       setRows(resp.designs)
       setTotal(resp.total)
       setOffset(nextOffset)
@@ -58,10 +74,15 @@ export default function ProjectsPage() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [debouncedQ, sort])
 
   useEffect(() => {
-    load(0)
+    const timer = window.setTimeout(() => setDebouncedQ(q.trim()), 300)
+    return () => window.clearTimeout(timer)
+  }, [q])
+
+  useEffect(() => {
+    void load(0)
   }, [load])
 
   useEffect(() => {
@@ -102,7 +123,38 @@ export default function ProjectsPage() {
     <div className="mx-auto max-w-[1080px] px-8 py-8" data-testid="projects-page">
       <div className="mb-5 flex items-center gap-3">
         <h1 className="text-lg font-semibold">我的项目</h1>
-        <span className="text-xs text-muted-foreground">共 {total} 个设计稿</span>
+        <span className="text-xs text-muted-foreground" data-testid="projects-count">
+          共 {total} 个设计稿{debouncedQ ? `（匹配「${debouncedQ}」）` : ''}
+        </span>
+        <input
+          className="ml-2 h-8 w-52 rounded-md border border-input bg-background px-2 text-xs"
+          data-testid="projects-search"
+          value={q}
+          placeholder="搜索稿件名…"
+          onChange={(e) => setQ(e.target.value)}
+        />
+        {q && (
+          <button
+            className="text-[11px] text-muted-foreground hover:text-foreground"
+            data-testid="projects-search-clear"
+            onClick={() => setQ('')}
+          >
+            清除
+          </button>
+        )}
+        <select
+          className="h-8 rounded-md border border-input bg-background px-2 text-xs"
+          data-testid="projects-sort"
+          value={sort}
+          title="排序方式"
+          onChange={(e) => setSort(e.target.value)}
+        >
+          {SORT_OPTIONS.map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
+        </select>
         <button
           className="ml-auto rounded-md border border-border px-3 py-1.5 text-xs hover:bg-accent"
           data-testid="projects-new"
@@ -115,7 +167,19 @@ export default function ProjectsPage() {
       {error && <p className="mb-3 text-xs text-destructive">{error}</p>}
       {loading && <p className="text-xs text-muted-foreground">加载中…</p>}
 
-      {!loading && rows.length === 0 && (
+      {/* 空态要分清"还没有稿件"与"搜索没命中"——两者的下一步动作完全不同 */}
+      {!loading && rows.length === 0 && debouncedQ && (
+        <div
+          className="rounded-xl border border-dashed border-border p-10 text-center text-sm text-muted-foreground"
+          data-testid="projects-no-match"
+        >
+          没有匹配「{debouncedQ}」的设计稿 ·{' '}
+          <button className="text-primary hover:underline" data-testid="projects-no-match-clear" onClick={() => setQ('')}>
+            清除搜索
+          </button>
+        </div>
+      )}
+      {!loading && rows.length === 0 && !debouncedQ && (
         <div
           className="rounded-xl border border-dashed border-border p-10 text-center text-sm text-muted-foreground"
           data-testid="projects-empty"

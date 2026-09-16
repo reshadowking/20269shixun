@@ -136,3 +136,58 @@ describe('ProjectsPage（T46a-4 移动稿件）', () => {
     expect(screen.queryByTestId('project-move-7')).not.toBeInTheDocument()
   })
 })
+
+describe('ProjectsPage（列表搜索与排序）', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    localStorage.clear()
+  })
+
+  it('搜索：输入后带 q 请求（防抖），计数写明匹配词', async () => {
+    const fetchMock = mockFetch({ workspaces: [] })
+    vi.stubGlobal('fetch', fetchMock)
+    renderPage()
+
+    fireEvent.change(await screen.findByTestId('projects-search'), { target: { value: '登录' } })
+    await waitFor(
+      () => expect(fetchMock.mock.calls.some((c) => String(c[0]).includes('q=%E7%99%BB%E5%BD%95'))).toBe(true),
+      { timeout: 2000 },
+    )
+    expect(screen.getByTestId('projects-count')).toHaveTextContent('匹配「登录」')
+  })
+
+  it('无匹配：显示"没有匹配"空态（与"还没有稿件"区分开）并可一键清除', async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      const path = String(url)
+      if (path.includes('/api/workspaces')) {
+        return { ok: true, status: 200, json: async () => ({ workspaces: [] }) }
+      }
+      const hasQuery = path.includes('q=')
+      return {
+        ok: true,
+        status: 200,
+        json: async () => (hasQuery ? { designs: [], total: 0 } : { designs: [DESIGN], total: 1 }),
+      }
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    renderPage()
+
+    fireEvent.change(await screen.findByTestId('projects-search'), { target: { value: '不存在' } })
+    expect(await screen.findByTestId('projects-no-match')).toHaveTextContent('没有匹配')
+    expect(screen.queryByTestId('projects-empty')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId('projects-no-match-clear'))
+    expect(await screen.findByTestId('project-card-7')).toBeInTheDocument()
+  })
+
+  it('排序：切换后带 sort 参数请求，并从第一页开始', async () => {
+    const fetchMock = mockFetch({ workspaces: [] })
+    vi.stubGlobal('fetch', fetchMock)
+    renderPage()
+
+    fireEvent.change(await screen.findByTestId('projects-sort'), { target: { value: 'name_asc' } })
+    await waitFor(() => expect(fetchMock.mock.calls.some((c) => String(c[0]).includes('sort=name_asc'))).toBe(true))
+    const last = String(fetchMock.mock.calls.at(-1)?.[0] ?? '')
+    expect(last).toContain('offset=0')
+  })
+})
