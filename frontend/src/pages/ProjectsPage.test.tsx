@@ -8,7 +8,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import ProjectsPage from './ProjectsPage'
 
-const DESIGN = { id: 7, name: '登录页', updated_at: '2026-09-16T10:00:00Z', workspace_id: 1 }
+const DESIGN = {
+  id: 7,
+  name: '登录页',
+  updated_at: '2026-09-16T10:00:00Z',
+  workspace_id: 1,
+  workspace_name: '我的工作区',
+  my_role: 'owner',
+}
 
 function mockFetch(opts: { workspaces: unknown[] }) {
   return vi.fn(async (url: string, options?: RequestInit) => {
@@ -69,6 +76,43 @@ describe('ProjectsPage（T46a-4 移动稿件）', () => {
     renderPage()
 
     expect(await screen.findByTestId('project-card-7')).toBeInTheDocument()
+    expect(screen.queryByTestId('project-move-7')).not.toBeInTheDocument()
+  })
+
+  it('卡片标出所属工作区与我的角色（别人共享给我的稿件认得出）', async () => {
+    vi.stubGlobal('fetch', mockFetch({ workspaces: [{ id: 1, name: '我的工作区', role: 'owner' }] }))
+    renderPage()
+
+    expect(await screen.findByTestId('project-7-workspace')).toHaveTextContent('我的工作区')
+    expect(screen.getByTestId('project-7-role')).toHaveTextContent('所有者')
+  })
+
+  it('viewer 行：角色标"只读"、删除禁用、不给移动入口', async () => {
+    const viewerDesign = { ...DESIGN, workspace_id: 2, workspace_name: '别人的工作区', my_role: 'viewer' }
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        const path = String(url)
+        if (path.includes('/api/workspaces')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              workspaces: [
+                { id: 2, name: '别人的工作区', role: 'editor' }, // 我有别的可写工作区……
+                { id: 1, name: '我的工作区', role: 'owner' },
+              ],
+            }),
+          }
+        }
+        return { ok: true, status: 200, json: async () => ({ designs: [viewerDesign], total: 1 }) }
+      }),
+    )
+    renderPage()
+
+    expect(await screen.findByTestId('project-7-role')).toHaveTextContent('只读')
+    expect(screen.getByTestId('project-delete-7')).toBeDisabled()
+    // 稿件本身是只读（viewer）→ 即使我有别的可写工作区，也不给移动入口
     expect(screen.queryByTestId('project-move-7')).not.toBeInTheDocument()
   })
 })

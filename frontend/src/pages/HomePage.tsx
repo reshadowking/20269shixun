@@ -9,6 +9,7 @@ import { ChevronDown, ChevronUp, Clock, FilePlus2, FolderOpen, LayoutTemplate, L
 
 import { Button } from '@/components/ui/button'
 import DesignThumbnail from '@/components/chat/DesignThumbnail'
+import WorkspaceBadges from '@/components/collab/WorkspaceBadges'
 import type { DesignNode } from '@/design/types'
 import { api, clearAuth, getUsername } from '@/lib/api'
 import { loadLatestDraft } from '@/lib/designSession'
@@ -27,6 +28,9 @@ interface DesignMeta {
   node_count: number
   width: number
   height: number
+  /** 验收补（T46a）：所属工作区名与我在其中的角色 */
+  workspace_name?: string | null
+  my_role?: string | null
   /** T36：with_preview=true 时后端附带的设计树（渲染缩略图用） */
   design?: DesignNode
 }
@@ -318,16 +322,25 @@ export default function HomePage() {
                         <div className="mt-0.5 text-[11px] text-muted-foreground">
                           {d.node_count} 个节点 · {fmtTime(d.updated_at)}
                         </div>
+                        {/* 验收补：工作区 + 我的角色（别人共享给我的稿件在这里才认得出来） */}
+                        <WorkspaceBadges
+                          workspaceName={d.workspace_name}
+                          role={d.my_role}
+                          testIdPrefix={`home-design-${d.id}`}
+                        />
                       </div>
                     </button>
-                    <button
-                      className="absolute right-2 top-2 rounded p-1 text-muted-foreground opacity-0 hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100"
-                      data-testid={`home-design-delete-${d.id}`}
-                      title="删除"
-                      onClick={() => handleDelete(d.id)}
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
+                    {/* 只读访客不给删除入口（后端也会 403，不给假希望） */}
+                    {d.my_role !== 'viewer' && (
+                      <button
+                        className="absolute right-2 top-2 rounded p-1 text-muted-foreground opacity-0 hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100"
+                        data-testid={`home-design-delete-${d.id}`}
+                        title="删除"
+                        onClick={() => handleDelete(d.id)}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    )}
                   </div>
                 ))}
               </div>

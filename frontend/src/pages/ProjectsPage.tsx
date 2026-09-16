@@ -6,6 +6,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 
 import DesignThumbnail from '@/components/chat/DesignThumbnail'
+import WorkspaceBadges from '@/components/collab/WorkspaceBadges'
 import { api } from '@/lib/api'
 import type { DesignNode } from '@/design/types'
 
@@ -15,6 +16,9 @@ interface DesignRow {
   updated_at: string | null
   /** T46a-4：当前所属工作区（用于"移动到其他工作区"） */
   workspace_id?: number | null
+  /** 验收补：所属工作区名与我在其中的角色（卡片徽标 / viewer 只读标） */
+  workspace_name?: string | null
+  my_role?: string | null
   design?: DesignNode
 }
 
@@ -87,8 +91,9 @@ export default function ProjectsPage() {
 
   const pages = Math.max(1, Math.ceil(total / PAGE_SIZE))
   const page = Math.floor(offset / PAGE_SIZE) + 1
-  /** 可移动目标：我参与且能写、且不是它当前所在的工作区 */
-  const moveTargets = (row: DesignRow) => workspaces.filter((w) => w.id !== row.workspace_id)
+  /** 可移动目标：我参与且能写、且不是它当前所在的工作区；viewer 一行不给移动入口（后端也会 403） */
+  const moveTargets = (row: DesignRow) =>
+    row.my_role === 'viewer' ? [] : workspaces.filter((w) => w.id !== row.workspace_id)
 
   return (
     <div className="mx-auto max-w-[1080px] px-8 py-8" data-testid="projects-page">
@@ -137,13 +142,23 @@ export default function ProjectsPage() {
               </div>
             </button>
             <div className="flex items-center gap-2 border-t border-border px-3 py-2">
-              <span className="truncate text-[13px] font-medium">{row.name}</span>
-              <span className="ml-auto shrink-0 text-[11px] text-muted-foreground">
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-[13px] font-medium">{row.name}</div>
+                {/* 验收补：工作区 + 我的角色（viewer 显示"只读"） */}
+                <WorkspaceBadges
+                  workspaceName={row.workspace_name}
+                  role={row.my_role}
+                  testIdPrefix={`project-${row.id}`}
+                />
+              </div>
+              <span className="shrink-0 text-[11px] text-muted-foreground">
                 {row.updated_at ? new Date(row.updated_at).toLocaleDateString() : ''}
               </span>
               <button
-                className="shrink-0 text-[11px] text-muted-foreground hover:text-destructive"
+                className="shrink-0 text-[11px] text-muted-foreground hover:text-destructive disabled:opacity-40"
                 data-testid={`project-delete-${row.id}`}
+                disabled={row.my_role === 'viewer'}
+                title={row.my_role === 'viewer' ? '只读：不能删除（需要 owner / editor 权限）' : undefined}
                 onClick={() => remove(row)}
               >
                 删除

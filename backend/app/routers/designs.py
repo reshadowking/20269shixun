@@ -153,29 +153,56 @@ def list_designs(
     _user: str = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    """当前用户的设计列表（不含 design_json 全文，轻量元数据）。
+    """**我能访问的**稿件列表（不含 design_json 全文，轻量元数据）。
 
     缺陷 2：新增可选 limit/offset 分页参数（缺省不传 = 返回全部，既有调用方行为不变）；
     响应新增 total（当前用户设计总数），既有字段不变。排序按 updated_at 倒序，id 倒序作稳定分页的次级键。
     T36：`with_preview=true` 时额外返回 `design`（解析 design_json）——首页/我的项目用它渲染缩略图；
     缺省 false，既有调用方的响应形状逐字不变。
+
+    2026-09-16（验收发现的缺口）：此前只按 `owner_id == 我` 过滤，于是"被移进我工作区的稿件"
+    权限上能看到、界面上却**发现不了**（我的项目显示 0 份），邀请流程在 UI 上等于断的。
+    现在改为"**我所在工作区的稿件** ∪ 我创建的稿件"，并逐行带上 `workspace_name` 与 `my_role`，
+    前端据此显示工作区徽标与角色（viewer 标只读）。
     """
     owner = _owner_id(db, _user)
-    total = db.execute(
-        select(func.count()).select_from(Design).where(Design.owner_id == owner)
-    ).scalar_one()
+    from sqlalchemy import or_
+
+    from ..models import Workspace, WorkspaceMember
+
+    memberships = {
+        row.workspace_id: row.role
+        for row in db.execute(
+            select(WorkspaceMember.workspace_id, WorkspaceMember.role).where(WorkspaceMember.user_id == owner)
+        )
+    }
+    # 老数据（workspace_id 为空）仍按"创建人"兜底；启动迁移会把它们归入个人工作区，这里只是双保险
+    conds = [Design.owner_id == owner]
+    if memberships:
+        conds.append(Design.workspace_id.in_(list(memberships)))
+    scope = or_(*conds)
+
+    total = db.execute(select(func.count()).select_from(Design).where(scope)).scalar_one()
     stmt = (
         select(Design)
-        .where(Design.owner_id == owner)
+        .where(scope)
         .order_by(Design.updated_at.desc(), Design.id.desc())
         .offset(offset)
     )
     if limit is not None:
         stmt = stmt.limit(limit)
     designs = db.execute(stmt).scalars().all()
+    page_ws_ids = {d.workspace_id for d in designs if d.workspace_id is not None}
+    ws_names = (
+        dict(db.execute(select(Workspace.id, Workspace.name).where(Workspace.id.in_(page_ws_ids))).all())
+        if page_ws_ids
+        else {}
+    )
     rows = []
     for d in designs:
         meta = _design_meta(d)
+        meta["workspace_name"] = ws_names.get(d.workspace_id) if d.workspace_id else None
+        meta["my_role"] = memberships.get(d.workspace_id) if d.workspace_id else ("owner" if d.owner_id == owner else None)
         if with_preview:
             try:
                 meta["design"] = json.loads(d.design_json or "{}")
