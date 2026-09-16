@@ -15,6 +15,8 @@ const DESIGN = {
   workspace_id: 1,
   workspace_name: '我的工作区',
   my_role: 'owner',
+  owner_name: 'demo',
+  is_mine: true,
 }
 
 function mockFetch(opts: { workspaces: unknown[] }) {
@@ -85,6 +87,24 @@ describe('ProjectsPage（T46a-4 移动稿件）', () => {
 
     expect(await screen.findByTestId('project-7-workspace')).toHaveTextContent('我的工作区')
     expect(screen.getByTestId('project-7-role')).toHaveTextContent('所有者')
+    // 自己的稿件不显示"由 X 共享"
+    expect(screen.queryByTestId('project-7-shared-by')).not.toBeInTheDocument()
+  })
+
+  it('别人共享给我的稿件：显示「由 X 共享」', async () => {
+    const shared = { ...DESIGN, workspace_id: 2, workspace_name: 'peer 的工作区', my_role: 'editor', owner_name: 'peer', is_mine: false }
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        if (String(url).includes('/api/workspaces')) {
+          return { ok: true, status: 200, json: async () => ({ workspaces: [{ id: 1, name: '我的工作区', role: 'owner' }] }) }
+        }
+        return { ok: true, status: 200, json: async () => ({ designs: [shared], total: 1 }) }
+      }),
+    )
+    renderPage()
+
+    expect(await screen.findByTestId('project-7-shared-by')).toHaveTextContent('由 peer 共享')
   })
 
   it('viewer 行：角色标"只读"、删除禁用、不给移动入口', async () => {

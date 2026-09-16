@@ -19,6 +19,9 @@ interface DesignRow {
   /** 验收补：所属工作区名与我在其中的角色（卡片徽标 / viewer 只读标） */
   workspace_name?: string | null
   my_role?: string | null
+  /** 谁共享给我的（我自己建的稿件为空） */
+  owner_name?: string | null
+  is_mine?: boolean
   design?: DesignNode
 }
 
@@ -148,6 +151,7 @@ export default function ProjectsPage() {
                 <WorkspaceBadges
                   workspaceName={row.workspace_name}
                   role={row.my_role}
+                  sharedBy={row.is_mine === false ? row.owner_name : null}
                   testIdPrefix={`project-${row.id}`}
                 />
               </div>

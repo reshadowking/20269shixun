@@ -20,16 +20,19 @@ const ROLE_CLASS: Record<string, string> = {
 export default function WorkspaceBadges({
   workspaceName,
   role,
+  sharedBy,
   testIdPrefix,
 }: {
   workspaceName?: string | null
   role?: string | null
+  /** 非我创建的稿件：显示"由 X 共享"（协作者一多，光看工作区名分不清来源） */
+  sharedBy?: string | null
   /** 生成 `${prefix}-workspace` / `${prefix}-role` 两个 testid */
   testIdPrefix: string
 }) {
-  if (!workspaceName && !role) return null
+  if (!workspaceName && !role && !sharedBy) return null
   return (
-    <div className="mt-0.5 flex items-center gap-1 text-[10px]">
+    <div className="mt-0.5 flex flex-wrap items-center gap-1 text-[10px]">
       {workspaceName && (
         <span
           className="max-w-[62%] truncate rounded border border-border px-1 text-muted-foreground"
@@ -46,6 +49,15 @@ export default function WorkspaceBadges({
           title={role === 'viewer' ? '只读：能看不能改（需要 owner / editor 权限）' : undefined}
         >
           {ROLE_LABEL[role] ?? role}
+        </span>
+      )}
+      {sharedBy && (
+        <span
+          className="max-w-full truncate rounded border border-dashed border-border px-1 text-muted-foreground"
+          data-testid={`${testIdPrefix}-shared-by`}
+          title={`这份稿件由 ${sharedBy} 创建，你通过工作区协作获得访问`}
+        >
+          由 {sharedBy} 共享
         </span>
       )}
     </div>

@@ -57,6 +57,9 @@ def test_workspace_member_sees_shared_design_with_role(client):
         assert row is not None, username
         assert row["my_role"] == role, username
         assert row["workspace_name"], username
+        # 卡片要能说清"谁共享给我的"：owner 自己的稿件 is_mine=true，协作者看到创建者名字
+        assert row["owner_name"] == "scope_owner", username
+        assert row["is_mine"] is (username == "scope_owner"), username
         assert body["total"] >= 1
 
 

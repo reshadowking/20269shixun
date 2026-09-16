@@ -198,11 +198,18 @@ def list_designs(
         if page_ws_ids
         else {}
     )
+    # 2026-09-16：卡片要能说清"谁共享给我的"——只标工作区名与角色还不够（协作者一多就分不清来源）
+    owner_ids = {d.owner_id for d in designs if d.owner_id}
+    owner_names = (
+        dict(db.execute(select(User.id, User.username).where(User.id.in_(owner_ids))).all()) if owner_ids else {}
+    )
     rows = []
     for d in designs:
         meta = _design_meta(d)
         meta["workspace_name"] = ws_names.get(d.workspace_id) if d.workspace_id else None
         meta["my_role"] = memberships.get(d.workspace_id) if d.workspace_id else ("owner" if d.owner_id == owner else None)
+        meta["owner_name"] = owner_names.get(d.owner_id)
+        meta["is_mine"] = d.owner_id == owner
         if with_preview:
             try:
                 meta["design"] = json.loads(d.design_json or "{}")

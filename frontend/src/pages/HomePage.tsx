@@ -31,6 +31,9 @@ interface DesignMeta {
   /** 验收补（T46a）：所属工作区名与我在其中的角色 */
   workspace_name?: string | null
   my_role?: string | null
+  /** 谁共享给我的（我自己建的稿件为空） */
+  owner_name?: string | null
+  is_mine?: boolean
   /** T36：with_preview=true 时后端附带的设计树（渲染缩略图用） */
   design?: DesignNode
 }
@@ -326,6 +329,7 @@ export default function HomePage() {
                         <WorkspaceBadges
                           workspaceName={d.workspace_name}
                           role={d.my_role}
+                          sharedBy={d.is_mine === false ? d.owner_name : null}
                           testIdPrefix={`home-design-${d.id}`}
                         />
                       </div>
