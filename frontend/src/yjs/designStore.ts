@@ -660,6 +660,7 @@ export class DesignStore {
   convertToFreeLayout(
     parentId: string,
     updates: Array<{ id: string; x: number; y: number; width: number; height: number }>,
+    containerSize?: { width: number; height: number },
   ): { ok: boolean; reason?: string } {
     if (this._blockedByRole('转自由画布')) return { ok: false, reason: 'read-only' }
     if (this.beautifyLock) {
@@ -677,7 +678,16 @@ export class DesignStore {
         const prevParent = yToPlain(parent)
         const nextParent: DesignNode = {
           ...prevParent,
-          style: { ...(prevParent.style ?? {}), layout: 'free' as const },
+          style: {
+            ...(prevParent.style ?? {}),
+            layout: 'free' as const,
+            // 2026-09-17：容器自己的盒子也要一起冻。子节点变绝对定位后不再撑高父容器，
+            // 而模板/AI 产物的容器多是 auto 高度 → 只冻结子节点会把容器塌成"只剩 padding"
+            // 的一条（E2E 实测 demo 根节点 276 → 64），背景/圆角消失、子节点浮在容器外。
+            ...(containerSize
+              ? { width: Math.round(containerSize.width), height: Math.round(containerSize.height) }
+              : {}),
+          },
         }
         if (!this._allowedWhileLocked(prevParent, nextParent)) {
           this._rejectBlocked('版面已确认：仅允许修改样式效果（布局/文本/结构已锁定）')

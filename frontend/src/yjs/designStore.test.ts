@@ -508,6 +508,33 @@ describe('P1-13 convertToFreeLayout', () => {
     expect(JSON.stringify(store.getDesign())).toBe(before)
     store.destroy()
   })
+
+  /**
+   * 2026-09-17：容器自己的盒子要一起冻。
+   *
+   * 子节点改成绝对定位后**不再撑高父容器**，而容器多是 auto 高度（模板只给 width）
+   * —— 只冻结子节点会把容器塌成"只剩 padding"的一条（E2E 实测 demo 根节点 276 → 64）。
+   */
+  it('传入容器尺寸时，父容器自己也写入 width/height（同一个事务）', () => {
+    const store = new DesignStore(undefined, sample())
+    const result = store.convertToFreeLayout('root', updates, { width: 720, height: 276.4 })
+    expect(result.ok).toBe(true)
+
+    const style = store.getDesign().style ?? {}
+    expect(style.layout).toBe('free')
+    expect(style.width).toBe(720)
+    expect(style.height).toBe(276)
+    store.destroy()
+  })
+
+  it('不传容器尺寸时，父容器 style 只加 layout（向后兼容，不动既有字段）', () => {
+    const store = new DesignStore(undefined, sample())
+    store.convertToFreeLayout('root', updates)
+    const style = store.getDesign().style ?? {}
+    expect(style.layout).toBe('free')
+    expect(style.height).toBeUndefined()
+    store.destroy()
+  })
 })
 
 describe('批量美化一步撤销（T4 批3：pushSnapshot + resetDesign 语义）', () => {

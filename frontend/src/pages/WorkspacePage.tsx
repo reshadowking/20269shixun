@@ -815,14 +815,15 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
     // 保留 flex 交给用户，或等图片显示出来后手动点「转自由画布」。
     if (!stable.settled) return
     const childIds = (store.getDesign().children ?? []).filter((c) => !c.hidden).map((c) => c.id)
-    const { measurements, missing } = canvas.measureFreeze(store.getDesign().id, childIds)
+    const { measurements, missing, container } = canvas.measureFreeze(store.getDesign().id, childIds)
     if (!measurements.length || missing.length) return
     const updates = freezeToFreeLayout(store.getDesign().children ?? [], measurements)
       .filter((c) => typeof c.x === 'number' && typeof c.y === 'number')
       .map((c) => ({ id: c.id, x: c.x as number, y: c.y as number, width: Number(c.style?.width ?? 0), height: Number(c.style?.height ?? 0) }))
     store.pushSnapshot()
     setUndoCount((c) => c + 1)
-    const result = store.convertToFreeLayout(store.getDesign().id, updates)
+    // 容器自己的尺寸一起冻（否则子节点绝对定位后容器塌成只剩 padding 的一条）
+    const result = store.convertToFreeLayout(store.getDesign().id, updates, container)
     if (!result.ok) {
       // store 仍拒绝（节点在测量期间被删等）：把快照与计数退回，不留"按了没反应"的撤销步
       store.popSnapshot()
@@ -847,6 +848,7 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
     convertingFreeRef.current = true
     let measurements: FreezeMeasurement[]
     let missing: string[]
+    let container: { width: number; height: number } | undefined
     try {
       // 2026-09-17：先等版面稳定（字体/图片/两帧 rAF，带超时）再测量——
       // "测早了 → 冻结写进的小尺寸把版面压错位"是验收反馈里排第一的嫌疑。
@@ -864,7 +866,7 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
         setErrorMsg(`已取消转换：${who}，此时测量会偏小并导致排版错乱。等画面稳定后重试即可。`)
         return
       }
-      ;({ measurements, missing } = canvas.measureFreeze(design.id, childIds))
+      ;({ measurements, missing, container } = canvas.measureFreeze(design.id, childIds))
     } finally {
       convertingFreeRef.current = false
     }
@@ -885,7 +887,8 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
     // 先快照（可"还原布局"），再单事务提交（一次 Ctrl+Z 完整还原）
     store.pushSnapshot()
     setUndoCount((c) => c + 1)
-    const result = store.convertToFreeLayout(design.id, updates)
+    // 容器自己的尺寸一起冻（否则子节点绝对定位后容器塌成只剩 padding 的一条）
+    const result = store.convertToFreeLayout(design.id, updates, container)
     if (!result.ok) {
       store.popSnapshot()
       setUndoCount((c) => Math.max(0, c - 1))

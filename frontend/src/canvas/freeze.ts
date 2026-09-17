@@ -26,6 +26,15 @@ export interface FreezeMeasureResult {
   measurements: FreezeMeasurement[]
   /** 测不到的节点（如 hidden 未渲染），调用方需提示而非静默 */
   missing: string[]
+  /**
+   * 容器**自己**的 border box 尺寸（画布单位）。
+   *
+   * 2026-09-17 修：只冻结子节点是不够的 —— 子节点改成绝对定位后**不再撑高父容器**，
+   * 而模板/AI 产物的容器普遍没有显式 `height`（auto，靠内容撑），于是"转自由画布"会把
+   * 容器塌成只剩 padding 的一条（E2E 实测 demo 根节点 276 → 64），背景/圆角跟着消失、
+   * 子节点浮在容器外。调用方要把它一并写进容器的 style，才算"保留当前视觉现状"。
+   */
+  container?: { width: number; height: number }
 }
 
 /** `waitForLayoutStable` 的结果：settled=false 表示"等超时了，还有东西没落定"。 */
@@ -128,6 +137,10 @@ export function measureChildren(
 
   const measurements: FreezeMeasurement[] = []
   const missing: string[] = []
+  const containerSize = {
+    width: Math.ceil(parentRect.width / safeScale),
+    height: Math.round(parentRect.height / safeScale),
+  }
 
   for (const id of childIds) {
     const el = container.querySelector<HTMLElement>(`[data-node-id="${id}"]`)
@@ -150,7 +163,7 @@ export function measureChildren(
     })
   }
 
-  return { measurements, missing }
+  return { measurements, missing, container: containerSize }
 }
 
 /**
