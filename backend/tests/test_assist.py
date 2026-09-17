@@ -82,6 +82,44 @@ class TestOptimizer:
         assert original == snapshot  # 输入不被修改（前端保留撤销快照依赖此语义）
 
 
+    def test_non_scalar_layout_values_do_not_crash(self):
+        """异常值形状（dict）不能让优化器崩——2026-09-17 实测过 `TypeError: unhashable type: 'dict'`。
+
+        该端点（POST /api/optimize-layout）**不校验入参 Schema**，而 `_unify_group` 里用了
+        `set(values)` / `Counter(values)`；只要同类型兄弟里出现一个 dict/list 形状的
+        width/padding/align/height，就会一路抛到接口层变成 500。
+        口径：这种组**整组跳过**（宁可少优化，也不要 500 或瞎改），其它组照旧。
+        """
+        design = {
+            "id": "root", "type": "frame",
+            "children": [
+                {"id": "a", "type": "text", "props": {"text": "a"}, "style": {"width": {"bad": 1}}},
+                {"id": "b", "type": "text", "props": {"text": "b"}, "style": {"width": 100}},
+                {"id": "c", "type": "text", "props": {"text": "c"}, "style": {"width": 160}},
+            ],
+        }
+        optimized, report = optimize_layout(design)
+        assert [c["style"]["width"] for c in optimized["children"]] == [{"bad": 1}, 100, 160]
+        assert report["size"] == 0
+
+    def test_broken_group_does_not_block_other_groups(self):
+        """一组异常只影响它自己：异常组跳过，正常组照旧统一。"""
+        design = {
+            "id": "root", "type": "frame",
+            "children": [
+                {"id": "f1", "type": "frame", "style": {"padding": [1, 2]}},
+                {"id": "f2", "type": "frame", "style": {"padding": 16}},
+                {"id": "b1", "type": "component", "componentType": "button", "props": {"text": "1"}, "style": {"padding": 12}},
+                {"id": "b2", "type": "component", "componentType": "button", "props": {"text": "2"}, "style": {"padding": 20}},
+            ],
+        }
+        optimized, report = optimize_layout(design)
+        by_id = {c["id"]: c for c in optimized["children"]}
+        assert by_id["f1"]["style"]["padding"] == [1, 2]  # 异常组原样
+        assert by_id["b1"]["style"]["padding"] == by_id["b2"]["style"]["padding"] == 12
+        assert report["spacing"] == 1
+
+
 class TestRecommender:
     def test_empty_container_recommends_text_image_button(self):
         """验收：选中空卡片 → 推荐文本 + 按钮 + 图片等。"""
@@ -210,6 +248,25 @@ class TestAssistApi:
         assert body["report"]["total"] > 0
         p = [c["style"]["padding"] for c in body["design"]["children"] if c["id"].startswith("b")]
         assert len(set(p)) == 1
+
+    def test_optimize_endpoint_tolerates_broken_style_values(self, client, auth_headers):
+        """接口层守门：异常值形状不能打成 500（该端点不校验入参 Schema）。
+
+        2026-09-17 实测：`{"width": {"bad": 1}}` → `TypeError: unhashable type: 'dict'`
+        → 未捕获 → HTTP 500。修法见 services/optimizer.py 的"值形状体检"。
+        """
+        design = {
+            "id": "root", "type": "frame",
+            "children": [
+                {"id": "a", "type": "text", "props": {"text": "a"}, "style": {"width": {"bad": 1}}},
+                {"id": "b", "type": "text", "props": {"text": "b"}, "style": {"width": 100}},
+            ],
+        }
+        resp = client.post("/api/optimize-layout", json={"design": design}, headers=auth_headers)
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert [c["style"]["width"] for c in body["design"]["children"]] == [{"bad": 1}, 100]
+        assert body["report"]["total"] == 0
 
     def test_recommend_endpoint(self, client, auth_headers):
         design = {"id": "root", "type": "frame", "children": [{"id": "card", "type": "frame"}]}
