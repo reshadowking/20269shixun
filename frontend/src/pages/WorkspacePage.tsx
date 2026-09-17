@@ -30,6 +30,7 @@ import { loadDraft, saveDraft } from '@/lib/designSession'
 import { designToReactApp } from '@/export/designToReact'
 import { findNode, findParent as findParentOf, genId } from '@/design/tree'
 import { diffDesign } from '@/design/applyDiff'
+import { readAutoFreeze, writeAutoFreeze } from '@/lib/autoFreeze'
 import type { ComponentType, DesignNode } from '@/design/types'
 import { api } from '@/lib/api'
 import SessionBar from '@/components/chat/SessionBar'
@@ -612,6 +613,8 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
 
   // 画布背景网格点（P2-11，localStorage 记忆）
   const [showGrid, setShowGrid] = useState(() => localStorage.getItem('design-grid') !== '0')
+  /** 「AI 生成后自动转自由画布」偏好（默认开；关掉退回 flex，见 lib/autoFreeze.ts） */
+  const [autoFreeze, setAutoFreeze] = useState(() => readAutoFreeze())
 
   // 选中单个节点时显示属性
   const selectedNode = useMemo(() => {
@@ -734,6 +737,31 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
 
   /** P1-13（缺陷 6 替代方案）：flex/网格布局 → 自由画布（子节点铺网格坐标，可拖拽） */
   const convertingFreeRef = useRef(false)
+
+  /**
+   * AI 产物落地后**自动冻结一次**（2026-09-17）：让"生成即可拖"，不用再点「🔓 转自由画布」。
+   *
+   * 只在这些前提下做：偏好开着、根节点还不是 free、有可见子节点、**测量无缺失**
+   * （测不全就什么都不动，交给手动按钮）——并且走 `store.convertToFreeLayout()` 的**单事务**写入。
+   * 锁定阶段（版面已确认）由 store 的既有守卫拒绝，自动冻结不会偷偷改版面。
+   */
+  const autoFreezeAfterAi = async () => {
+    if (!readAutoFreeze()) return
+    const canvas = canvasRef.current
+    const current = store.getDesign()
+    if (!canvas || current.style?.layout === 'free' || !current.children?.length) return
+    await waitForLayoutStable(pageRef.current?.querySelector<HTMLElement>('[data-testid="canvas-sheet"]') ?? null)
+    const childIds = (store.getDesign().children ?? []).filter((c) => !c.hidden).map((c) => c.id)
+    const { measurements, missing } = canvas.measureFreeze(store.getDesign().id, childIds)
+    if (!measurements.length || missing.length) return
+    const updates = freezeToFreeLayout(store.getDesign().children ?? [], measurements)
+      .filter((c) => typeof c.x === 'number' && typeof c.y === 'number')
+      .map((c) => ({ id: c.id, x: c.x as number, y: c.y as number, width: Number(c.style?.width ?? 0), height: Number(c.style?.height ?? 0) }))
+    store.pushSnapshot()
+    setUndoCount((c) => c + 1)
+    store.convertToFreeLayout(store.getDesign().id, updates)
+  }
+
   const handleConvertToFree = async () => {
     if (!design.children?.length) return
     if (convertingFreeRef.current) return // 等待测量期间重复点击：忽略（避免二次冻结覆盖）
@@ -866,6 +894,8 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
       // diffDesign 返回 `replace`，自动退化为整体替换。
       store.applyAiDiff(diffDesign(design, resp.design))
       setSelectedIds(new Set())
+      // 增量修改后若仍是 flex（首次生成没冻成 free 的情况），同样补一次自动冻结
+      void autoFreezeAfterAi()
       const changed = resp.changed_ids?.length ? resp.changed_ids : changedIds
       setHighlightIds(new Set(changed))
       window.setTimeout(() => setHighlightIds(new Set()), 5000)
@@ -1383,6 +1413,8 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
                     onGenerate={(generated) => {
                       store.resetDesign(generated)
                       setSelectedIds(new Set())
+                      // 生成即可拖：落地后自动冻结一次（偏好可关，见设置面板）
+                      void autoFreezeAfterAi()
                     }}
                     design={design}
                     onIncrementalEdit={handleIncrementalEdit}
@@ -1468,6 +1500,23 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
                         onCheckedChange={(v) => {
                           setShowGrid(Boolean(v))
                           localStorage.setItem('design-grid', v ? '1' : '0')
+                        }}
+                      />
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <div className="text-sm font-medium">AI 生成后自动转为可自由拖拽</div>
+                        <div className="text-xs text-muted-foreground">
+                          生成后自动冻结一次版面（保留当前视觉、子节点可任意摆放）；关掉则保持流式布局、拖动只重排顺序
+                        </div>
+                      </div>
+                      <Switch
+                        data-testid="settings-auto-freeze"
+                        checked={autoFreeze}
+                        onCheckedChange={(v) => {
+                          const on = Boolean(v)
+                          setAutoFreeze(on)
+                          writeAutoFreeze(on)
                         }}
                       />
                     </div>
