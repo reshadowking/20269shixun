@@ -526,6 +526,12 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
       setMessages((m) => [...m, { role: 'assistant', text: '请先在上方描述你的设计需求（或先生成一次），再使用「探索 2 个方案」。' }])
       return
     }
+    // 角色边界（2026-09-17）：与 handleSend 同一套口径——非设计请求不该发出这**两条**模型链路。
+    // 后端 /api/generate/explore 也有同一守卫（权威），这里只是把"发出去再报 422"变成即时友好提示。
+    if (!isDesignRequest(prompt)) {
+      setMessages((m) => [...m, { role: 'assistant', text: GUARD_HINT }])
+      return
+    }
     setExploring(true)
     setExploreResult(null)
     setViewOther(false)

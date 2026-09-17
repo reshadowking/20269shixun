@@ -233,4 +233,21 @@ describe('AIChatPanel 方案预览与留档（缺陷 1）', () => {
     expect(localStorage.getItem(exploreArchiveKey('s-test'))).toBeTruthy()
     expect(localStorage.getItem(exploreArchiveKey('s-other'))).toBeNull()
   })
+
+  /**
+   * 角色边界（2026-09-17）：explore 一次会发起**两条**模型链路，非设计请求不该发出去。
+   * 后端有同一守卫（权威），但前端先拦能把"请求完再报 422"变成即时友好提示。
+   */
+  it('非设计请求点「探索 2 个方案」：不发请求，直接给角色边界提示', async () => {
+    const mocked = mockFetch(explorePayload())
+    vi.stubGlobal('fetch', mocked.fetchMock)
+    render(<AIChatPanel sessionKey="s-test" onGenerate={() => {}} onUseExploreDesign={useSpy} />)
+
+    fireEvent.change(screen.getByTestId('chat-input'), { target: { value: '帮我写首诗' } })
+    await userEvent.click(screen.getByTestId('explore-options'))
+
+    expect(await screen.findByText(/只负责 UI/)).toBeInTheDocument()
+    expect(mocked.calls.some((u) => u.includes('/api/generate/explore'))).toBe(false)
+    expect(screen.queryByTestId('explore-result')).not.toBeInTheDocument()
+  })
 })
