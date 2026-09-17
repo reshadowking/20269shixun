@@ -68,6 +68,18 @@ def main() -> int:
             "请在「API 配置」页填入真实 Key（或 .env 里 LLM_MODE=real + LLM_API_KEY）后重跑本脚本。"
         )
         return 1
+    # 2026-09-17：失败/兜底样本（tokens_out=0）会把均值拉低，从而**虚高**降幅
+    # （例如新方案恰好失败几条，"降幅 95%" 是假的）。含失败样本时不给结论。
+    failed = [r for r in rows if r["fallback"] or not r["tokens_out"]]
+    if failed:
+        print("\n[注意] 以下样本失败或没有 token 数据，均值不可用于结论（ops 对照要求每条都真实完成）：")
+        for r in failed:
+            print(
+                f"  - 「{r['instruction']}」（ops={r['ops_enabled']}）"
+                f"latency={r['latency_s']}s fallback={r['fallback']} tokens_out={r['tokens_out']}"
+            )
+        print("请检查 Key / 配额 / 网络后重跑；含失败样本时本脚本**不做结论**。")
+        return 1
     out_base, out_new = statistics.mean(r["tokens_out"] for r in base), statistics.mean(r["tokens_out"] for r in new)
     lat_base, lat_new = statistics.mean(r["latency_s"] for r in base), statistics.mean(r["latency_s"] for r in new)
     print("\n== 对照（3 条指令均值）==")
