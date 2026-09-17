@@ -17,6 +17,9 @@ import type { DesignNode } from '@/design/types'
 export function useDesignStore(wsUrl?: string, initialDesign?: DesignNode, room?: string): { design: DesignNode; store: DesignStore } {
   const storeRef = useRef<DesignStore | null>(null)
   if (!storeRef.current) {
+    // 2026-09-17（B+）：initialDesign 只作为**占位副本**交给 store（有协作端点时它不会在连接前
+    // 写进文档，而是等首个 sync 确认房间为空才写）。真正的稿件由页面 applyLoadedDesign 提供，
+    // 且可以覆盖这份占位副本 —— 详见 DesignStore 构造函数与 wroteOwnSeed。
     storeRef.current = new DesignStore(wsUrl, initialDesign, room)
   }
   const [design, setDesign] = useState<DesignNode>(() => storeRef.current!.getDesign())

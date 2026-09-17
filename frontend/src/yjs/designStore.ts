@@ -23,6 +23,16 @@ const ROOT_KEY = 'root'
 const CURSOR_THROTTLE_MS = 60
 
 /**
+ * 协作模式下的**兜底**等待（2026-09-17 B+）：连上但迟迟没 sync（网关挂了/断网/房间没响应）时，
+ * 最多等这么久就按本地副本渲染，并把 `degraded` 置 true 供页面提示"协作未连接"。
+ *
+ * 为什么需要兜底：修好"房间为准"之后，同步之前**不会**再往文档里写本地副本（正是这一步在
+ * 覆盖队友的未保存编辑）。若一直连不上而永不写，画布就会一直空着 —— 比原来的 bug 更糟。
+ * 3 秒是"本机/局域网正常连接（<100ms）"与"确实连不上"之间的折中；慢网可调大。
+ */
+export const SEED_FALLBACK_MS = 3000
+
+/**
  * 撤销步骤的元数据（挂在 Yjs `stackItem.meta` 上）。
  * 用途：撤销前判断"这一步还该不该照原样执行"——见 `undo()`。
  */
@@ -244,10 +254,18 @@ export class DesignStore {
     this.designMap = this.ydoc.getMap(DESIGN_MAP)
     this.wsEndpoint = wsUrl
     this.roomName = room
-    if (initialDesign && this.designMap.size === 0) {
-      this.ydoc.transact(() => {
-        this.designMap.set(ROOT_KEY, plainToY(initialDesign))
-      }, RESET_ORIGIN)
+    /**
+     * 2026-09-17（B+）**房间为准**：有协作端点时**不**在连接前写本地副本。
+     *
+     * 原来这里无条件 seed —— 而"房间已存在别人未保存的编辑"时，两份并发 item 由 clientID
+     * 决定胜负（约一半概率把房间里的新编辑覆盖回旧稿，实测两侧一起回退）。
+     * 现在先记进 `pendingSeed`，等 provider 的首个 `sync`：房间为空才写、非空则采用房间状态；
+     * 一直连不上则由 `SEED_FALLBACK_MS` 兜底按本地副本渲染。
+     * 无协作端点（本地模式/单测/离线）依旧立刻写入 —— 行为与以前完全一致。
+     */
+    if (initialDesign) {
+      if (this.wsEndpoint) this.pendingSeed = initialDesign
+      else this._writeSeed(initialDesign)
     }
     // T2 presence 泄漏修复：provider 不再在构造期创建（原实现在渲染期建连、
     // 组件卸载后从不销毁，socket/awareness 残留导致服务端在线人数虚增）。
@@ -267,6 +285,8 @@ export class DesignStore {
         return
       }
       if (this._isLocalOrigin(origin)) return
+      // 远端写进来了：文档不再是我一个人的占位副本，之后"打开稿件"不许覆盖它
+      this.wroteOwnSeed = false
       this._trackRemoteChanges(true)
     })
     // 撤销步骤的元数据：事务结束时把 pendingUndoMeta 挂到栈项上
@@ -285,8 +305,126 @@ export class DesignStore {
   }
 
   destroy() {
+    this._clearSeedFallback()
     this.provider?.destroy()
     this.ydoc.destroy()
+  }
+
+  // ---- 2026-09-17（B+）：房间为准的种子/加载时序 ----
+
+  private pendingSeed: DesignNode | null = null
+  private pendingLoad: DesignNode | null = null
+  private syncedFlag = false
+  private dataReadyFlag = false
+  private seedFallbackTimer: ReturnType<typeof setTimeout> | null = null
+  private dataReadyCbs: Array<() => void> = []
+  /** 兜底已触发（= 没等到协作同步，按本地副本渲染）；页面据此提示"协作未连接" */
+  degraded = false
+  /**
+   * 文档里的内容是不是**我自己**刚写进去的占位副本（房间当时是空的）。
+   *
+   * 只有这种情况允许被"打开稿件"的结果覆盖（`applyLoadedDesign`）——队友写进来的内容永远不许被覆盖；
+   * 一旦收到远端更新就置 false。
+   */
+  private wroteOwnSeed = false
+
+  /** 数据可读写了：本地模式 / 已 sync / 兜底已触发。页面据此开自动保存、导出与选区生效。 */
+  get dataReady(): boolean {
+    return this.dataReadyFlag
+  }
+
+  /** 注册"数据就绪"回调（已就绪则立即调用一次）；返回取消订阅 */
+  onDataReady(cb: () => void): () => void {
+    if (this.dataReadyFlag) {
+      cb()
+      return () => undefined
+    }
+    this.dataReadyCbs.push(cb)
+    return () => {
+      this.dataReadyCbs = this.dataReadyCbs.filter((f) => f !== cb)
+    }
+  }
+
+  private _markDataReady(): void {
+    if (this.dataReadyFlag) return
+    this.dataReadyFlag = true
+    const cbs = this.dataReadyCbs
+    this.dataReadyCbs = []
+    cbs.forEach((cb) => cb())
+  }
+
+  /** 房间为空（或本地模式）时把整棵树写进文档；已就绪则不再写。`own` = 这份是我自己的占位副本 */
+  private _writeSeed(design: DesignNode, own = false): void {
+    if (this.designMap.size === 0) {
+      this.ydoc.transact(() => {
+        this.designMap.set(ROOT_KEY, plainToY(design))
+      }, RESET_ORIGIN)
+      this.wroteOwnSeed = own
+    }
+    this._markDataReady()
+  }
+
+  private _clearSeedFallback(): void {
+    if (this.seedFallbackTimer !== null) {
+      clearTimeout(this.seedFallbackTimer)
+      this.seedFallbackTimer = null
+    }
+  }
+
+  private _armSeedFallback(): void {
+    if (this.seedFallbackTimer !== null || this.syncedFlag || !this.wsEndpoint) return
+    if (!this.pendingSeed && !this.pendingLoad) return
+    this.seedFallbackTimer = setTimeout(() => {
+      this.seedFallbackTimer = null
+      if (this.syncedFlag) return
+      const pending = this.pendingLoad ?? this.pendingSeed
+      const fromSeed = !this.pendingLoad && !!this.pendingSeed
+      this.degraded = true
+      this.pendingLoad = null
+      this.pendingSeed = null
+      if (pending) this._writeSeed(pending, fromSeed)
+      else this._markDataReady()
+    }, SEED_FALLBACK_MS)
+  }
+
+  /** provider 首次 sync：此刻才知道房间里到底有没有东西 */
+  private handleSync = (isSynced: boolean): void => {
+    if (!isSynced) return
+    this.syncedFlag = true
+    this._clearSeedFallback()
+    const pending = this.pendingLoad ?? this.pendingSeed
+    const fromSeed = !this.pendingLoad && !!this.pendingSeed
+    this.pendingLoad = null
+    this.pendingSeed = null
+    // 房间为空（新房间）→ 用本地副本；房间已有内容 → **采用房间状态**（DB 只是保存目标）
+    if (pending && this.designMap.size === 0) this._writeSeed(pending, fromSeed)
+    this._markDataReady()
+  }
+
+  /**
+   * 打开/切换稿件（room-first）。替代调用方原来直接用的 `resetDesign(target)`：
+   * - 无协作端点（本地模式/单测）→ 立刻写，行为与以前一致；
+   * - 已 sync → 房间为空才写，非空则采用房间状态；
+   * - 还没 sync → 先记下来，等 `sync`（或兜底超时）再决定。
+   *
+   * 目的：新客户端**不许**用"从 DB 读出来的旧稿"覆盖房间里别人未保存的编辑。
+   */
+  applyLoadedDesign(design: DesignNode): void {
+    if (!this.wsEndpoint) {
+      this.resetDesign(design)
+      this._markDataReady()
+      return
+    }
+    if (this.syncedFlag) {
+      // 房间空 → 写入；房间里的东西是我自己的占位副本（房间当时是空的）→ 允许被真正的稿件覆盖。
+      // 队友写进来的内容（wroteOwnSeed=false）一律不动。
+      if (this.designMap.size === 0 || this.wroteOwnSeed) this.resetDesign(design)
+      this.wroteOwnSeed = false
+      this._markDataReady()
+      return
+    }
+    this.pendingLoad = design
+    this._armSeedFallback()
   }
 
   /** T2：按端点确保 provider 存在（幂等）。与 disconnectProvider 配对使用：
@@ -300,6 +438,11 @@ export class DesignStore {
       // 4403 = 网关判定"未授权/非成员"（见 docker/collab-gateway）；其余关闭码交给默认重连逻辑
       if (event?.code === 4403) this.onForbidden?.()
     })
+    // 2026-09-17（B+）：首个 sync 是"房间到底有没有内容"的唯一权威时点
+    this.provider.on('sync', this.handleSync)
+    // 真实 provider 有可能在我们挂上监听之前就同步完了（`synced` 由 y-websocket 维护）
+    if ((this.provider as { synced?: boolean }).synced) this.handleSync(true)
+    this._armSeedFallback()
     this.bindProviderEvents()
     this._reapplyPresence()
   }
@@ -324,6 +467,9 @@ export class DesignStore {
     this.roomName = newRoom
     if (wsUrl) {
       this.provider = new WebsocketProvider(wsUrl, newRoom, this.ydoc, this.wsOptions())
+      // 新房间同样要认"首个 sync"（房间迁移后本地文档就是事实来源，handleSync 不会覆盖它）
+      this.provider.on('sync', this.handleSync)
+      if ((this.provider as { synced?: boolean }).synced) this.handleSync(true)
       this.bindProviderEvents()
       this._reapplyPresence()
     }

@@ -119,6 +119,13 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
 
   // P1 文件系统（缺陷 5/8/11）：打开保存的设计 / 模板起手 / 草稿 / 空白
   const [loaded, setLoaded] = useState(false)
+  /**
+   * 2026-09-17（B+）：**数据就绪**才算可读写 —— 本地模式 / 协作已 sync / 兜底已触发。
+   * 为什么单独一个状态：修成"房间为准"之后，`sync` 之前文档可能是空的，
+   * 这时自动保存/导出/选区若照常工作，就会把**空树**当成用户内容存下去（比原来的 bug 更糟）。
+   */
+  const [dataReady, setDataReady] = useState(() => store.dataReady)
+  useEffect(() => store.onDataReady(() => setDataReady(true)), [store])
   const [savedMeta, setSavedMeta] = useState<{ id?: number; name?: string }>({})
   const [saveDialogOpen, setSaveDialogOpen] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -172,8 +179,13 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
         target = null
       }
       if (target) {
-        store.resetDesign(target)
+        // 2026-09-17（B+）：**房间为准** —— 有协作端点时这里不再直接写文档，
+        // 而是等 provider 首个 sync：房间空才写、房间已有别人的内容则采用房间状态。
+        store.applyLoadedDesign(target)
         setSavedMeta(meta)
+      } else {
+        // 没给任何参数（裸 /workspace、?asset=… 等）：沿用"演示稿起手"的既有行为
+        store.applyLoadedDesign(DEMO_DESIGNS[0])
       }
       setLoaded(true)
     }
@@ -310,13 +322,14 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
     setLockHint('已把资产库图片插入选中的图片组件（可撤销）')
     window.setTimeout(() => setLockHint(''), 6000)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loaded, searchParams, selectedKey])
+  }, [loaded, dataReady, searchParams, selectedKey])
 
   // P1 草稿自动保存（缺陷 5/8 + 缺陷 4：按会话分片，300ms 防抖）
   /** 草稿写失败只提示一次（否则 300ms 防抖会让提示反复闪） */
   const draftWarnedRef = useRef(false)
   useEffect(() => {
-    if (!loaded) return
+    // B+：数据没就绪（协作还在 sync）时不落草稿——否则会把"尚未同步回来的空树"存成本地草稿
+    if (!loaded || !dataReady) return
     const timer = window.setTimeout(() => {
       const ok = saveDraft(sessionKey, design, { savedId: savedMeta.id, savedName: savedMeta.name })
       // 2026-09-17：本地存储写失败（配额满 / 被禁用）以前是**静默**的 —— 用户以为草稿一直在，
@@ -328,15 +341,16 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
       }
     }, 300)
     return () => window.clearTimeout(timer)
-  }, [design, savedMeta, loaded, sessionKey])
+  }, [design, savedMeta, loaded, dataReady, sessionKey])
 
   // 缺陷 4：卸载（切会话/离开工作台）前立即落草稿，避免 300ms 防抖窗口内丢内容
-  const latestDraftRef = useRef({ design, savedMeta, sessionKey, loaded })
-  latestDraftRef.current = { design, savedMeta, sessionKey, loaded }
+  const latestDraftRef = useRef({ design, savedMeta, sessionKey, loaded, dataReady })
+  latestDraftRef.current = { design, savedMeta, sessionKey, loaded, dataReady }
   useEffect(
     () => () => {
-      const { design: d, savedMeta: m, sessionKey: k, loaded: l } = latestDraftRef.current
-      if (l) saveDraft(k, d, { savedId: m.id, savedName: m.name })
+      const { design: d, savedMeta: m, sessionKey: k, loaded: l, dataReady: ready } = latestDraftRef.current
+      // B+：同样只在数据就绪时落草稿（别把"还没同步回来的空树"存下去）
+      if (l && ready) saveDraft(k, d, { savedId: m.id, savedName: m.name })
     },
     [],
   )
@@ -344,6 +358,11 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
   // 保存到后端（缺陷 16/17）：未命名先弹命名框，已命名直接 PUT
   const handleSave = () => {
     if (saving) return
+    // B+：协作内容还没同步回来时不许保存——否则会把空树/旧树写成新版本
+    if (!dataReady) {
+      setSaveError('协作内容还在同步，请稍候再保存')
+      return
+    }
     // T46a-3e：只读访客不能保存（后端 PUT 也会 403，这里先给出可读原因）
     if (readOnly) {
       setSaveError('只读访客：不能保存修改（需要 owner / editor 权限）。')
@@ -1346,6 +1365,15 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
               data-testid="beautify-blocked-hint"
             >
               {lockHint}
+            </div>
+          )}
+          {/* B+：协作内容还没同步回来（房间为准）——明确告诉用户"在等"，而不是看着空画布 */}
+          {!dataReady && (
+            <div
+              className="absolute bottom-24 left-1/2 z-40 -translate-x-1/2 rounded-lg border bg-background px-3 py-1.5 text-xs text-muted-foreground shadow"
+              data-testid="sync-pending-hint"
+            >
+              正在同步协作内容…
             </div>
           )}
           {/* E3-2：优化报告（可一键撤销） */}
