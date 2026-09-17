@@ -412,15 +412,29 @@ export default function AssetsPage() {
     }
   }
 
-  /** 文件夹自身的拖拽排序（与资产同理，只在侧边栏内部重排） */
+  /**
+   * 文件夹自身的拖拽排序（与资产同理：只在**同一层**内允许）。
+   *
+   * 多层目录（2026-09-17）：接口存的是全局 `sort_order` 的扁平列表，侧边栏渲染的却是树
+   * ——"有子目录"时两者下标并不一致（原始 `[1, 2, 3子, 4子]` vs 侧边栏 `[1, 3, 4, 2]`）。
+   * 跨层拖拽在数据结构上也没有可表达的语义（改父级有专门的下拉），旧代码会写一个
+   * "回执已保存、列表却纹丝不动"的顺序。所以跨层直接拒绝并指路。
+   */
   const reorderFolders = async (targetId: number) => {
     if (draggingFolderId === null || draggingFolderId === targetId) return
+    setDraggingFolderId(null)
+    const dragging = folders.folders.find((f) => f.id === draggingFolderId)
+    const target = folders.folders.find((f) => f.id === targetId)
+    if (!dragging || !target) return
+    if ((dragging.parent_id ?? null) !== (target.parent_id ?? null)) {
+      setMessage('只能和同一层的文件夹排序；要改变层级，用它下方的「移到哪个文件夹下」下拉。')
+      return
+    }
     const ids = folders.folders.map((f) => f.id)
     const from = ids.indexOf(draggingFolderId)
     const to = ids.indexOf(targetId)
     if (from < 0 || to < 0) return
     ids.splice(to, 0, ...ids.splice(from, 1))
-    setDraggingFolderId(null)
     try {
       await api('/api/asset-folders/order', { method: 'PATCH', body: JSON.stringify({ ids }) })
       await loadFolders()

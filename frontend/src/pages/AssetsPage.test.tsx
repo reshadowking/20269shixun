@@ -394,6 +394,61 @@ describe('AssetsPage（拖拽排序）', () => {
     })
   })
 
+  /**
+   * 多层目录（2026-09-16 加的功能）：接口给的是**全局 sort_order 的扁平列表**，
+   * 侧边栏却按树渲染，两者的下标在"有子目录"时并不一致：
+   *   原始 [1(top), 2(top), 3(1的子), 4(1的子)]  →  侧边栏 [1, 3, 4, 2]
+   * 而拖拽排序用的是**原始下标**（下面第一条用例证明同层排序因此仍然正确）。
+   */
+  const NESTED = [
+    { id: 1, name: '素材', count: 2, parent_id: null },
+    { id: 2, name: '背景', count: 0, parent_id: null },
+    { id: 3, name: '图标', count: 0, parent_id: 1 },
+    { id: 4, name: '插画', count: 0, parent_id: 1 },
+  ]
+
+  function mockNested() {
+    return vi.fn(async (url: string, options?: RequestInit) => {
+      const path = String(url)
+      if (path.includes('/api/asset-folders')) {
+        if ((options?.method ?? 'GET') === 'PATCH') return { ok: true, status: 200, json: async () => ({ ok: true }) }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ folders: NESTED, ungrouped: 0, limit_folders: 30 }),
+        }
+      }
+      return { ok: true, status: 200, json: async () => TWO }
+    })
+  }
+
+  it('多层目录：同层子目录照旧能排序（PATCH 的顺序按落点重排）', async () => {
+    const fetchMock = mockNested()
+    vi.stubGlobal('fetch', fetchMock)
+    renderPage()
+
+    fireEvent.dragStart(await screen.findByTestId('folder-grip-4'))
+    fireEvent.drop(screen.getByTestId('folder-3'))
+
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find((c) => String(c[0]) === '/api/asset-folders/order')
+      expect(call).toBeTruthy()
+      expect(JSON.parse(String(call?.[1]?.body)).ids).toEqual([1, 2, 4, 3])
+    })
+  })
+
+  it('多层目录：把子目录拖到非同层 → 不写一个"列表纹丝不动"的顺序，改为说明"只能同层排序"', async () => {
+    const fetchMock = mockNested()
+    vi.stubGlobal('fetch', fetchMock)
+    renderPage()
+
+    fireEvent.dragStart(await screen.findByTestId('folder-grip-3'))
+    fireEvent.drop(screen.getByTestId('folder-2'))
+
+    expect(await screen.findByTestId('assets-msg')).toHaveTextContent('同一层')
+    expect(fetchMock.mock.calls.filter((c) => String(c[0]) === '/api/asset-folders/order')).toHaveLength(0)
+  })
+
   it('多层目录：子目录按层级缩进渲染，父级下拉可选"顶层"与其它目录（排除自己）', async () => {
     const fetchMock = vi.fn(async (url: string, options?: RequestInit) => {
       const path = String(url)
