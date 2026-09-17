@@ -29,7 +29,7 @@ import { BLANK_DESIGN, DEMO_DESIGNS } from '@/design/demoData'
 import { loadDraft, saveDraft } from '@/lib/designSession'
 import { designToReactApp } from '@/export/designToReact'
 import { findNode, findParent as findParentOf, genId } from '@/design/tree'
-import { diffDesign } from '@/design/applyDiff'
+import { diffDesign, overlappingIds } from '@/design/applyDiff'
 import { readAutoFreeze, writeAutoFreeze } from '@/lib/autoFreeze'
 import type { ComponentType, DesignNode } from '@/design/types'
 import { api } from '@/lib/api'
@@ -892,7 +892,16 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
       // 2026-09-17：**差量落地**（原来是整树 clear+重建：并发下会吞掉队友在这期间对别的
       // 节点的改动，并让所有人画布整体重挂）。根 id 变了这类（空白稿 empty → root）由
       // diffDesign 返回 `replace`，自动退化为整体替换。
-      store.applyAiDiff(diffDesign(design, resp.design))
+      const diff = diffDesign(design, resp.design)
+      // ①并发：AI 基于快照生成，若这期间队友改了**同一节点**，下面这步会覆盖他——先算出来，落地后提示
+      const overlapped = overlappingIds(design, store.getDesign(), diff)
+      store.applyAiDiff(diff)
+      if (overlapped.length) {
+        setLockHint(
+          `本次 AI 修改期间有人改过 ${overlapped.length} 个同一节点，已按 AI 结果覆盖（可 Ctrl+Z 撤回，或让对方核对）`,
+        )
+        window.setTimeout(() => setLockHint(''), 8000)
+      }
       setSelectedIds(new Set())
       // 增量修改后若仍是 flex（首次生成没冻成 free 的情况），同样补一次自动冻结
       void autoFreezeAfterAi()

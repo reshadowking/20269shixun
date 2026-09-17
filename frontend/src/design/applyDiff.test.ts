@@ -8,7 +8,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { DesignNode } from '@/design/types'
 import { DesignStore } from '@/yjs/designStore'
 
-import { applyDesignDiff, diffDesign } from './applyDiff'
+import { applyDesignDiff, diffDesign, overlappingIds } from './applyDiff'
 
 vi.mock('y-websocket', async () => ({
   WebsocketProvider: (await import('../test/fakeYWebSocket')).FakeWebsocketProvider,
@@ -147,5 +147,23 @@ describe('diffDesign / applyDesignDiff', () => {
     s.updateNode('a', (n) => ({ ...n, props: { ...n.props, text: '用户手改' } }))
     expect(s.getDesign().children?.[0].props?.text).toBe('服务端已放行的文案')
     s.destroy()
+  })
+
+  it('冲突可见化：AI 期间队友改了**同一节点** → 能算出来（供上层提示），没碰过的节点不算', () => {
+    const before = base()
+    // 队友把 a 改了（a 不在 diff 里）→ 不算冲突
+    const teammateOnlyA: DesignNode = {
+      ...before,
+      children: [{ ...before.children![0], props: { text: '队友改的' } }, before.children![1]],
+    }
+    const aiTouchesB: DesignNode = { ...before, children: [before.children![0], { ...before.children![1], props: { text: 'AI 改的' } }] }
+    expect(overlappingIds(before, teammateOnlyA, diffDesign(before, aiTouchesB))).toEqual([])
+
+    // 队友把 b 也改了（b 正是 AI 要改的）→ 命中，需要提示
+    const teammateAlsoB: DesignNode = {
+      ...before,
+      children: [before.children![0], { ...before.children![1], props: { text: '队友也改了 b' } }],
+    }
+    expect(overlappingIds(before, teammateAlsoB, diffDesign(before, aiTouchesB))).toEqual(['b'])
   })
 })

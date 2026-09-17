@@ -113,3 +113,29 @@ export function applyDesignDiff(store: DiffTarget, diff: DesignDiff): void {
   for (const u of diff.updated) store.updateNode(u.id, () => u.node)
   for (const add of diff.added) store.insertChild(add.parentId, add.node, add.index)
 }
+
+/**
+ * 冲突可见化（2026-09-17）：AI 请求是**基于快照**的（发出去的 `before`），如果这期间
+ * 队友改了**同一个节点**，这次差量落地会把队友那部分**静默覆盖**。
+ *
+ * 这里算出"被双方都碰过"的节点 id，供上层提示用户（例如："本次 AI 修改期间有人改过 2 个同一节点，
+ * 已按 AI 结果覆盖，可 Ctrl+Z 撤回"）。**只报告不阻塞**：真正的权威合并要等服务端做 ops 级合并，
+ * 现阶段让用户知情 + 可撤回，比静默覆盖可接受得多。
+ */
+export function overlappingIds(before: DesignNode, current: DesignNode, diff: DesignDiff): string[] {
+  const b = flatten(before)
+  const c = flatten(current)
+  const touched = [
+    ...diff.updated.map((u) => u.id),
+    ...diff.removed,
+    ...diff.moved.map((m) => m.id),
+  ]
+  const out: string[] = []
+  for (const id of touched) {
+    const prev = b.get(id)
+    const now = c.get(id)
+    if (!prev || !now) continue
+    if (ownKey(prev.node) !== ownKey(now.node) || prev.parent !== now.parent) out.push(id)
+  }
+  return out
+}
