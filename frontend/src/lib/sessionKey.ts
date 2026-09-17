@@ -13,9 +13,16 @@ export function designSessionKey(designId: string | number): string {
   return `s-design-${designId}`
 }
 
-/** 新建会话 key（8 位随机，符合后端 ^[A-Za-z0-9_-]{3,64}$ 校验） */
+import { randomToken } from '@/lib/randomToken'
+
+/**
+ * 新建会话 key（8 位随机，符合后端 ^[A-Za-z0-9_-]{3,64}$ 校验）。
+ *
+ * ⚠️ 这个 key 会派生成草稿协作房间名（`session-{key}`），也就是一张共享凭证——
+ * 所以必须用 CSPRNG，不能用 Math.random（见 lib/randomToken.ts 的说明）。
+ */
 export function randomSessionKey(): string {
-  return `s-${Math.random().toString(36).slice(2, 10)}`
+  return `s-${randomToken(8)}`
 }
 
 export function isSessionKey(value: string | null | undefined): boolean {

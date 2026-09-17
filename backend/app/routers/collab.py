@@ -4,6 +4,7 @@
 - `POST /api/collab/authorize`：供 WS 鉴权网关调用（内网令牌保护）→ `{ok, role}`；
   **不返回稿件内容**，只回答"这个 username 能不能进这个 room，以什么角色"。
 """
+import hmac
 import secrets
 
 from fastapi import APIRouter, Depends, Header, HTTPException
@@ -65,7 +66,9 @@ def authorize(
     expected = get_settings().collab_internal_token
     if not expected:
         raise HTTPException(status_code=503, detail="未配置 COLLAB_INTERNAL_TOKEN，协作鉴权未启用")
-    if x_internal_token != expected:
+    # 常量时间比较：这是**凭证**比对（与 images.py 的公开链接凭证同一口径），
+    # 避免逐字符短路比较泄漏前缀（内网端口也不该例外）。
+    if not hmac.compare_digest(x_internal_token or "", expected):
         raise HTTPException(status_code=401, detail="内网令牌无效")
 
     from ..models import User

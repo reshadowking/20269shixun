@@ -1,3 +1,5 @@
+import { randomToken } from '@/lib/randomToken'
+
 /**
  * 协作 room 派生（P0-4 + 缺陷 4）：Yjs 房间按"设计 / 会话"隔离，避免多画布互相覆盖。
  * 优先级：显式 ?room=（E2E 与多人同稿共用入口）> 已存设计 design-{id} > 会话 session-{sessionKey}。
@@ -16,9 +18,14 @@ export function deriveCollabRoom(
   return randomFallback ?? 'design-room'
 }
 
-/** 生成一次会话内稳定的随机 room（调用方用 useRef 懒初始化保证 StrictMode 安全） */
+/**
+ * 生成一次会话内稳定的随机 room（调用方用 useRef 懒初始化保证 StrictMode 安全）。
+ *
+ * room 名过网关时就是共享凭证 → 走 CSPRNG（见 lib/randomToken.ts）。
+ * 前缀仍是 `local-`，与旧实现一致。
+ */
 export function randomRoom(): string {
-  return `local-${Math.random().toString(36).slice(2, 10)}`
+  return `local-${randomToken(8)}`
 }
 
 /**
