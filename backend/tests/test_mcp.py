@@ -71,6 +71,27 @@ class TestMcpServerRegistration:
             "apply_design_edit_tool",
         }
 
+    def test_tool_descriptions_have_no_stale_component_count(self):
+        """外部 Agent 读的就是工具描述：描述里写死的组件数量已经过期过两次（15 → 18）。
+
+        现在描述不再写数字、以返回值为准；这条守门禁止再把"N 个组件/N 种组件类型"写回去，
+        并顺带保证三个工具的 __doc__ 非空（f-string 当第一条语句不会成为 __doc__，实测会清空描述）。
+        """
+        import re
+        import sys
+        from pathlib import Path
+
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+        import importlib
+
+        server = importlib.import_module("mcp_server")
+        real = len(get_component_library()["components"])
+        for fn in (server.get_design_tokens_tool, server.get_component_library_tool, server.apply_design_edit_tool):
+            doc = fn.__doc__ or ""
+            assert doc.strip(), f"{fn.__name__} 的 __doc__ 不能为空（MCP 工具描述）"
+            claimed = re.findall(r"(\d+)\s*[个种]\s*组件", doc)
+            assert not claimed, f"{fn.__name__} 描述里写死了组件数量 {claimed}，实际 {real}——改为不写数字"
+
 
 class TestApplyDesignEditTool:
     SAMPLE: ClassVar[dict] = {
