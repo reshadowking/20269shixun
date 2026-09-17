@@ -44,6 +44,42 @@ describe('auditGeometry', () => {
     document.querySelectorAll('[data-noisy]').forEach((el) => el.remove())
   })
 
+  /**
+   * 2026-09-17（E2E `geometry-audit.spec.ts` 抓到的两条误报）：
+   * 有设计语义时，`component` 叶子不许被当"空容器"，没文字的元素不许被当"文字截断"。
+   */
+  it('设计语义：divider（画布上是裸 div）不再被报"空容器"', () => {
+    const root = node('root', { left: 0, top: 0, width: 400, height: 100 })
+    setText(root, '标题')
+    const divider = node('dv', { left: 16, top: 40, width: 360, height: 1 }, { borderTop: '1px solid #ccc' })
+    root.appendChild(divider)
+
+    const issues = auditGeometry(canvas(root), {}, { nodeTypeOf: (id) => (id === 'dv' ? { type: 'component', componentType: 'divider' } : { type: 'frame' }) })
+    expect(issues.some((i) => i.kind === 'empty-frame' && i.nodeId === 'dv')).toBe(false)
+  })
+
+  it('设计语义：icon 的 svg 比盒子高 4px，也不算"文字截断"（它没有文字）', () => {
+    const root = node('root', { left: 0, top: 0, width: 400, height: 100 })
+    setText(root, '标题')
+    const icon = node('ic', { left: 0, top: 0, width: 24, height: 24 })
+    Object.defineProperty(icon, 'clientHeight', { value: 24 })
+    Object.defineProperty(icon, 'scrollHeight', { value: 28 })
+    root.appendChild(icon)
+
+    const issues = auditGeometry(canvas(root), {}, { nodeTypeOf: () => ({ type: 'component', componentType: 'icon' }) })
+    expect(issues.some((i) => i.kind === 'truncated-text' && i.nodeId === 'ic')).toBe(false)
+  })
+
+  it('不传语义时行为不变：无文字无控件的容器仍报"空容器"（DOM 兜底）', () => {
+    const root = node('root', { left: 0, top: 0, width: 400, height: 100 })
+    setText(root, '标题')
+    const empty = node('e1', { left: 0, top: 0, width: 100, height: 20 })
+    root.appendChild(empty)
+
+    const issues = auditGeometry(canvas(root))
+    expect(issues.some((i) => i.kind === 'empty-frame' && i.nodeId === 'e1')).toBe(true)
+  })
+
   it('溢出：子节点超出父容器 → overflow', () => {
     const parent = node('root', { left: 0, top: 0, width: 200, height: 100 })
     const child = node('big', { left: 10, top: 10, width: 400, height: 40 })

@@ -967,7 +967,15 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
     // 改成只在本页子树里找。
     const sheet = pageRef.current?.querySelector<HTMLElement>('[data-testid="canvas-sheet"]')
     if (!sheet) return
-    const issues = auditGeometry(sheet)
+    // 2026-09-17：把**设计语义**一起传进去（节点 id → 类型），否则规则只能靠 DOM 形状猜组件类型，
+    // 会把"渲染成裸 div 的 divider"报成空容器、把"svg 比盒子高 4px 的 icon"报成文字截断（都实测过）。
+    const byId = new Map<string, DesignNode>()
+    const walk = (node: DesignNode) => {
+      byId.set(node.id, node)
+      for (const child of node.children ?? []) walk(child)
+    }
+    walk(design)
+    const issues = auditGeometry(sheet, {}, { nodeTypeOf: (id) => byId.get(id) })
     setAuditIssues(issues)
     setHighlightIds(new Set(issues.map((issue) => issue.nodeId)))
   }

@@ -22,6 +22,19 @@ export interface AuditOptions {
   contrastRatio?: number
 }
 
+/**
+ * 设计语义上下文（2026-09-17 补）：节点 id → 设计树里的类型。
+ *
+ * 为什么要它：`empty-frame` / `truncated-text` 这两条规则原来**靠 DOM 形状猜**组件类型，
+ * 而画布上 DOM 只有 `data-node-id`，于是不断误报 —— 实测（E2E `geometry-audit.spec.ts` 抓到的）：
+ * - `divider` 组件在画布上渲染成**没有任何标记的 `<div>`**（不是 `<hr>`）→ 被报"空容器"；
+ * - `icon` 的 `<svg>` 比它 24px 的盒子高 4px → 被报"文字截断"（它根本没有文字）。
+ * 调用方（工作台）手里有设计树，把类型传进来就能按**语义**判定叶子，DOM 启发式退化为兜底。
+ */
+export interface AuditContext {
+  nodeTypeOf?: (nodeId: string) => { type: string; componentType?: string } | undefined
+}
+
 const DEFAULTS = { overflowSlackPx: 2, overlapRatio: 0.2, contrastRatio: 4.5 }
 
 /**
@@ -93,7 +106,7 @@ function nodeIdOf(el: HTMLElement): string {
   return el.dataset.nodeId ?? ''
 }
 
-export function auditGeometry(root: HTMLElement, options: AuditOptions = {}): AuditIssue[] {
+export function auditGeometry(root: HTMLElement, options: AuditOptions = {}, context: AuditContext = {}): AuditIssue[] {
   const opts = { ...DEFAULTS, ...options }
   const issues: AuditIssue[] = []
   const nodes = Array.from(root.querySelectorAll<HTMLElement>('[data-node-id]'))
@@ -120,13 +133,19 @@ export function auditGeometry(root: HTMLElement, options: AuditOptions = {}): Au
     }
 
     // ② 空容器：没有任何可见文本，且**不含叶子控件**（icon/divider/image/表单控件自带内容）
+    //    2026-09-17：有设计语义时以语义为准 —— `component` 节点是叶子（divider 在 DOM 里就是个裸 div），
+    //    永远不该被当成"空容器"；只有 frame/group 这类真容器才可能空。
+    const semantic = context.nodeTypeOf?.(nodeId)
+    const isLeafByDesign = semantic?.type === 'component'
     const hasWidget = el.matches(WIDGET_SELECTOR) || Boolean(el.querySelector(WIDGET_SELECTOR))
-    if (!hasWidget && !(el.textContent ?? '').trim()) {
+    if (!isLeafByDesign && !hasWidget && !(el.textContent ?? '').trim()) {
       issues.push({ kind: 'empty-frame', nodeId, detail: '容器内没有可见文本' })
     }
 
-    // ③ 文字截断：内容高度超过可视高度
-    if (el.clientHeight > 0 && el.scrollHeight > el.clientHeight + opts.overflowSlackPx) {
+    // ③ 文字截断：内容高度超过可视高度。
+    //    2026-09-17：要求**真有文字** —— 否则 icon 的 svg 比盒子高几像素也会被报"文字截断"（实测误报）。
+    const hasText = Boolean((el.textContent ?? '').trim())
+    if (hasText && el.clientHeight > 0 && el.scrollHeight > el.clientHeight + opts.overflowSlackPx) {
       issues.push({
         kind: 'truncated-text',
         nodeId,
