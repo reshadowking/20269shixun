@@ -95,6 +95,40 @@ class TestRegister:
         assert "占用" in resp.json()["detail"]
 
 
+class TestDemoAutoCreateRace:
+    """"首次登录自动建号"（login 里的 demo 快捷路径）在并发下会撞 users.username。"""
+
+    def test_concurrent_first_login_does_not_500(self, client, monkeypatch):
+        """全新库上两个请求同时用 demo/demo123 登录：两边都该拿到 token。
+
+        实测（把用户查询打桩成"查不到"，等价于另一个请求刚插进来）：
+          sqlalchemy.exc.IntegrityError: UNIQUE constraint failed: users.username
+        → 未捕获 → 500；而用户其实只是"两个人同时点了登录"。
+        """
+        # 先造出 demo 账号（其它用例也会建，这里显式保证前置）
+        assert client.post("/api/auth/login", json={"username": "demo", "password": "demo123"}).status_code == 200
+
+        from sqlalchemy.orm import Query
+
+        original_first = Query.first
+        calls = {"n": 0}
+
+        def race_first(self):
+            entity = (self.column_descriptions or [{}])[0].get("entity")
+            if getattr(entity, "__name__", "") == "User":
+                calls["n"] += 1
+                if calls["n"] == 1:
+                    return None  # 模拟"我查的时候还没人建号"
+            return original_first(self)
+
+        monkeypatch.setattr(Query, "first", race_first)
+        resp = client.post("/api/auth/login", json={"username": "demo", "password": "demo123"})
+        monkeypatch.setattr(Query, "first", original_first)
+
+        assert resp.status_code == 200, f"并发首登应正常发 token，实际 {resp.status_code}"
+        assert resp.json()["username"] == "demo"
+
+
 class TestPasswordHashSaltMigration:
     """P1-1 事故回归：口令盐与 jwt_secret 解耦——轮换密钥不再把所有账号锁在门外。"""
 

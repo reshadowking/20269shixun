@@ -71,8 +71,17 @@ def login(req: LoginRequest, db: Session = Depends(get_db)):
     if user is None and req.username == settings.demo_user and req.password == settings.demo_password:
         user = User(username=req.username, password_hash=hash_password(req.password))
         db.add(user)
-        db.commit()
-        db.refresh(user)
+        try:
+            db.commit()
+        except IntegrityError:
+            # 竞态：全新库上两个请求**同时**首次登录 demo（快捷建号）→ 撞 users.username。
+            # 回滚后重查即可：账号已被对方建好，口令就是同一份配置口令，继续走校验即可。
+            db.rollback()
+            user = db.query(User).filter(User.username == req.username).first()
+            if user is None:
+                raise  # 不是可恢复冲突 → 原样抛出
+        else:
+            db.refresh(user)
     if user is None:
         raise HTTPException(status_code=401, detail="用户名或密码错误")
     ok, used_legacy_salt = verify_password_full(req.password, user.password_hash)
