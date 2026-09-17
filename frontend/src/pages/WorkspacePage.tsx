@@ -490,6 +490,12 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
   const handleRestoreSessionSnapshot = (id: string) => {
     const snap = snapshots.find((x) => x.id === id)
     if (!snap) return
+    // 2026-09-17：版面已确认（锁定）阶段不允许整树回退——与「转自由画布」「智能优化」同一口径
+    if (store.isBeautifyLocked) {
+      setLockHint('版面已确认：不能回退到旧快照（会改变布局/尺寸），请先解除版面锁定')
+      window.setTimeout(() => setLockHint(''), 5000)
+      return
+    }
     if (!window.confirm(`回退到快照「${snap.label || '未命名快照'}」？当前画布内容会被覆盖（可撤销）。`)) return
     store.pushSnapshot()
     setUndoCount((c) => c + 1)
@@ -1518,10 +1524,13 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
                     onRestore={
                       readOnly
                         ? () => setLockHint('只读访客：不能恢复历史版本（需要 owner / editor 权限）')
-                        : (restored: DesignNode) => {
-                            store.resetDesign(restored)
-                            setSelectedIds(new Set())
-                          }
+                        : store.isBeautifyLocked
+                          ? () =>
+                              setLockHint('版面已确认：不能恢复历史版本（会改变布局/尺寸），请先解除版面锁定')
+                          : (restored: DesignNode) => {
+                              store.resetDesign(restored)
+                              setSelectedIds(new Set())
+                            }
                     }
                     onVersionSaved={() => setSavedMeta((m) => ({ ...m }))}
                   />

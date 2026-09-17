@@ -35,12 +35,12 @@ function json(body: unknown) {
   return { ok: true, status: 200, json: async () => body }
 }
 
-function mockFetch() {
+function mockFetch(locked = false) {
   return vi.fn(async (url: string, options?: RequestInit) => {
     const path = String(url)
     const method = options?.method ?? 'GET'
     if (path.includes('/beautify-lock')) {
-      return method === 'GET' ? json({ locked: false }) : json({ ok: true, locked: false })
+      return method === 'GET' ? json({ locked }) : json({ ok: true, locked })
     }
     if (path.includes('/api/apply-effects')) {
       const body = JSON.parse(String(options?.body ?? '{}')) as { node_id?: string; effects?: Record<string, unknown> }
@@ -48,6 +48,8 @@ function mockFetch() {
     }
     if (path.includes('/messages')) return json({ messages: [], pruned: 0 })
     if (path.includes('/tool-calls')) return json({ ok: true, id: 1 })
+    // 会话列表（SessionBar 用它渲染当前会话标题）：返回空列表而不是详情形状
+    if (path.includes('/api/sessions?')) return json({ sessions: [], total: 0 })
     if (path.includes('/api/sessions')) {
       return json({
         session_id: 's-beautify',
@@ -113,5 +115,31 @@ describe('美化效果落地（差量，不清撤销栈）', () => {
 
     // 差量落地用 store.updateNode（LOCAL_ORIGIN）→ 撤销栈还在；整树替换会 clear() → 按钮变灰
     await waitFor(() => expect(screen.getByTestId('undo-op')).toBeEnabled())
+  })
+
+  /**
+     * 版面已确认（锁定）阶段的口径一致性（2026-09-17）：
+     * 「转自由画布」「智能优化」都被拦，但「回退会话快照」原先会直接把整棵树换回去
+     * （布局/尺寸一起变）——锁定承诺「布局/文本/尺寸的改动会被拒绝」被绕过。
+     */
+  it('版面已确认后：回退会话快照被拦（提示解锁，版面不动）', async () => {
+    vi.stubGlobal('fetch', mockFetch(true))
+    render(
+      <MemoryRouter initialEntries={['/workspace?session=s-beautify&from=draft']}>
+        <WorkspacePage />
+      </MemoryRouter>,
+    )
+    // 前置：锁定态已从服务端读回
+    expect(await screen.findByTestId('convert-free')).toBeDisabled()
+
+    fireEvent.click(screen.getByTestId('activity-ai'))
+    fireEvent.click(await screen.findByTestId('session-snapshots-toggle'))
+    fireEvent.change(screen.getByTestId('snapshot-label'), { target: { value: '基线' } })
+    fireEvent.click(screen.getByTestId('snapshot-save'))
+
+    const restore = await screen.findByTestId(/^snapshot-restore-/)
+    fireEvent.click(restore)
+
+    expect(await screen.findByText(/版面已确认：不能回退到旧快照/)).toBeInTheDocument()
   })
 })

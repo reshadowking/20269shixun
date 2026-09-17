@@ -872,6 +872,14 @@ export class DesignStore {
   /** 恢复最近一次快照（撤销 AI 版本）；无快照返回 false */
   popSnapshot(): boolean {
     if (this._blockedByRole('撤销优化')) return false
+    // 2026-09-17：版面锁定（版面已确认）阶段不允许**整树回退**——它会把布局/尺寸一起改回去，
+    // 与「转自由画布」「智能优化」同一口径（后两者早已被拦）。
+    // 三处内部回退（优化失败 / 自动冻结回滚 / 转自由画布失败）都在"锁定已被前置拦截"的路径里，
+    // 所以这里加锁不会破坏那些回滚。
+    if (this.beautifyLock) {
+      this._rejectBlocked('版面已确认：不能回退到旧版面（会改变布局/尺寸），请先解除版面锁定')
+      return false
+    }
     const snapshot = this.snapshots.pop()
     if (!snapshot) return false
     this.resetDesign(snapshot)

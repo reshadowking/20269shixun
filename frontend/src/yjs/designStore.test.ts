@@ -228,7 +228,7 @@ describe('DesignStore 双实例同步（双向 update 转发模拟 y-websocket�
 })
 
 describe('快照撤销（E3-2）与指定位置插入（E3-3）', () => {
-  it('pushSnapshot 后修改可 popSnapshot 恢复', () => {
+ it('pushSnapshot 后修改可 popSnapshot 恢复', () => {
     const store = new DesignStore(undefined, sample())
     store.pushSnapshot()
     store.updateNode('root', (n) => ({ ...n, style: { ...n.style, gap: 99 } }))
@@ -237,6 +237,21 @@ describe('快照撤销（E3-2）与指定位置插入（E3-3）', () => {
     expect(store.popSnapshot()).toBe(true)
     expect(store.getDesign().style?.gap).toBe(8) // 恢复为快照时的原值
     expect(store.canUndoOptimize).toBe(false)
+  })
+
+  it('版面已确认（锁定）时 popSnapshot 被拒：整树回退会改布局，与转自由画布同口径（2026-09-17）', () => {
+    const store = new DesignStore(undefined, sample())
+    store.pushSnapshot()
+    store.updateNode('root', (n) => ({ ...n, style: { ...n.style, gap: 99 } }))
+    store.setBeautifyLock(true)
+
+    const blocked: string[] = []
+    store.subscribeBlocked((r) => blocked.push(r))
+
+    expect(store.popSnapshot()).toBe(false)
+    expect(store.getDesign().style?.gap, '画布不应被回退').toBe(99)
+    expect(store.canUndoOptimize, '快照仍保留（解锁后仍可用）').toBe(true)
+    expect(blocked.join(' ')).toContain('版面已确认')
   })
 
   it('无快照时 popSnapshot 返回 false', () => {
