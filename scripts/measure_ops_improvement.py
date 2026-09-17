@@ -50,7 +50,26 @@ def _run(design: dict, instruction: str, ops_enabled: bool) -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser(description="T23 ops 化前后对照（需真实模型）")
     parser.add_argument("--design", required=True, help="当前设计树 JSON 文件（导出/保存得到）")
+    parser.add_argument(
+        "--allow-real",
+        action="store_true",
+        help="允许真跑（会产生真实 API 费用）；不加则遇到 real 模式直接拒绝",
+    )
     args = parser.parse_args()
+
+    # 2026-09-17：与 run_golden.py 同一道硬护栏。
+    # 本脚本自己 `LLMClient()` 读 backend/.env（real + 真实 Key），**与后端进程的环境变量无关** ——
+    # 在另一个 shell 里设过 LLM_MODE=mock 并不能拦住它（run_golden 那边正是这么误烧了 9 次调用）。
+    from app.services.llm import LLMClient
+
+    probe = LLMClient()
+    mode = "mock（不打外网）" if probe.is_mock else "REAL（会真的调用付费 API，产生费用）"
+    print(f"[模式] {mode} | 端点 {probe.cfg('llm_base_url')} | 模型 {probe.cfg('llm_model')}")
+    if not probe.is_mock and not args.allow_real:
+        print("[拒绝] 当前是 REAL 模式：本脚本要跑 3 条指令 × 2 种配置 = 6 次真实调用。")
+        print("       确实要跑 → 加 `--allow-real`；只想离线看结构 → 在**同一个命令**里带上 LLM_MODE=mock。")
+        return 2
+
     design = json.loads(Path(args.design).read_text(encoding="utf-8"))
 
     rows = []
