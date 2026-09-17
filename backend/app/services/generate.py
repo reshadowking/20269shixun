@@ -734,6 +734,10 @@ class GenerateResult:
     ai_calls: list[dict] = field(default_factory=list)
     # T23：本轮 ops 落地的受影响节点 id（空表示走的是整树兼容路径）
     ops_applied: list[str] = field(default_factory=list)
+    # 2026-09-17：本轮被 **remove op 显式删除** 的节点 id（T16 结构闸门用的同一份集合）。
+    # 黄金集回归（scripts/run_golden.py）靠它区分"显式删除"与"意外丢节点"——
+    # 否则「删掉那一行」这类合法用例会被判成"丢了节点"。
+    ops_removed: list[str] = field(default_factory=list)
 
 
 # ---- T4 前置：mock 模式增量修改（确定性关键词规则，无 LLM）----
@@ -937,6 +941,9 @@ def generate_design(
                 error = f"参数填充调用失败：{describe_api_error(exc)}"
                 filled = None
         ops_applied: list[str] = []
+        # 必须与 ops_applied 一起初始化在分支外：兜底路径（filled is None）会跳过下面的 else，
+        # 若只在 else 里定义，末尾引用 `ops_removed` 就是 NameError（会被全量套件抓到）。
+        ops_removed: set[str] = set()
         no_change = False
         if filled is None or not isinstance(filled, dict):
             fallback = True
@@ -951,7 +958,6 @@ def generate_design(
             filled = default
         else:
             # T23：编辑模式优先按 ops 落地（显式增量）；返回整树时走下方兼容路径
-            ops_removed: set[str] = set()
             if is_edit and isinstance(filled.get("ops"), list):
                 if not filled["ops"]:
                     # 空 ops = 模型判定"无需改动"（提示词就是这么要求的）→ 合法结果，不是失败。
@@ -1049,4 +1055,5 @@ def generate_design(
         degraded=degraded,
         ai_calls=client.calls,
         ops_applied=ops_applied,
+        ops_removed=sorted(ops_removed),
     )

@@ -42,7 +42,14 @@ def _run_case(case: dict, initial: dict, client) -> dict:
         result = generate_design(case["instruction"], client)
     elapsed = time.perf_counter() - started
     fill_tokens = sum(c.get("tokens_out", 0) for c in client.calls if c.get("kind") == "fill")
-    kept = set(_ids(design)) - set(_ids(result.design)) if case["mode"] == "edit" else set()
+    # T16 口径：既有节点 id 保留率 100%，**remove 显式声明的除外**。
+    # 2026-09-17 修：原来直接 `before_ids - after_ids`，于是黄金集里「删掉『忘记密码 · 注册账号』那一行」
+    # 这种合法删除会被判成"丢了节点"（与文件头写的口径自相矛盾，真实跑必红）。
+    kept = (
+        set(_ids(design)) - set(_ids(result.design)) - set(getattr(result, "ops_removed", []))
+        if case["mode"] == "edit"
+        else set()
+    )
     return {
         "id": case["id"],
         "mode": case["mode"],
@@ -87,6 +94,11 @@ def main() -> int:
     initial = json.loads((ROOT / spec["initial_design"]).read_text(encoding="utf-8"))
     wanted = {s for s in args.only.split(",") if s}
     cases = [c for c in spec["cases"] if not wanted or c["id"] in wanted]
+    if not cases:
+        # 2026-09-17：以前空选择会走到最后输出"通过 0/0"并 exit 0（还会打一句
+        # "全部用例处于 mock 模式"）—— 一个 --only 拼错的取证工具会给出**假绿**。
+        print(f"[ERROR] 没有匹配的用例（检查 --only 拼写）：{args.only or '(未指定)'}")
+        return 2
 
     rows, failures = [], []
     for case in cases:
