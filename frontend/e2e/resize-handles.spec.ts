@@ -7,7 +7,7 @@
  *
  * 前置：后端 :8000（mock）+ Vite :5173。
  */
-import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
+import { expect, test, type Page } from '@playwright/test'
 
 const API = 'http://localhost:8000'
 
