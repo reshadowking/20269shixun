@@ -235,6 +235,22 @@ def python_generate_code(design: dict) -> str:
                     for item in (props.get("links") or []) if isinstance(item, dict)
                 )
                 lines.append(f"{pad}<nav style={{\"{style}\"}}><strong>{title}</strong>{links}</nav>")
+            elif ctype == "switch":
+                # T9 组件：开关 = 轨道 + 标签（真实导出器输出 label；此前落进 else 分支被丢掉，
+                # 让含 switch 的模板文本一致率虚低——口径修正 2026-09-17）
+                label = html.escape(str(props.get("label", "")))
+                checked = "true" if props.get("checked") else "false"
+                lines.append(
+                    f'{pad}<div style={{"{style}"}}><span role="switch" aria-checked="{checked}"></span><span>{label}</span></div>'
+                )
+            elif ctype == "tabs":
+                # T9 组件：标签页 = tablist > 每个 tab 一个 button（文本取 items[].label）
+                items = props.get("items") or []
+                tabs_html = "".join(
+                    f'<button type="button">{html.escape(str(item.get("label", "")))}</button>'
+                    for item in items if isinstance(item, dict)
+                )
+                lines.append(f'{pad}<div role="tablist" data-component="tabs" style={{"{style}"}}>{tabs_html}</div>')
             else:
                 text = html.escape(str(props.get("text", "") or props.get("title", "") or ""))
                 lines.append(f'{pad}<{tag} data-component="{ctype}" style={{"{style}"}}>{text}</{tag}>')
@@ -254,7 +270,12 @@ def run(input_dir: Path, output_path: Path) -> dict:
     """批量评测目录下所有设计稿 JSON。"""
     reports: dict[str, dict] = {}
     output_name = output_path.name
+    # 2026-09-17：跳过"看起来是评测产物"的文件——`--output` 指到 `--input` 目录里时
+    # （文档示例就是这么写的），下一轮会把上一轮的 report.json 当设计稿，平均分虚高
+    # （实测 83.1% vs 真实值）。这里显式排除，避免"越跑越高"的假指标。
     for design_file in sorted(input_dir.glob("*.json")):
+        if design_file.stem.startswith("report") or design_file.name.endswith("-report.json"):
+            continue
         if design_file.name == output_name:
             continue  # 跳过报告文件本身
         design = json.loads(design_file.read_text(encoding="utf-8"))
