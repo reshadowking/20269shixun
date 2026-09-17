@@ -11,6 +11,7 @@ import { useNavigate } from 'react-router-dom'
 
 import { ASSET_VIEWS, ASSET_VIEW_LABEL, readAssetView, writeAssetView, type AssetView } from '@/lib/assetView'
 import { api } from '@/lib/api'
+import { loadLatestDraft } from '@/lib/designSession'
 
 interface AssetRow {
   id: number
@@ -461,6 +462,18 @@ export default function AssetsPage() {
     }
   }
 
+  /**
+   * 2026-09-17 修「插入 →」落错地方：`/workspace?asset=<id>` 不带 session/design/from 时，
+   * 工作台会**当场随机一个新会话**并展示演示稿 —— 用户"想插进的那份稿"被丢在身后，画布上
+   * 是一份没有图片组件的优惠券 demo（探针实测）。与首页「继续上次编辑」同口径：带上最近
+   * 草稿所在会话；本地没有任何草稿时才退回原来的 URL。
+   */
+  const openInWorkspace = (row: AssetRow) => {
+    const latest = loadLatestDraft()
+    const back = latest?.sessionKey ? `&session=${latest.sessionKey}&from=draft` : ''
+    navigate(`/workspace?asset=${row.id}${back}`)
+  }
+
   const used = data?.used_bytes ?? 0
   const count = data?.images.length ?? 0
   /**
@@ -718,7 +731,7 @@ export default function AssetsPage() {
                     row={row}
                     onCopy={() => void copyUrl(row)}
                     onDelete={() => void remove(row)}
-                    onUse={() => navigate(`/workspace?asset=${row.id}`)}
+                    onUse={() => openInWorkspace(row)}
                   />
                 </div>
               </div>
@@ -777,7 +790,7 @@ export default function AssetsPage() {
                     row={row}
                     onCopy={() => void copyUrl(row)}
                     onDelete={() => void remove(row)}
-                    onUse={() => navigate(`/workspace?asset=${row.id}`)}
+                    onUse={() => openInWorkspace(row)}
                   />
                 </div>
               </div>

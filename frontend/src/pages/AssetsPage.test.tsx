@@ -1,6 +1,6 @@
 /** T38：「我的资产」页——列表/配额展示、空态、删除调用、上传走 multipart。 */
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import AssetsPage from './AssetsPage'
@@ -598,5 +598,66 @@ describe('AssetsPage 过期响应', () => {
     await new Promise((r) => setTimeout(r, 60))
     expect(screen.queryByText('stale-folder2.png')).not.toBeInTheDocument()
     expect(screen.getByText('latest.png')).toBeInTheDocument()
+  })
+})
+
+/**
+ * 「插入 →」跳到哪（2026-09-17）。
+ *
+ * 原来一律跳 `/workspace?asset=<id>`：工作台在没有 session/design/from 参数时会**当场随机一个
+ * 新会话**并显示演示稿（探针实测：画布上是 618 优惠券 demo，且它**没有图片组件**），
+ * 用户"想插进的那份稿"被丢在身后。现在与首页「继续上次编辑」同口径，带上最近草稿所在会话。
+ */
+describe('AssetsPage（插入到画布）', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    localStorage.clear()
+  })
+
+  function LocationProbe() {
+    return <div data-testid="probe-loc">{useLocation().search}</div>
+  }
+
+  function renderWithWorkspaceRoute() {
+    return render(
+      <MemoryRouter initialEntries={['/']}>
+        <Routes>
+          <Route path="/" element={<AssetsPage />} />
+          <Route
+            path="/workspace"
+            element={
+              <>
+                <LocationProbe />
+              </>
+            }
+          />
+        </Routes>
+      </MemoryRouter>,
+    )
+  }
+
+  it('本地有草稿：带上它所在会话（否则落到新会话 + 演示稿）', async () => {
+    localStorage.setItem(
+      'design-draft-s-mine',
+      JSON.stringify({ design: { id: 'root', type: 'frame' }, meta: { updatedAt: Date.now() } }),
+    )
+    vi.stubGlobal('fetch', mockFetch({ images: [IMAGE], used_bytes: 2048, limit_count: 50, limit_bytes: 20971520 }))
+    renderWithWorkspaceRoute()
+
+    fireEvent.click(await screen.findByTestId('asset-use-7'))
+
+    expect(await screen.findByTestId('probe-loc')).toHaveTextContent('asset=7')
+    expect(screen.getByTestId('probe-loc')).toHaveTextContent('session=s-mine')
+    expect(screen.getByTestId('probe-loc')).toHaveTextContent('from=draft')
+  })
+
+  it('本地没有任何草稿：退回原来的 URL（保持既有行为）', async () => {
+    vi.stubGlobal('fetch', mockFetch({ images: [IMAGE], used_bytes: 2048, limit_count: 50, limit_bytes: 20971520 }))
+    renderWithWorkspaceRoute()
+
+    fireEvent.click(await screen.findByTestId('asset-use-7'))
+
+    expect(await screen.findByTestId('probe-loc')).toHaveTextContent('asset=7')
+    expect(screen.getByTestId('probe-loc').textContent).not.toContain('session=')
   })
 })
