@@ -29,6 +29,7 @@ import { BLANK_DESIGN, DEMO_DESIGNS } from '@/design/demoData'
 import { loadDraft, saveDraft } from '@/lib/designSession'
 import { designToReactApp } from '@/export/designToReact'
 import { findNode, findParent as findParentOf, genId } from '@/design/tree'
+import { diffDesign } from '@/design/applyDiff'
 import type { ComponentType, DesignNode } from '@/design/types'
 import { api } from '@/lib/api'
 import SessionBar from '@/components/chat/SessionBar'
@@ -860,9 +861,10 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
       }
       store.pushSnapshot()
       setUndoCount((c) => c + 1)
-      // TODO(③)：改走差量落地（`@/design/applyDiff` 已就绪并有用例）——接线时
-      // `WorkspacePage.locked-edit.test.tsx`「合法效果照常落地」会红，需先查清再切。
-      store.resetDesign(resp.design)
+      // 2026-09-17：**差量落地**（原来是整树 clear+重建：并发下会吞掉队友在这期间对别的
+      // 节点的改动，并让所有人画布整体重挂）。根 id 变了这类（空白稿 empty → root）由
+      // diffDesign 返回 `replace`，自动退化为整体替换。
+      store.applyAiDiff(diffDesign(design, resp.design))
       setSelectedIds(new Set())
       const changed = resp.changed_ids?.length ? resp.changed_ids : changedIds
       setHighlightIds(new Set(changed))

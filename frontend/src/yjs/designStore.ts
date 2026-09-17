@@ -808,6 +808,33 @@ export class DesignStore {
     )
   }
 
+  /**
+   * 落地 AI 修改的**差量**（2026-09-17，替代原来的整树 `resetDesign`）。
+   *
+   * 两条语义要点：
+   * 1) 只写被改动的节点 → 队友在这期间对**其它节点**的并发改动不会被整树替换吞掉；
+   * 2) 期间**临时关掉 beautifyLock 守卫**：锁定的权威判定在**服务端闸门**
+   *    （`/api/apply-locked-edit` 按会话查表），客户端这把锁只是 UX 护栏。
+   *    旧实现 `resetDesign` 本来就不经过该守卫；若这里不关，服务端放行的合法效果
+   *    会被客户端二次否决（实测：`locked-edit` 用例「合法效果照常落地」直接红）。
+   */
+  applyAiDiff(diff: { replace?: DesignNode; removed: string[]; moved: Array<{ id: string; toParent: string; index: number }>; updated: Array<{ id: string; node: DesignNode }>; added: Array<{ parentId: string; index: number; node: DesignNode }> }): void {
+    if (diff.replace) {
+      this.resetDesign(diff.replace)
+      return
+    }
+    const lock = this.beautifyLock
+    this.beautifyLock = false
+    try {
+      for (const id of diff.removed) this.removeNode(id)
+      for (const m of diff.moved) this.moveNodeTo(m.id, m.toParent, m.index)
+      for (const u of diff.updated) this.updateNode(u.id, () => u.node)
+      for (const a of diff.added) this.insertChild(a.parentId, a.node, a.index)
+    } finally {
+      this.beautifyLock = lock
+    }
+  }
+
   /** 在指定父节点 children 末尾插入新节点（组件面板添加）；index 指定插入位置（E3-3 推荐落位） */
   insertChild(parentId: string, node: DesignNode, index?: number) {
     if (this._blockedByRole('添加组件')) return

@@ -12,6 +12,12 @@
 import type { DesignNode } from '@/design/types'
 
 export interface DesignDiff {
+  /**
+   * 根 id 变了 ⇒ 这不是"同一张画布的修改"，而是**换了另一棵树**（例如空白稿 empty → root、
+   * 或 AI 重新生成）。此时只能整体替换：下面三个数组都会是空的，`replace` 带上整棵新树。
+   * 上轮接线失败正是漏了这一类（`locked-edit` 用例里 before=empty/after=root）。
+   */
+  replace?: DesignNode
   /** 删除（按深度倒序应用，先删深层） */
   removed: string[]
   /** 换父级 */
@@ -53,6 +59,9 @@ function ownKey(node: DesignNode): string {
 }
 
 export function diffDesign(before: DesignNode, after: DesignNode): DesignDiff {
+  if (before.id !== after.id) {
+    return { replace: after, removed: [], moved: [], updated: [], added: [] }
+  }
   const b = flatten(before)
   const a = flatten(after)
   const diff: DesignDiff = { removed: [], moved: [], updated: [], added: [] }
@@ -83,6 +92,7 @@ export function diffDesign(before: DesignNode, after: DesignNode): DesignDiff {
 
 /** 能施加差量的最小 store 接口（便于单测注入） */
 export interface DiffTarget {
+  resetDesign(design: DesignNode): void
   removeNode(id: string): void
   moveNodeTo(id: string, newParentId: string, index: number): void
   updateNode(id: string, updater: (node: DesignNode) => DesignNode): void
@@ -94,6 +104,10 @@ export interface DiffTarget {
  * 每一步都是**局部事务**（因此队友在其它节点上的并发改动不会被整树替换吞掉）。
  */
 export function applyDesignDiff(store: DiffTarget, diff: DesignDiff): void {
+  if (diff.replace) {
+    store.resetDesign(diff.replace)
+    return
+  }
   for (const id of diff.removed) store.removeNode(id)
   for (const m of diff.moved) store.moveNodeTo(m.id, m.toParent, m.index)
   for (const u of diff.updated) store.updateNode(u.id, () => u.node)

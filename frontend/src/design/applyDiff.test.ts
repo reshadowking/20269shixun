@@ -111,4 +111,41 @@ describe('diffDesign / applyDesignDiff', () => {
     expect(s.getDesign().children?.map((c) => c.id)).toEqual(['a'])
     s.destroy()
   })
+
+  it('根 id 不同 ⇒ 整体替换（上轮接线失败的那一类：empty → root）', () => {
+    const s = store()
+    const before: DesignNode = { id: 'empty', type: 'frame' } // 画布还没加载时的空稿
+    const after: DesignNode = {
+      id: 'root',
+      type: 'frame',
+      style: { layout: 'column' },
+      children: [{ id: 't1', type: 'text', props: { text: 'AI 新标题' }, style: {} }],
+    }
+
+    const diff = diffDesign(before, after)
+    expect(diff.replace).toEqual(after)
+    expect([diff.removed, diff.moved, diff.updated, diff.added].every((x) => x.length === 0)).toBe(true)
+
+    applyDesignDiff(s, diff)
+    expect(s.getDesign().id).toBe('root')
+    expect(s.getDesign().children?.[0].props?.text).toBe('AI 新标题')
+    s.destroy()
+  })
+
+  it('锁定态（版面已确认）下 AI 差量仍能落地——锁的权威在服务端闸门，客户端不二次否决', () => {
+    const s = store()
+    s.setBeautifyLock(true)
+    const before = s.getDesign()
+    const after: DesignNode = {
+      ...before,
+      children: [{ ...before.children![0], props: { text: '服务端已放行的文案' } }, before.children![1]],
+    }
+
+    s.applyAiDiff(diffDesign(before, after))
+    expect(s.getDesign().children?.[0].props?.text).toBe('服务端已放行的文案')
+    // 但用户自己的直接编辑仍被锁挡住（UX 护栏没被拆掉）
+    s.updateNode('a', (n) => ({ ...n, props: { ...n.props, text: '用户手改' } }))
+    expect(s.getDesign().children?.[0].props?.text).toBe('服务端已放行的文案')
+    s.destroy()
+  })
 })
