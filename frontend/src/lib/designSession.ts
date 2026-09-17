@@ -35,9 +35,19 @@ export function loadDraft(sessionKey?: string): Draft | null {
   return loadJson(draftKey(sessionKey), isDraft)
 }
 
-export function saveDraft(sessionKey: string | undefined, design: DesignNode, meta: Partial<DesignSessionMeta> = {}): void {
+/**
+ * 保存草稿；返回**是否写成功**。
+ *
+ * 2026-09-17：此前返回 void，`saveJson` 的失败（localStorage 配额满 / 被禁用）被静默吞掉——
+ * 用户以为草稿一直在，关掉标签页就什么都没了。调用方据此给可见提示（服务端保存仍可兜底）。
+ */
+export function saveDraft(
+  sessionKey: string | undefined,
+  design: DesignNode,
+  meta: Partial<DesignSessionMeta> = {},
+): boolean {
   const prev = loadDraft(sessionKey)
-  saveJson(draftKey(sessionKey), {
+  return saveJson(draftKey(sessionKey), {
     design,
     meta: {
       savedId: meta.savedId ?? prev?.meta.savedId,

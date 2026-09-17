@@ -294,12 +294,20 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
   }, [loaded, searchParams])
 
   // P1 草稿自动保存（缺陷 5/8 + 缺陷 4：按会话分片，300ms 防抖）
+  /** 草稿写失败只提示一次（否则 300ms 防抖会让提示反复闪） */
+  const draftWarnedRef = useRef(false)
   useEffect(() => {
     if (!loaded) return
-    const timer = window.setTimeout(
-      () => saveDraft(sessionKey, design, { savedId: savedMeta.id, savedName: savedMeta.name }),
-      300,
-    )
+    const timer = window.setTimeout(() => {
+      const ok = saveDraft(sessionKey, design, { savedId: savedMeta.id, savedName: savedMeta.name })
+      // 2026-09-17：本地存储写失败（配额满 / 被禁用）以前是**静默**的 —— 用户以为草稿一直在，
+      // 关掉标签页就什么都没了。这里提示一次（同一会话不重复刷屏），并指路服务端保存。
+      if (!ok && !draftWarnedRef.current) {
+        draftWarnedRef.current = true
+        setLockHint('本地存储已满或不可用：草稿没能自动保存，请点右上角「💾 保存」存到服务器')
+        window.setTimeout(() => setLockHint(''), 10000)
+      }
+    }, 300)
     return () => window.clearTimeout(timer)
   }, [design, savedMeta, loaded, sessionKey])
 
