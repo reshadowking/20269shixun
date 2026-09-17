@@ -19,3 +19,15 @@ export function readAutoFreeze(): boolean {
 export function writeAutoFreeze(on: boolean): void {
   writeStorage(AUTO_FREEZE_KEY, on ? '1' : '0')
 }
+
+/**
+ * 自动冻结的前置守卫（纯函数，便于单测）。
+ *
+ * 必须与「🔓 转自由画布」按钮同一套条件——**版面已确认（锁定）**和**只读访客**下，
+ * `store.convertToFreeLayout()` 一定会拒绝；此时若还先 `pushSnapshot()`，就会留下
+ * 一个「没有真实改动的撤销步」：撤销按钮亮着、按了却什么都不发生（撤销计数只增不减）。
+ * 已经是 free 的画布也直接跳过（幂等，不重复冻结）。
+ */
+export function canAutoFreeze(state: { locked: boolean; readOnly: boolean; layout?: string }): boolean {
+  return !state.locked && !state.readOnly && state.layout !== 'free'
+}

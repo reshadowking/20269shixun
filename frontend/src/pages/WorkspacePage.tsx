@@ -30,7 +30,7 @@ import { loadDraft, saveDraft } from '@/lib/designSession'
 import { designToReactApp } from '@/export/designToReact'
 import { findNode, findParent as findParentOf, genId } from '@/design/tree'
 import { diffDesign, overlappingIds } from '@/design/applyDiff'
-import { readAutoFreeze, writeAutoFreeze } from '@/lib/autoFreeze'
+import { canAutoFreeze, readAutoFreeze, writeAutoFreeze } from '@/lib/autoFreeze'
 import type { ComponentType, DesignNode } from '@/design/types'
 import { api } from '@/lib/api'
 import SessionBar from '@/components/chat/SessionBar'
@@ -713,6 +713,13 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
       window.setTimeout(() => setLockHint(''), 4000)
       return
     }
+    // 版面已确认（锁定）阶段只有效果可改：优化会改 gap/padding/对齐（都是布局字段），
+    // 而落库走 resetDesign（整树替换、不过 _allowedWhileLocked），与 AI 路径的闸门口径不一致。
+    if (store.isBeautifyLocked) {
+      setLockHint('版面已确认：请先解除版面锁定再做布局优化')
+      window.setTimeout(() => setLockHint(''), 4000)
+      return
+    }
     setOptimizing(true)
     try {
       store.pushSnapshot()
@@ -747,9 +754,11 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
    */
   const autoFreezeAfterAi = async () => {
     if (!readAutoFreeze()) return
-    const canvas = canvasRef.current
     const current = store.getDesign()
-    if (!canvas || current.style?.layout === 'free' || !current.children?.length) return
+    // 与「转自由画布」按钮同一套守卫：锁定/只读下 store 必然拒绝，先推快照只会留下空撤销步
+    if (!canAutoFreeze({ locked: store.isBeautifyLocked, readOnly: store.isReadOnly, layout: current.style?.layout })) return
+    const canvas = canvasRef.current
+    if (!canvas || !current.children?.length) return
     await waitForLayoutStable(pageRef.current?.querySelector<HTMLElement>('[data-testid="canvas-sheet"]') ?? null)
     const childIds = (store.getDesign().children ?? []).filter((c) => !c.hidden).map((c) => c.id)
     const { measurements, missing } = canvas.measureFreeze(store.getDesign().id, childIds)
@@ -759,7 +768,12 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
       .map((c) => ({ id: c.id, x: c.x as number, y: c.y as number, width: Number(c.style?.width ?? 0), height: Number(c.style?.height ?? 0) }))
     store.pushSnapshot()
     setUndoCount((c) => c + 1)
-    store.convertToFreeLayout(store.getDesign().id, updates)
+    const result = store.convertToFreeLayout(store.getDesign().id, updates)
+    if (!result.ok) {
+      // store 仍拒绝（节点在测量期间被删等）：把快照与计数退回，不留"按了没反应"的撤销步
+      store.popSnapshot()
+      setUndoCount((c) => Math.max(0, c - 1))
+    }
   }
 
   const handleConvertToFree = async () => {
@@ -957,8 +971,14 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
             variant="outline"
             className="h-7 text-xs"
             data-testid="optimize-layout"
-            disabled={optimizing || readOnly}
-            title={readOnly ? '只读访客：不能修改画布' : undefined}
+            disabled={optimizing || readOnly || layoutLocked}
+            title={
+              readOnly
+                ? '只读访客：不能修改画布'
+                : layoutLocked
+                  ? '版面已确认：请先解除版面锁定再做布局优化'
+                  : undefined
+            }
             onClick={handleOptimize}
           >
             ✨ 智能优化布局

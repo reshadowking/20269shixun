@@ -119,6 +119,8 @@ describe('T4 批1：锁定期 AI 落地闸门（页面接线）', () => {
 
     // 锁状态从服务端初始化（item 10）：layoutLocked=true → 转自由画布按钮禁用
     expect(await screen.findByTestId('convert-free')).toBeDisabled()
+    // 同一套口径：布局类操作在锁定阶段都不可用（智能优化会改 gap/padding/对齐，且落库走整树替换）
+    expect(screen.getByTestId('optimize-layout')).toBeDisabled()
     await openAiPanel()
     typeAndSend('把标题改成 AI 新标题')
     // 可读提示出现（面板消息 + 工作台横幅同源）
@@ -144,6 +146,7 @@ describe('T4 批1：锁定期 AI 落地闸门（页面接线）', () => {
 
     // 未锁定初始化：转自由画布按钮可用
     expect(await screen.findByTestId('convert-free')).toBeEnabled()
+    expect(screen.getByTestId('optimize-layout')).toBeEnabled()
     await openAiPanel()
     typeAndSend('把标题改成 AI 新标题')
     // 修改落地：AI 的文本节点出现在画布
