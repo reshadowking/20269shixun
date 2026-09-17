@@ -1,0 +1,52 @@
+# 构建上下文 = 仓库根（compose 里 context: ..），这里排除掉与镜像无关、又大又容易读不了的东西。
+#
+# 2026-09-17 实测：没有这个文件时 docker compose build 会把整个仓库（backend/.venv + frontend/node_modules
+# ≈ 0.4GB，外加各种缓存/日志/临时目录）全部发给 daemon；只要其中**任何一个**目录当前用户读不了
+# （本项目真的踩到过：backend/.pytest-tmp2 的 ACL 连属主都不是本人），构建就直接失败：
+#     checking context: can't stat '...\backend\.pytest-tmp2'
+# 另外后端 Dockerfile 只 COPY app/ 与 shared/，所以 data/（里面有 llm-config.json 这种密钥文件）
+# 本来就不该进上下文——顺手也挡住将来误写成 COPY . 的情况。
+
+# 依赖 / 虚拟环境（容器内自己装）
+**/node_modules
+backend/.venv
+.venv
+
+# 缓存与临时目录
+**/__pycache__
+**/*.py[cod]
+**/.pytest_cache
+**/.pytest-tmp*
+**/.ruff_cache
+**/.mypy_cache
+**/.vite
+
+# 测试产物
+frontend/test-results
+frontend/playwright-report
+**/coverage
+**/.coverage
+
+# 版本控制 / 编辑器 / 本地产物
+.git
+.github
+.githooks
+.agents
+.zcode
+.vscode
+.idea
+**/*.log
+logs*
+lost
+
+# 本地数据与密钥（运行期靠 volume 挂载，不进镜像）
+backend/data
+backend/logs
+**/*.db
+**/*.sqlite3
+
+# 文档与评审材料（镜像里用不到）
+docs
+newdocs
+scripts
+test-results
