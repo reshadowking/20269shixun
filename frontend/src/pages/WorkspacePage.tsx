@@ -759,7 +759,12 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
     if (!canAutoFreeze({ locked: store.isBeautifyLocked, readOnly: store.isReadOnly, layout: current.style?.layout })) return
     const canvas = canvasRef.current
     if (!canvas || !current.children?.length) return
-    await waitForLayoutStable(pageRef.current?.querySelector<HTMLElement>('[data-testid="canvas-sheet"]') ?? null)
+    const stable = await waitForLayoutStable(
+      pageRef.current?.querySelector<HTMLElement>('[data-testid="canvas-sheet"]') ?? null,
+    )
+    // 等不到就**不动**：拿偏小的尺寸自动冻结 = 把"偶发错乱"变成默认行为。
+    // 保留 flex 交给用户，或等图片显示出来后手动点「转自由画布」。
+    if (!stable.settled) return
     const childIds = (store.getDesign().children ?? []).filter((c) => !c.hidden).map((c) => c.id)
     const { measurements, missing } = canvas.measureFreeze(store.getDesign().id, childIds)
     if (!measurements.length || missing.length) return
@@ -797,7 +802,19 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
       // 2026-09-17：先等版面稳定（字体/图片/两帧 rAF，带超时）再测量——
       // "测早了 → 冻结写进的小尺寸把版面压错位"是验收反馈里排第一的嫌疑。
       // 查询限定在本页子树（T42 的教训：全局 querySelector 会命中别的画布/预览层）。
-      await waitForLayoutStable(pageRef.current?.querySelector<HTMLElement>('[data-testid="canvas-sheet"]') ?? null)
+      const stable = await waitForLayoutStable(
+        pageRef.current?.querySelector<HTMLElement>('[data-testid="canvas-sheet"]') ?? null,
+      )
+      if (!stable.settled) {
+        // 超时（图片还在下载 / 字体还没就绪）→ 宁可取消，也别把偏小的尺寸冻结进 style
+        const who = stable.pendingImages
+          ? `${stable.pendingImages} 张图片还没加载完`
+          : stable.fontsPending
+            ? '字体还没就绪'
+            : '版面还在变化'
+        setErrorMsg(`已取消转换：${who}，此时测量会偏小并导致排版错乱。等画面稳定后重试即可。`)
+        return
+      }
       ;({ measurements, missing } = canvas.measureFreeze(design.id, childIds))
     } finally {
       convertingFreeRef.current = false

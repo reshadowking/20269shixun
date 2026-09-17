@@ -32,7 +32,7 @@ describe('waitForLayoutStable', () => {
     box.append(makeImg(true))
     const done = waitForLayoutStable(box, 5000)
     await vi.advanceTimersByTimeAsync(10)
-    await expect(done).resolves.toBeUndefined()
+    await expect(done).resolves.toEqual({ settled: true, pendingImages: 0, fontsPending: false })
   })
 
   it('有未完成的图片：必须等它 load 才返回（这是错乱的关键一步）', async () => {
@@ -71,12 +71,14 @@ describe('waitForLayoutStable', () => {
     expect(finished).toBe(true)
   })
 
-  it('超时兜底：图片永远不落定时也必须放行（默认上限内）', async () => {
+  it('超时兜底：图片永远不落定时也要返回（不能让按钮永久转圈），但必须标记 settled=false', async () => {
     const box = document.createElement('div')
     box.append(makeImg(false))
 
     let finished = false
-    const done = waitForLayoutStable(box, 300).then(() => {
+    let report: Awaited<ReturnType<typeof waitForLayoutStable>> | null = null
+    const done = waitForLayoutStable(box, 300).then((r) => {
+      report = r
       finished = true
     })
     await vi.advanceTimersByTimeAsync(100)
@@ -84,11 +86,26 @@ describe('waitForLayoutStable', () => {
     await vi.advanceTimersByTimeAsync(400)
     await done
     expect(finished, '卡住的图片不能把转自由画布永久挂住').toBe(true)
+    // 2026-09-17 修：超时返回时必须告诉调用方"没落定"，调用方据此中止冻结，
+    // 而不是拿偏小的尺寸照旧落库（那正是"偶发排版错乱"的第二条路径）。
+    expect(report).toEqual({ settled: false, pendingImages: 1, fontsPending: false })
   })
 
   it('el 为 null（画布还没挂上）也不抛错', async () => {
     const done = waitForLayoutStable(null, 100)
     await vi.advanceTimersByTimeAsync(200)
-    await expect(done).resolves.toBeUndefined()
+    // 没有容器 = 没有可等的东西：按"已落定"处理（后续测量自己会报 missing）
+    await expect(done).resolves.toEqual({ settled: true, pendingImages: 0, fontsPending: false })
+  })
+
+  it('超时收尾按"当下的真实状态"判定：刚好在超时前加载完的图片不算未落定（不误伤）', async () => {
+    const box = document.createElement('div')
+    const img = makeImg(false)
+    box.append(img)
+    const done = waitForLayoutStable(box, 50)
+    // 超时前一刻图片完成 → 收尾时它已 complete，不该再按"没落定"处理
+    Object.defineProperty(img, 'complete', { value: true, configurable: true })
+    await vi.advanceTimersByTimeAsync(100)
+    await expect(done).resolves.toEqual({ settled: true, pendingImages: 0, fontsPending: false })
   })
 })

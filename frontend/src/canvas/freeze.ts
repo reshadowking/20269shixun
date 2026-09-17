@@ -28,6 +28,19 @@ export interface FreezeMeasureResult {
   missing: string[]
 }
 
+/** `waitForLayoutStable` 的结果：settled=false 表示"等超时了，还有东西没落定"。 */
+export interface LayoutStableReport {
+  /**
+   * true = 字体与容器内所有 `<img>` 都已落定（两帧 rAF 也已完成）。
+   * **false 时调用方必须中止冻结**——此时测到的尺寸可能偏小，写进 style 就是"排版错乱"。
+   */
+  settled: boolean
+  /** 超时那一刻仍未落定的 `<img>` 数量（未 decode 完的图会把高度测小） */
+  pendingImages: number
+  /** 超时那一刻 web font 仍未就绪；环境没有 FontFaceSet（如 jsdom）时为 false */
+  fontsPending: boolean
+}
+
 /**
  * 等版面稳定再测量（2026-09-17）。
  *
@@ -37,12 +50,17 @@ export interface FreezeMeasureResult {
  *
  * 做法：等 `document.fonts.ready` + 容器内未完成的 `<img>` 落定（load 或 error）+ 两帧 rAF。
  * **带超时兜底**（默认 1200ms）：任何一项卡住也不会让「转自由画布」永远转圈。
+ *
+ * ⚠️ 超时 ≠ 可以照旧测量（2026-09-17 二次修）：超时那一刻没落定的图片/字体，
+ * 测出来的高度就是偏小的，照旧冻结正是"偶发错乱"的第二条路径。
+ * 因此本函数返回 `settled`，调用方在 false 时应当**中止**（手动按钮→给可读提示；
+ * 自动冻结→静默跳过，保留 flex），而不是拿可能过期的尺寸落库。
  * 纯函数式依赖注入（el / 全局对象都可传），便于单测。
  */
-export async function waitForLayoutStable(el: HTMLElement | null, timeoutMs = 1200): Promise<void> {
+export async function waitForLayoutStable(el: HTMLElement | null, timeoutMs = 1200): Promise<LayoutStableReport> {
+  const fonts = (globalThis.document as Document | undefined)?.fonts
   const timeout = new Promise<void>((resolve) => setTimeout(resolve, timeoutMs))
   const fontsReady = (async () => {
-    const fonts = globalThis.document?.fonts
     if (fonts?.ready) await fonts.ready
   })().catch(() => undefined)
   const imagesReady = el
@@ -66,7 +84,22 @@ export async function waitForLayoutStable(el: HTMLElement | null, timeoutMs = 12
     }
     raf(() => raf(() => resolve()))
   })
-  await Promise.race([Promise.all([fontsReady, imagesReady, twoFrames]).then(() => undefined), timeout])
+  let timedOut = false
+  await Promise.race([
+    Promise.all([fontsReady, imagesReady, twoFrames]).then(() => undefined),
+    timeout.then(() => {
+      timedOut = true
+    }),
+  ])
+  // 用**当下**的真实状态回答"到底还有谁没落定"，而不是靠记账推测：
+  // 超时那一刻刚好加载完的图片不该被算成"没落定"（避免无谓地取消冻结）。
+  const pendingImages = el ? Array.from(el.querySelectorAll('img')).filter((img) => !img.complete).length : 0
+  const fontsPending = !!fonts && fonts.status !== 'loaded'
+  return {
+    settled: !timedOut || (pendingImages === 0 && !fontsPending),
+    pendingImages,
+    fontsPending,
+  }
 }
 
 /**

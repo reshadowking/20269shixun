@@ -185,6 +185,46 @@ describe('measureChildren（公式：÷scale、只减 border）', () => {
  *   ① 不动点：把已冻结的结果再冻一次，必须一模一样（自动冻结会在每次 AI 落地后跑）；
  *   ② 作用域：只写直接子节点的 x/y/宽高，嵌套容器的内部一个字节都不动。
  */
+/**
+ * "偶发排版错乱"的机制复现（2026-09-17 二次修）。
+ *
+ * 图片还没 decode 完时它的盒子高度是偏小的（甚至接近 0）；此时测量并冻结，
+ * 就会把这个偏小的高度写进 `style.height`——图加载完后按真实尺寸渲染，于是
+ * 内容溢出/错位。所以"未落定"这件事必须能被调用方看见并据此中止，
+ * 而不是超时后照旧测量（旧实现在 1200ms 超时后就是这么干的）。
+ */
+describe('错乱机制：测量太早 → 冻结写进偏小的高度', () => {
+  function scene() {
+    const container = document.createElement('div')
+    const parent = document.createElement('div')
+    parent.setAttribute('data-node-id', 'root')
+    const kid = document.createElement('div')
+    kid.setAttribute('data-node-id', 'hero')
+    parent.append(kid)
+    container.append(parent)
+    parent.getBoundingClientRect = () => ({ left: 0, top: 0, width: 800, height: 600 }) as DOMRect
+    return { container, kid }
+  }
+
+  it('图未加载时测到 40 → 冻结写 40；图加载完后真实高度是 200（差 160，即错乱）', () => {
+    const { container, kid } = scene()
+    // ① 图片还没 decode 完：盒子只有 40 高
+    kid.getBoundingClientRect = () => ({ left: 0, top: 0, width: 800, height: 40 }) as DOMRect
+    const early = measureChildren(container, 'root', ['hero'], 1)
+    const earlyFrozen = freezeToFreeLayout([{ id: 'hero', type: 'component', componentType: 'image' }], early.measurements)
+    expect(earlyFrozen[0].style?.height).toBe(40)
+
+    // ② 图片落定：真实高度 200
+    kid.getBoundingClientRect = () => ({ left: 0, top: 0, width: 800, height: 200 }) as DOMRect
+    const settled = measureChildren(container, 'root', ['hero'], 1)
+    expect(settled.measurements[0].height).toBe(200)
+
+    // 结论：两次测量的差就是被冻结进树的错误量 —— 调用方必须用 settled=false 中止
+    expect(settled.measurements[0].height - (earlyFrozen[0].style?.height as number)).toBe(160)
+  })
+})
+
+
 describe('冻结的数学性质（防"越冻越偏"）', () => {
   const measurementsOf = (nodes: DesignNode[]): FreezeMeasurement[] =>
     nodes.map((n) => ({
