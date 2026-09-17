@@ -18,6 +18,12 @@ _global_bucket: tuple[float, float] = (0.0, 0.0)
 
 def _take(state: tuple[float, float], capacity: int, now: float, cost: int) -> tuple[bool, tuple[float, float]]:
     tokens, last = state
+    if capacity <= 0:
+        # 2026-09-17 修：`config.py` 明确写着「0 表示不限制」（与旁边的日配额同一约定），
+        # 但旧实现把 0 当成"容量为 0 的桶"→ 任何 cost>=1 的请求都被拒，
+        # 实测 `ai_rate_limit_per_minute=0` 会把生成**全部**拒掉（"限制 0 次/分钟"）。
+        # 这里按文档语义放行（容量 0/负 = 该维不限流），与 ai_daily_token_quota 的 0 一致。
+        return True, (0.0, now)
     refreshed = min(float(capacity), tokens + (now - last) * capacity / 60.0) if last else float(capacity)
     if refreshed >= cost:
         return True, (refreshed - cost, now)

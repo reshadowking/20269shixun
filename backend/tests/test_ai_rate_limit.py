@@ -30,6 +30,25 @@ class TestRateLimit:
         resp = client.post("/api/generate/explore", json={"prompt": "设计一个登录页"}, headers=auth_headers)
         assert resp.status_code == 429  # cost=2 > 额度 1
 
+    def test_zero_means_unlimited(self, client, auth_headers, monkeypatch):
+        """`config.py` 写着「0 表示不限制」（与日配额同一约定）。
+
+        2026-09-17 实测：旧实现把 0 当"容量为 0 的桶"，于是 **每次生成都被拒**
+        （"生成过于频繁，请稍后再试（限制 0 次/分钟）"）——想关掉限流反而把功能锁死。
+        """
+        monkeypatch.setattr(get_settings(), "ai_rate_limit_per_minute", 0)
+        monkeypatch.setattr(get_settings(), "ai_global_rate_limit_per_minute", 0)
+        for _ in range(3):
+            resp = client.post("/api/generate", json={"prompt": "设计一个登录页"}, headers=auth_headers)
+            assert resp.status_code == 200, resp.text
+
+    def test_zero_user_limit_but_finite_global_still_guards(self, client, auth_headers, monkeypatch):
+        """用户维设 0（不限）时，全局维仍要正常生效——不能因为一个 0 把另一维也放掉。"""
+        monkeypatch.setattr(get_settings(), "ai_rate_limit_per_minute", 0)
+        monkeypatch.setattr(get_settings(), "ai_global_rate_limit_per_minute", 1)
+        assert client.post("/api/generate", json={"prompt": "设计一个登录页"}, headers=auth_headers).status_code == 200
+        assert client.post("/api/generate", json={"prompt": "设计一个登录页"}, headers=auth_headers).status_code == 429
+
 
 class TestDailyQuota:
     def test_quota_exceeded_returns_429(self, client, auth_headers, monkeypatch):
