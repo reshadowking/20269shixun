@@ -160,4 +160,40 @@ describe('T46a-4：成员与邀请面板', () => {
     expect(screen.getByTestId('invite-username')).toBeDisabled()
     expect(screen.getByTestId('invite-viewer-note')).toHaveTextContent('可以查看成员')
   })
+
+  /**
+   * 过期响应（2026-09-17）：面板可快速切换工作区，而成员请求返回顺序不保证 ——
+   * 慢的旧响应会把上一个工作区的成员列表贴到当前工作区上。
+   */
+  it('切换工作区时，慢的旧成员响应不能覆盖当前工作区的列表', async () => {
+    const gate: { resolve?: (v: unknown) => void } = {}
+    const pending = new Promise<unknown>((resolve) => {
+      gate.resolve = resolve
+    })
+    const ok = (body: unknown) => ({ ok: true, status: 200, json: async () => body })
+    let memberCalls = 0
+    const fetchMock = vi.fn(async (url: string) => {
+      const path = String(url)
+      if (path.endsWith('/api/workspaces')) return ok({ workspaces: WORKSPACES })
+      if (path.includes('/members')) {
+        memberCalls += 1
+        if (memberCalls === 1) return pending // 第一个工作区的成员请求：挂着
+        return ok({ members: [{ user_id: 42, username: 'second-ws-member', role: 'owner' }] })
+      }
+      return ok({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<MembersPanel />)
+
+    // 切到另一个工作区（触发第二个成员请求并渲染它的成员）
+    await waitFor(() => expect(screen.getByTestId('members-workspace-select')).toBeInTheDocument())
+    fireEvent.change(screen.getByTestId('members-workspace-select'), { target: { value: '9' } })
+    expect(await screen.findByTestId('member-row-second-ws-member')).toBeInTheDocument()
+
+    // 让"过期"的第一个工作区响应回来：不能覆盖当前列表
+    gate.resolve?.(ok({ members: MEMBERS }))
+    await new Promise((r) => setTimeout(r, 60))
+    expect(screen.queryByTestId('member-row-guest')).not.toBeInTheDocument()
+    expect(screen.getByTestId('member-row-second-ws-member')).toBeInTheDocument()
+  })
 })

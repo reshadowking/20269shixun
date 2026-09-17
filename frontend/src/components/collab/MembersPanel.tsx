@@ -10,7 +10,7 @@
  * T46a-4：新增 ④ 按用户名直接邀请；并支持 `fixedWorkspaceId`（工作台内的"邀请协作"弹窗
  * 只针对当前稿件的那个工作区，不给切换）。
  */
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { Button } from '@/components/ui/button'
 import { api } from '@/lib/api'
@@ -55,11 +55,25 @@ export default function MembersPanel({
       .catch((err: unknown) => setError(err instanceof Error ? err.message : '工作区列表加载失败'))
   }, [])
 
+  /**
+   * 请求序号（2026-09-17）：面板可以快速切工作区，而成员请求的返回顺序不保证 ——
+   * 慢的旧响应会把**上一个工作区**的成员列表贴到当前工作区上。
+   * 只有最新一次请求能写状态；过期响应（含其错误）整段丢弃。
+   */
+  const membersSeq = useRef(0)
+
   const loadMembers = useCallback((id: number) => {
+    const seq = ++membersSeq.current
     setError('')
     api<{ members: Member[] }>(`/api/workspaces/${id}/members`)
-      .then((r) => setMembers(r.members))
-      .catch((err: unknown) => setError(err instanceof Error ? err.message : '成员列表加载失败'))
+      .then((r) => {
+        if (seq !== membersSeq.current) return
+        setMembers(r.members)
+      })
+      .catch((err: unknown) => {
+        if (seq !== membersSeq.current) return
+        setError(err instanceof Error ? err.message : '成员列表加载失败')
+      })
   }, [])
 
   useEffect(() => {

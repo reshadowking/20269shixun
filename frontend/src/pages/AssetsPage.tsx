@@ -211,17 +211,29 @@ export default function AssetsPage() {
     }
   }, [])
 
+  /**
+   * 请求序号（2026-09-17）：`load` 会随"切换文件夹/视图/上传后刷新"多次触发，
+   * 而网络返回顺序不保证 —— 慢的旧响应会用**上一个范围**的资产覆盖当前网格
+   * （用户故事：点了文件夹 A 再点 B，网格里却是 A 的图）。
+   * 只有最新一次请求能写状态；过期响应整段丢弃（含它的 loading/message）。
+   */
+  const reqSeq = useRef(0)
+
   const load = useCallback(async () => {
+    const seq = ++reqSeq.current
     setLoading(true)
     try {
       const query = scope === 'all' ? '' : `?folder_id=${scope === 'none' ? 'none' : scope}`
-      setData(await api<AssetList>(`/api/images${query}`))
+      const resp = await api<AssetList>(`/api/images${query}`)
+      if (seq !== reqSeq.current) return // 过期响应：用户已经切到别的范围
+      setData(resp)
       void loadFolders()
       setMessage('')
     } catch (err) {
+      if (seq !== reqSeq.current) return
       setMessage(err instanceof Error ? err.message : '加载失败')
     } finally {
-      setLoading(false)
+      if (seq === reqSeq.current) setLoading(false)
     }
   }, [scope, loadFolders])
 

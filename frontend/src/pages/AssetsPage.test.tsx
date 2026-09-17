@@ -467,3 +467,60 @@ describe('AssetsPage（拖拽排序）', () => {
     })
   })
 })
+
+/**
+ * 过期响应（2026-09-17）：切换文件夹时，慢的旧响应会把上一个范围的资产贴进当前网格
+ * （用户故事：点了文件夹 A 再点 B，网格里却是 A 的图）。
+ */
+describe('AssetsPage 过期响应', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    localStorage.clear()
+  })
+
+  it('切换文件夹时，慢的旧资产响应不能覆盖当前网格', async () => {
+    const gate: { resolve?: (v: unknown) => void } = {}
+    const pending = new Promise<unknown>((resolve) => {
+      gate.resolve = resolve
+    })
+    const ok = (body: unknown) => ({ ok: true, status: 200, json: async () => body })
+    const image = (id: number, filename: string) => ({ ...IMAGE, id, filename, url: `/api/images/${id}` })
+    let listCalls = 0
+    const fetchMock = vi.fn(async (url: string) => {
+      const path = String(url)
+      if (path.includes('/api/asset-folders')) {
+        return ok({
+          folders: [
+            { id: 1, name: '素材', parent_id: null, count: 1, created_at: null },
+            { id: 2, name: '图标', parent_id: null, count: 1, created_at: null },
+          ],
+          ungrouped: 0,
+          limit_folders: 30,
+        })
+      }
+      listCalls += 1
+      // 第 1 次（挂载）：立刻返回，让首屏就绪并顺带拉文件夹
+      if (listCalls === 1) {
+        return ok({ images: [image(11, 'first-load.png')], used_bytes: 10, limit_count: 50, limit_bytes: 100 })
+      }
+      // 第 2 次（点文件夹 2）：挂着 —— 这是"过期响应"
+      if (listCalls === 2) return pending
+      // 第 3 次（点文件夹 1）：立刻返回最新结果
+      return ok({ images: [image(22, 'latest.png')], used_bytes: 10, limit_count: 50, limit_bytes: 100 })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    renderPage()
+
+    expect(await screen.findByText('first-load.png')).toBeInTheDocument()
+    // 先点文件夹 2（请求挂着），再点文件夹 1（请求立刻返回最新结果）
+    fireEvent.click(await screen.findByTestId('folder-2'))
+    fireEvent.click(screen.getByTestId('folder-1'))
+    expect(await screen.findByText('latest.png')).toBeInTheDocument()
+
+    // 让"过期"的文件夹 2 响应回来：不能覆盖当前网格
+    gate.resolve?.(ok({ images: [image(33, 'stale-folder2.png')], used_bytes: 10, limit_count: 50, limit_bytes: 100 }))
+    await new Promise((r) => setTimeout(r, 60))
+    expect(screen.queryByText('stale-folder2.png')).not.toBeInTheDocument()
+    expect(screen.getByText('latest.png')).toBeInTheDocument()
+  })
+})
