@@ -24,6 +24,17 @@ export interface AuditOptions {
 
 const DEFAULTS = { overflowSlackPx: 2, overlapRatio: 0.2, contrastRatio: 4.5 }
 
+/**
+ * 叶子控件标签（2026-09-17 补）：icon(span>svg)、divider(hr)、image(img)、
+ * input/select/table 这些**天然没有文本**。
+ *
+ * 背景：`empty-frame` 规则原文是"容器内没有可见文本"，但它对**所有** `[data-node-id]` 都生效，
+ * 于是实测把 `icon1 / divider1 / img1` 也报成"空容器"（画布上 DOM 只有 `data-node-id`、
+ * 没有组件类型标记，无法按类型过滤）。现在改判据：子树里带控件标签的元素不算"空容器"。
+ * 代价是"只放按钮的 frame"不再被报——宁可少报，也不要把图标/分割线当问题报出来。
+ */
+const WIDGET_SELECTOR = 'svg,img,hr,input,button,select,textarea,table,canvas'
+
 type Rgb = [number, number, number]
 
 function parseColor(value: string | null | undefined): Rgb | null {
@@ -108,8 +119,9 @@ export function auditGeometry(root: HTMLElement, options: AuditOptions = {}): Au
       issues.push({ kind: 'overflow', nodeId, detail: `${nodeIdOf(overflowed)} 超出容器边界` })
     }
 
-    // ② 空容器：没有任何可见文本
-    if (!(el.textContent ?? '').trim()) {
+    // ② 空容器：没有任何可见文本，且**不含叶子控件**（icon/divider/image/表单控件自带内容）
+    const hasWidget = el.matches(WIDGET_SELECTOR) || Boolean(el.querySelector(WIDGET_SELECTOR))
+    if (!hasWidget && !(el.textContent ?? '').trim()) {
       issues.push({ kind: 'empty-frame', nodeId, detail: '容器内没有可见文本' })
     }
 

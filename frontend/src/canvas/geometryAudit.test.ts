@@ -69,6 +69,23 @@ describe('auditGeometry', () => {
     expect(issues.some((i) => i.kind === 'empty-frame' && i.nodeId === 'empty')).toBe(true)
   })
 
+  it('叶子控件（icon/divider/image）不算空容器（2026-09-17：此前会被误报）', () => {
+    // 画布 DOM 只有 data-node-id，没有组件类型标记；用"子树里有没有控件标签"来判定
+    const canvasEl = document.createElement('div')
+    canvasEl.innerHTML = `
+      <div data-node-id="icon1"><svg viewBox="0 0 24 24"><path d="M0 0h24v24H0z"/></svg></div>
+      <hr data-node-id="divider1" />
+      <img data-node-id="img1" alt="" />
+      <input data-node-id="input1" />
+      <div data-node-id="truly-empty"></div>`
+
+    const empty = auditGeometry(canvasEl)
+      .filter((i) => i.kind === 'empty-frame')
+      .map((i) => i.nodeId)
+
+    expect(empty).toEqual(['truly-empty'])
+  })
+
   it('文字截断：内容高度超过可视高度 → truncated-text', () => {
     const el = node('text', { left: 0, top: 0, width: 100, height: 20 })
     setText(el, '两行文字被容器截断')
