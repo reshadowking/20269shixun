@@ -249,11 +249,12 @@ export class DesignStore {
     provider.on('status', this.handleStatus)
   }
 
-  constructor(wsUrl?: string, initialDesign?: DesignNode, room = 'design-room') {
+  constructor(wsUrl?: string, initialDesign?: DesignNode, room = 'design-room', collabExpected = false) {
     this.ydoc = new Y.Doc()
     this.designMap = this.ydoc.getMap(DESIGN_MAP)
     this.wsEndpoint = wsUrl
     this.roomName = room
+    this.collabExpected = collabExpected
     /**
      * 2026-09-17（B+）**房间为准**：有协作端点时**不**在连接前写本地副本。
      *
@@ -264,7 +265,7 @@ export class DesignStore {
      * 无协作端点（本地模式/单测/离线）依旧立刻写入 —— 行为与以前完全一致。
      */
     if (initialDesign) {
-      if (this.wsEndpoint) this.pendingSeed = initialDesign
+      if (this.wsEndpoint || this.collabExpected) this.pendingSeed = initialDesign
       else this._writeSeed(initialDesign)
     }
     // T2 presence 泄漏修复：provider 不再在构造期创建（原实现在渲染期建连、
@@ -316,6 +317,15 @@ export class DesignStore {
   private pendingLoad: DesignNode | null = null
   private syncedFlag = false
   private dataReadyFlag = false
+  /**
+   * 这个 store **预期会走协作**，只是端点/房间名还没到手（已保存稿件的房间名要等服务端签发）。
+   *
+   * 为什么需要它：`?design={id}` 原来是"先连 `design-{id}`（临时房间）→ 签发房间到手再切"，
+   * 于是本地副本会先写进那个**临时房间**；切到真房间后两份内容合并 —— 实测（Playwright 抓
+   * WS URL + 量 `style.left`）：刷新后画布回退成 DB 版本（`180px → 120px`），队友未保存的编辑
+   * 就丢了。所以"端点未定"不等于"本地模式"：这时也不能写。
+   */
+  private collabExpected = false
   private seedFallbackTimer: ReturnType<typeof setTimeout> | null = null
   private dataReadyCbs: Array<() => void> = []
   /** 兜底已触发（= 没等到协作同步，按本地副本渲染）；页面据此提示"协作未连接" */
@@ -372,7 +382,8 @@ export class DesignStore {
   }
 
   private _armSeedFallback(): void {
-    if (this.seedFallbackTimer !== null || this.syncedFlag || !this.wsEndpoint) return
+    if (this.seedFallbackTimer !== null || this.syncedFlag) return
+    if (!this.wsEndpoint && !this.collabExpected) return
     if (!this.pendingSeed && !this.pendingLoad) return
     this.seedFallbackTimer = setTimeout(() => {
       this.seedFallbackTimer = null
@@ -410,7 +421,7 @@ export class DesignStore {
    * 目的：新客户端**不许**用"从 DB 读出来的旧稿"覆盖房间里别人未保存的编辑。
    */
   applyLoadedDesign(design: DesignNode): void {
-    if (!this.wsEndpoint) {
+    if (!this.wsEndpoint && !this.collabExpected) {
       this.resetDesign(design)
       this._markDataReady()
       return

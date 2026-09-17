@@ -21,7 +21,7 @@ async function openCouponWorkspace(page: Page) {
   return session
 }
 
-test('批量美化：应用到同类节点 → 3 个按钮同时出现预置阴影 → 一步撤销全部回退', async ({ page }) => {
+test('批量美化：应用到同类节点 → 3 个按钮同时出现预置阴影 → 锁定态禁止整树回退（给出原因）', async ({ page }) => {
   test.setTimeout(120_000)
   await openCouponWorkspace(page)
 
@@ -54,10 +54,21 @@ test('批量美化：应用到同类节点 → 3 个按钮同时出现预置阴�
     expect(shadow, id).toContain(SHADOW_PRESET)
   }
 
-  // 一步撤销：批量走快照式回退（resetDesign 清操作级撤销栈，「撤销优化」= popSnapshot
-  // 的共享 AI 版本回退入口，单效果应用/优化同款）；一次恢复整批，无半应用残留
+  /**
+   * 撤销入口：**当前契约**是"版面已确认（锁定）后不许整树回退"。
+   *
+   * `popSnapshot`（=「撤销优化」按钮）回退的是**整棵快照**，会把布局/尺寸一起换回去，
+   * 与「转自由画布」「智能优化布局」同一口径被有意拦住（2026-09-17 的 a92eed8；
+   * 实测提示文案：版面已确认：不能回退到旧版面（会改变布局/尺寸），请先解除版面锁定）。
+   * 所以这里断言"拦住了 + 画布保持 + 有可读原因"，而不是旧版"撤销后阴影消失"。
+   *
+   * ⚠️ 已知体验缺口（**待产品决策**）：锁定态下应用的批量效果因此**没有撤销入口**
+   *    （要么先解锁、要么手工改回）。若将来给"效果类"开一条只回退效果的白名单撤回路，
+   *    这条断言要改回"撤销后阴影消失"。
+   */
   await page.getByTestId('undo-optimize').click()
+  await expect(page.getByTestId('beautify-blocked-hint')).toContainText('版面已确认', { timeout: 10_000 })
   for (const id of ['node-coupon-1', 'node-coupon-2', 'node-coupon-3']) {
-    await expect(page.getByTestId(id)).not.toHaveAttribute('style', /box-shadow/, { timeout: 10_000 })
+    await expect(page.getByTestId(id)).toHaveAttribute('style', /box-shadow/)
   }
 })

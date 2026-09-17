@@ -59,7 +59,13 @@ async function remove(page: Page, ids: number[]): Promise<void> {
 }
 
 function cards(page: Page) {
-  return page.locator('[data-testid^="home-design-"]:not([data-testid^="home-design-delete-"])')
+  /**
+   * 只数**卡片根**：`^home-design-` 前缀还会命中卡片内部元素
+   * （`home-design-thumb-{id}`、以及 DesignCard 用 `testIdPrefix` 渲染的那批，
+   * 实测每张卡片 4 个匹配 → 8 卡片被数成 32、1 卡片被数成 4，三条用例全红）。
+   * 卡片根的 testid 恰好是 `home-design-<纯数字 id>`，用正则卡住。
+   */
+  return page.getByTestId(/^home-design-\d+$/)
 }
 
 test('0 条：空状态，无「查看更多」按钮', async ({ page }) => {

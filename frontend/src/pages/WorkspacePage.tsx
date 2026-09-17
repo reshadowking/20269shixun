@@ -100,17 +100,27 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
   const gatewayOn = usesGateway(wsGatewayUrl)
   const signedRoomNeeded = needsSignedRoom(designParam, explicitRoom)
   const [signedRoom, setSignedRoom] = useState<string | null>(null)
-  const connectUrl = !gatewayOn
-    ? wsDirectUrl
-    : signedRoomNeeded
-      ? signedRoom
-        ? wsGatewayUrl
-        : undefined
-      : wsGatewayUrl
-  const connectRoom = signedRoomNeeded && signedRoom ? signedRoom : room
+  /**
+   * 2026-09-17 修（主流程）：**只有过网关才需要签发房间**。
+   *
+   * 原来"没配网关"时也会先直连 `design-{id}`、拿到签发房间后再切过去 —— 同一页面先后连两个房间，
+   * 本地副本先写进那个**临时房间**，切过去后两份内容合并：Playwright 抓 WS URL 实测房间序列
+   * `design-7 → tgRdBs-…`，量到刷新后画布回退成 DB 版本（`style.left` 180px → 120px，队友未保存的
+   * 编辑就丢了）。现在直连模式**一个房间连到底**（房间名仍是 `design-{id}`，与改造前一致）；
+   * 走网关时才等服务端签发，并把 `collabExpected` 传给 store（签发前不写占位副本）。
+   */
+  const waitForSignedRoom = signedRoomNeeded && gatewayOn && !signedRoom
+  const connectUrl = waitForSignedRoom ? undefined : gatewayOn ? wsGatewayUrl : wsDirectUrl
+  const connectRoom = signedRoomNeeded && gatewayOn && signedRoom ? signedRoom : room
   // D5：presence 昵称（?user= 可区分多标签演示；默认与登录账号一致）
   const userName = searchParams.get('user') ?? 'demo'
-  const { design, store } = useDesignStore(connectUrl, DEMO_DESIGNS[0], connectRoom)
+  const { design, store } = useDesignStore(
+    connectUrl,
+    DEMO_DESIGNS[0],
+    connectRoom,
+    // 走网关且房间名还没签发 → 让 store 知道"协作在路上"，别把占位副本先写进文档
+    waitForSignedRoom,
+  )
   /** 转自由画布（P1-13）：测量需要画布的 DOM 与缩放状态，因此由画布暴露能力 */
   const canvasRef = useRef<DesignCanvasHandle>(null)
   /** T42：几何体检只在本页自己的画布子树里量（见 handleAudit 注释） */

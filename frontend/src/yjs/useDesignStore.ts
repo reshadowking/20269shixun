@@ -14,20 +14,28 @@ import { useEffect, useRef, useState } from 'react'
 import { DesignStore } from '@/yjs/designStore'
 import type { DesignNode } from '@/design/types'
 
-export function useDesignStore(wsUrl?: string, initialDesign?: DesignNode, room?: string): { design: DesignNode; store: DesignStore } {
+export function useDesignStore(
+  wsUrl?: string,
+  initialDesign?: DesignNode,
+  room?: string,
+  /** 预期走协作、但端点/房间还没到手（已保存稿件的房间名要等服务端签发）→ 先别写本地副本 */
+  collabExpected = false,
+): { design: DesignNode; store: DesignStore } {
   const storeRef = useRef<DesignStore | null>(null)
   if (!storeRef.current) {
     // 2026-09-17（B+）：initialDesign 只作为**占位副本**交给 store（有协作端点时它不会在连接前
     // 写进文档，而是等首个 sync 确认房间为空才写）。真正的稿件由页面 applyLoadedDesign 提供，
     // 且可以覆盖这份占位副本 —— 详见 DesignStore 构造函数与 wroteOwnSeed。
-    storeRef.current = new DesignStore(wsUrl, initialDesign, room)
+    storeRef.current = new DesignStore(wsUrl, initialDesign, room, collabExpected)
   }
   const [design, setDesign] = useState<DesignNode>(() => storeRef.current!.getDesign())
 
   useEffect(() => {
     const store = storeRef.current!
     const unsub = store.subscribe(() => setDesign(store.getDesign()))
-    store.connectProvider(wsUrl, room)
+    // 端点/房间还没到手时**不要建连**：`connectProvider(undefined, room)` 会沿用旧端点，
+    // 于是先连上临时房间 `design-{id}`；上层拿到签发房间后 wsUrl/room 变化会再次进来，那时再连。
+    if (wsUrl) store.connectProvider(wsUrl, room)
     return () => {
       unsub()
       store.disconnectProvider()
