@@ -12,6 +12,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { getToken, register } from '@/lib/api'
+import { safeInternalPath } from '@/lib/safeRedirect'
 
 export default function RegisterPage() {
   const navigate = useNavigate()
@@ -23,8 +24,7 @@ export default function RegisterPage() {
   const [loading, setLoading] = useState(false)
 
   if (getToken()) {
-    const redirect = searchParams.get('redirect')
-    return <Navigate to={redirect && redirect.startsWith('/') ? redirect : '/'} replace />
+    return <Navigate to={safeInternalPath(searchParams.get('redirect'))} replace />
   }
 
   const onSubmit = async (e: React.FormEvent) => {
@@ -46,8 +46,7 @@ export default function RegisterPage() {
     setLoading(true)
     try {
       await register(username, password)
-      const redirect = searchParams.get('redirect')
-      navigate(redirect && redirect.startsWith('/') ? redirect : '/')
+      navigate(safeInternalPath(searchParams.get('redirect')))
     } catch (err) {
       setError(err instanceof Error ? err.message : '注册失败')
     } finally {

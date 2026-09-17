@@ -6,6 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { login, getToken } from '@/lib/api'
+import { safeInternalPath } from '@/lib/safeRedirect'
 
 export default function LoginPage() {
   const navigate = useNavigate()
@@ -17,8 +18,7 @@ export default function LoginPage() {
 
   if (getToken()) {
     // 已登录：回到来源页（redirect）或主页
-    const redirect = searchParams.get('redirect')
-    return <Navigate to={redirect && redirect.startsWith('/') ? redirect : '/'} replace />
+    return <Navigate to={safeInternalPath(searchParams.get('redirect'))} replace />
   }
 
   const onSubmit = async (e: React.FormEvent) => {
@@ -27,8 +27,7 @@ export default function LoginPage() {
     setLoading(true)
     try {
       await login(username, password)
-      const redirect = searchParams.get('redirect')
-      navigate(redirect && redirect.startsWith('/') ? redirect : '/')
+      navigate(safeInternalPath(searchParams.get('redirect')))
     } catch (err) {
       setError(err instanceof Error ? err.message : '登录失败')
     } finally {
