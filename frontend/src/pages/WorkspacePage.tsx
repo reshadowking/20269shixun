@@ -270,28 +270,47 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
     store.setReadOnly(readOnly)
   }, [store, readOnly])
 
-  // T43：从资产库一键插入——`/workspace?asset=<id>` 时，把图片写进"当前选中的图片组件"。
-  // 没选中 / 选中的不是图片组件时，给出明确提示（不静默丢弃，也不猜用户想插到哪）。
+  /**
+   * T43：从资产库一键插入——`/workspace?asset=<id>` 时，把图片写进"当前选中的图片组件"。
+   * 没选中 / 选中的不是图片组件时，给出明确提示（不静默丢弃，也不猜用户想插到哪）。
+   *
+   * 2026-09-17 修：原来这个 effect 只在 `[loaded, searchParams]` 变化时跑，而它给出的提示恰恰是
+   * "请先选中一个「图片」组件，再点资产库的「插入到画布」" —— 用户照做（选中图片组件）之后，
+   * effect 不会再跑，插入**永远不会发生**（探针实测：选中后提示原样不动、节点 src 仍是空）。
+   * 现在把"当前选中的节点"纳入依赖；插入成功后把 `?asset=` 从 URL 去掉，否则之后每改选一次
+   * 节点都会把同一张图再插一遍（还会多推一个撤销步）。
+   */
+  const selectedKey = [...selectedIds].join(',')
+  /** 提示只弹一次（依赖里加了选中项，避免每次改选都刷屏）；插入过的 asset 也记下来防重复 */
+  const assetHintRef = useRef<string | null>(null)
+  const insertedAssetRef = useRef<string | null>(null)
   useEffect(() => {
     const assetId = searchParams.get('asset')
-    if (!assetId || !loaded) return
+    if (!assetId || !loaded || insertedAssetRef.current === assetId) return
     const selected = [...selectedIds]
     const targetId = selected.find((id) => {
       const node = findNode(design, id)
       return node?.type === 'component' && node.componentType === 'image'
     })
     if (!targetId) {
-      setLockHint('已从资产库带回图片：请先选中一个「图片」组件，再点资产库的「插入到画布」。')
-      window.setTimeout(() => setLockHint(''), 6000)
+      if (assetHintRef.current !== assetId) {
+        assetHintRef.current = assetId
+        setLockHint('已从资产库带回图片：请先选中画布上的「图片」组件，图片会插进它。')
+        window.setTimeout(() => setLockHint(''), 6000)
+      }
       return
     }
     const src = `/api/images/${assetId}`
+    insertedAssetRef.current = assetId
     store.pushSnapshot()
     store.updateNode(targetId, (node) => ({ ...node, props: { ...node.props, src } }))
+    const next = new URLSearchParams(searchParams)
+    next.delete('asset')
+    setSearchParams(next, { replace: true })
     setLockHint('已把资产库图片插入选中的图片组件（可撤销）')
     window.setTimeout(() => setLockHint(''), 6000)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loaded, searchParams])
+  }, [loaded, searchParams, selectedKey])
 
   // P1 草稿自动保存（缺陷 5/8 + 缺陷 4：按会话分片，300ms 防抖）
   /** 草稿写失败只提示一次（否则 300ms 防抖会让提示反复闪） */
