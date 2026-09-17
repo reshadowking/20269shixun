@@ -29,7 +29,7 @@ import { BLANK_DESIGN, DEMO_DESIGNS } from '@/design/demoData'
 import { loadDraft, saveDraft } from '@/lib/designSession'
 import { designToReactApp } from '@/export/designToReact'
 import { findNode, findParent as findParentOf, genId } from '@/design/tree'
-import { diffDesign, overlappingIds } from '@/design/applyDiff'
+import { diffDesign, planAiLanding } from '@/design/applyDiff'
 import { canAutoFreeze, readAutoFreeze, writeAutoFreeze } from '@/lib/autoFreeze'
 import type { ComponentType, DesignNode } from '@/design/types'
 import { api } from '@/lib/api'
@@ -970,20 +970,30 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
         setLockHint('AI 部分效果为非预置值，已忽略')
         window.setTimeout(() => setLockHint(''), 6000)
       }
-      store.pushSnapshot()
-      setUndoCount((c) => c + 1)
       // 2026-09-17：**差量落地**（原来是整树 clear+重建：并发下会吞掉队友在这期间对别的
       // 节点的改动，并让所有人画布整体重挂）。根 id 变了这类（空白稿 empty → root）由
       // diffDesign 返回 `replace`，自动退化为整体替换。
       const diff = diffDesign(design, resp.design)
-      // ①并发：AI 基于快照生成，若这期间队友改了**同一节点**，下面这步会覆盖他——先算出来，落地后提示
-      const overlapped = overlappingIds(design, store.getDesign(), diff)
-      store.applyAiDiff(diff)
-      if (overlapped.length) {
+      // ③ 并发前置条件（2026-09-17）：AI 是**基于快照**生成的。落地前核对"队友有没有动过
+      // 同一个字段 / 同一处结构"——此前只做到"事后提示已覆盖"，也就是仍然把队友的改动擦掉。
+      // 现在：结构被破坏 → 整批取消（不推快照、不动画布，让用户重发）；只有属性字段撞车 →
+      // 跳过那些字段（保留队友的版本），其余照常落地。
+      const plan = planAiLanding(design, store.getDesign(), diff)
+      if (plan.blocked.length) {
         setLockHint(
-          `本次 AI 修改期间有人改过 ${overlapped.length} 个同一节点，已按 AI 结果覆盖（可 Ctrl+Z 撤回，或让对方核对）`,
+          `本次 AI 修改和队友刚做的改动撞了（${plan.blocked.length} 处结构改动），已取消、画布未改动；请稍后重新发起，AI 会基于最新画布生成`,
         )
-        window.setTimeout(() => setLockHint(''), 8000)
+        window.setTimeout(() => setLockHint(''), 9000)
+        return { ok: false, reason: '并发冲突：结构被队友改动' }
+      }
+      // 快照放在"确认能落地"之后：取消的分支不留空撤销步（同 autoFreezeAfterAi 的口径）
+      store.pushSnapshot()
+      setUndoCount((c) => c + 1)
+      store.applyAiDiff(plan.diff)
+      if (plan.skipped.length) {
+        const n = plan.skipped.reduce((sum, s) => sum + s.fields.length, 0)
+        setLockHint(`本次 AI 修改有 ${n} 处和队友的改动撞在一起，已保留队友的版本（其余已应用，可 Ctrl+Z 撤回）`)
+        window.setTimeout(() => setLockHint(''), 9000)
       }
       setSelectedIds(new Set())
       // 增量修改后若仍是 flex（首次生成没冻成 free 的情况），同样补一次自动冻结

@@ -233,36 +233,126 @@ export function applyDesignDiff(store: DiffTarget, diff: DesignDiff): void {
   for (const o of diff.orders) store.reorderChildren(o.parentId, o.ids)
 }
 
+/** 从补丁里去掉若干字段（`props.text` 要把 props 里的那个键拿掉，空了就删掉整个 props）。 */
+function omitPatchFields(patch: NodePatch, fields: string[]): NodePatch {
+  const out = { ...patch } as unknown as Record<string, unknown>
+  for (const field of fields) {
+    const [head, tail] = field.split('.', 2)
+    if (tail === undefined) {
+      delete out[head]
+      continue
+    }
+    const bag = { ...((out[head] as Record<string, unknown> | undefined) ?? {}) }
+    delete bag[tail]
+    if (Object.keys(bag).length) out[head] = bag
+    else delete out[head]
+  }
+  return out as NodePatch
+}
+
+export interface AiLandingPlan {
+  /** 可以直接落地的差量（冲突字段/节点已被剔除） */
+  diff: DesignDiff
+  /** 因队友并发改动而**跳过**的字段：{ id, fields }（这些字段保持队友的值） */
+  skipped: Array<{ id: string; fields: string[] }>
+  /** 结构性冲突（节点被删/被移/顺序被改）：**非空时不要落地**，整批中止并提示用户重发 */
+  blocked: string[]
+}
+
 /**
- * 冲突可见化（2026-09-17）：AI 请求是**基于快照**的（发出去的 `before`），如果这期间
- * 队友改了**同一个节点**，这次差量落地会把队友那部分**静默覆盖**。
+ * ③ 的收口（2026-09-17）：AI 请求是**基于快照**的（发出去的 `before`），落地前先核对前置条件。
  *
- * 这里算出"被双方都碰过"的节点 id，供上层提示用户（例如："本次 AI 修改期间有人改过 2 个同一节点，
- * 已按 AI 结果覆盖，可 Ctrl+Z 撤回"）。**只报告不阻塞**：真正的权威合并要等服务端做 ops 级合并，
- * 现阶段让用户知情 + 可撤回，比静默覆盖可接受得多。
+ * 之前只做到"字段级落地 + 事后提示"——队友改了**同一个字段**时我们仍然覆盖他，只是弹一句
+ * "已覆盖"。现在：
+ *
+ * - **属性类**：逐字段核对"当前值是否仍等于快照值"。被队友动过的字段从补丁里剔除并记进
+ *   `skipped`（保留队友的版本），其余字段照常落地（可 Ctrl+Z）。
+ * - **结构类**（删除 / 换父级 / 同父级重排 / 往某父级插入）：前置条件一被破坏就记进 `blocked`，
+ *   由调用方**整批中止**——半套结构改动比不落地更难收拾，也让用户有机会重发。
+ *
+ * 返回的 `diff` 即"可落地的部分"；`blocked` 非空时调用方必须忽略它、什么都不写。
  */
-export function overlappingIds(before: DesignNode, current: DesignNode, diff: DesignDiff): string[] {
+export function planAiLanding(before: DesignNode, current: DesignNode, diff: DesignDiff): AiLandingPlan {
+  // 根 id 变了（空白稿 empty → root）＝换了另一棵树，没有可比的前置条件，维持整体替换语义
+  if (diff.replace || before.id !== current.id) {
+    return { diff, skipped: [], blocked: [] }
+  }
   const b = flatten(before)
   const c = flatten(current)
-  const out: string[] = []
-  // 字段级落地后，"队友改了同节点的其它字段"不再会被覆盖 → 只有**同一字段**才算冲突
+  const blocked: string[] = []
+  const skipped: Array<{ id: string; fields: string[] }> = []
+
+  // ① 属性类：逐字段核对
+  const updated: DesignDiff['updated'] = []
   for (const u of diff.updated) {
     const prev = b.get(u.id)
     const now = c.get(u.id)
-    if (!prev || !now) continue
-    if (prev.parent !== now.parent) {
-      out.push(u.id)
+    if (!prev || !now) {
+      // 节点被队友删了：这次就改不成（但不阻断其余改动，也不把它复活）
+      skipped.push({ id: u.id, fields: patchFields(u.patch) })
       continue
     }
-    if (patchFields(u.patch).some((f) => JSON.stringify(fieldValue(prev.node, f)) !== JSON.stringify(fieldValue(now.node, f)))) {
-      out.push(u.id)
-    }
+    const conflicted = patchFields(u.patch).filter(
+      (f) => JSON.stringify(fieldValue(prev.node, f)) !== JSON.stringify(fieldValue(now.node, f)),
+    )
+    if (conflicted.length) skipped.push({ id: u.id, fields: conflicted })
+    const patch = conflicted.length ? omitPatchFields(u.patch, conflicted) : u.patch
+    if (Object.keys(patch).length) updated.push({ id: u.id, patch })
   }
-  for (const id of [...diff.removed, ...diff.moved.map((m) => m.id)]) {
+
+  // ② 删除：队友还在编辑的节点不能悄悄删掉（他的改动会跟着消失）
+  const removed = diff.removed.filter((id) => {
     const prev = b.get(id)
     const now = c.get(id)
-    if (!prev || !now) continue
-    if (ownKey(prev.node) !== ownKey(now.node) || prev.parent !== now.parent) out.push(id)
+    if (!now) return false // 已经被队友删了：目的已达成
+    if (!prev || ownKey(prev.node) !== ownKey(now.node) || prev.parent !== now.parent) {
+      blocked.push(id)
+      return false
+    }
+    return true
+  })
+
+  // ③ 换父级：队友已经把它移走了就不要硬拉回来
+  const moved = diff.moved.filter((m) => {
+    const prev = b.get(m.id)
+    const now = c.get(m.id)
+    if (!prev || !now || now.parent !== prev.parent) {
+      blocked.push(m.id)
+      return false
+    }
+    return true
+  })
+
+  // ④ 新增：父级必须还在
+  const added = diff.added.filter((a) => {
+    if (!c.has(a.parentId)) {
+      blocked.push(a.parentId)
+      return false
+    }
+    return true
+  })
+
+  // ⑤ 同父级重排：队友动过这个父级的顺序，就不要按旧快照覆盖
+  const orders = diff.orders.filter((o) => {
+    const prev = b.get(o.parentId)
+    const now = c.get(o.parentId)
+    if (!prev || !now) {
+      blocked.push(o.parentId)
+      return false
+    }
+    const nowIds = (now.node.children ?? []).map((child) => child.id)
+    const beforeCommon = (prev.node.children ?? []).map((child) => child.id).filter((id) => nowIds.includes(id))
+    const nowCommon = nowIds.filter((id) => (prev.node.children ?? []).some((child) => child.id === id))
+    if (beforeCommon.join(',') !== nowCommon.join(',')) {
+      blocked.push(o.parentId)
+      return false
+    }
+    return true
+  })
+
+  return {
+    diff: { removed, moved, updated, added, orders },
+    skipped,
+    blocked: [...new Set(blocked)],
   }
-  return [...new Set(out)]
 }

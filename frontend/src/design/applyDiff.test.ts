@@ -8,7 +8,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { DesignNode } from '@/design/types'
 import { DesignStore } from '@/yjs/designStore'
 
-import { applyDesignDiff, diffDesign, overlappingIds } from './applyDiff'
+import { applyDesignDiff, diffDesign, planAiLanding } from './applyDiff'
 
 vi.mock('y-websocket', async () => ({
   WebsocketProvider: (await import('../test/fakeYWebSocket')).FakeWebsocketProvider,
@@ -236,43 +236,110 @@ describe('diffDesign / applyDesignDiff', () => {
     s.destroy()
   })
 
-  it('冲突可见化：AI 期间队友改了**同一节点** → 能算出来（供上层提示），没碰过的节点不算', () => {
-    const before = base()
-    // 队友把 a 改了（a 不在 diff 里）→ 不算冲突
-    const teammateOnlyA: DesignNode = {
-      ...before,
-      children: [{ ...before.children![0], props: { text: '队友改的' } }, before.children![1]],
-    }
-    const aiTouchesB: DesignNode = { ...before, children: [before.children![0], { ...before.children![1], props: { text: 'AI 改的' } }] }
-    expect(overlappingIds(before, teammateOnlyA, diffDesign(before, aiTouchesB))).toEqual([])
+})
 
-    // 队友把 b 也改了（b 正是 AI 要改的）→ 命中，需要提示
-    const teammateAlsoB: DesignNode = {
-      ...before,
-      children: [before.children![0], { ...before.children![1], props: { text: '队友也改了 b' } }],
-    }
-    expect(overlappingIds(before, teammateAlsoB, diffDesign(before, aiTouchesB))).toEqual(['b'])
+/**
+ * ③ 的收口（2026-09-17）：AI 基于**快照**生成，落地前必须核对"前置条件还成不成立"。
+ *
+ *  - 队友动了**同一个字段** → 该字段跳过（保留队友的值），其余照常落地并告知（不再静默覆盖）；
+ *  - 队友动了**结构**（删了要改的节点 / 移了要删的节点 / 重排了要排序的父级）→ **整批中止**并提示
+ *    （半套结构改动比不落地更难收拾）。
+ */
+describe('planAiLanding（AI 落地的并发前置条件）', () => {
+  const aiRenamesB = (before: DesignNode): DesignNode => ({
+    ...before,
+    children: [before.children![0], { ...before.children![1], props: { text: 'AI 改的' } }],
+  })
+  const withB = (before: DesignNode, patch: Partial<DesignNode>): DesignNode => ({
+    ...before,
+    children: [before.children![0], { ...before.children![1], ...patch }],
   })
 
-  it('冲突判定按字段：队友改同节点的**其它字段**不算冲突（字段级落地后不再误报）', () => {
+  it('队友改了**同一字段** → 该字段跳过、保留队友的值，其余字段照常落地', () => {
     const before = base()
-    // AI 只改 b 的文案
-    const aiTouchesB: DesignNode = {
-      ...before,
-      children: [before.children![0], { ...before.children![1], props: { text: 'AI 改的' } }],
+    const ai = aiRenamesB(before)
+    // AI 这次要改 b 的文案 + 样式；队友正好也改了文案
+    const aiWithStyle: DesignNode = {
+      ...ai,
+      children: [ai.children![0], { ...ai.children![1], style: { color: 'danger' }, props: { text: 'AI 改的' } }],
     }
-    // 队友改的是 b 的样式（AI 没碰这个字段）
-    const teammateStyleOnly: DesignNode = {
-      ...before,
-      children: [before.children![0], { ...before.children![1], style: { color: 'danger' } }],
-    }
-    expect(overlappingIds(before, teammateStyleOnly, diffDesign(before, aiTouchesB))).toEqual([])
+    const teammate = withB(before, { props: { text: '队友改的' } })
 
-    // 队友改的正是同一个字段 → 命中
-    const teammateSameField: DesignNode = {
+    const plan = planAiLanding(before, teammate, diffDesign(before, aiWithStyle))
+    expect(plan.blocked).toEqual([])
+    expect(plan.skipped).toEqual([{ id: 'b', fields: ['props.text'] }])
+
+    const s = store()
+    s.__applyRemoteForTests('b', (n) => ({ ...n, props: { text: '队友改的' } }))
+    applyDesignDiff(s, plan.diff)
+    const b = s.getDesign().children!.find((c) => c.id === 'b')!
+    expect(b.props?.text, '冲突字段保留队友的版本').toBe('队友改的')
+    expect(b.style?.color, '没冲突的字段照常落地').toBe('danger')
+    s.destroy()
+  })
+
+  it('队友改了同节点的**另一个字段** → 不算冲突，全部落地', () => {
+    const before = base()
+    const ai = aiRenamesB(before)
+    const teammate = withB(before, { style: { color: 'danger' } })
+
+    const plan = planAiLanding(before, teammate, diffDesign(before, ai))
+    expect(plan.blocked).toEqual([])
+    expect(plan.skipped).toEqual([])
+  })
+
+  it('AI 要改的节点被队友删了 → 跳过该节点（不报错，也不把它复活）', () => {
+    const before = base()
+    const ai = aiRenamesB(before)
+    const teammate: DesignNode = { ...before, children: [before.children![0]] } // b 没了
+
+    const plan = planAiLanding(before, teammate, diffDesign(before, ai))
+    expect(plan.blocked).toEqual([])
+    expect(plan.skipped).toEqual([{ id: 'b', fields: ['props.text'] }])
+    expect(plan.diff.updated).toEqual([])
+  })
+
+  it('AI 要删的节点被队友编辑过 → 结构性冲突：整批中止', () => {
+    const before = base()
+    const aiDeleteB: DesignNode = { ...before, children: [before.children![0]] }
+    const teammate = withB(before, { props: { text: '队友刚写的' } })
+
+    const plan = planAiLanding(before, teammate, diffDesign(before, aiDeleteB))
+    expect(plan.blocked).toContain('b')
+  })
+
+  it('AI 要插入子节点的父级被队友删了 → 结构性冲突', () => {
+    const before = base()
+    const aiInsert: DesignNode = {
       ...before,
-      children: [before.children![0], { ...before.children![1], props: { text: '队友改的' } }],
+      children: [
+        { ...before.children![0], children: [{ id: 'a-kid', type: 'text', props: { text: '新的' } }] },
+        before.children![1],
+      ],
     }
-    expect(overlappingIds(before, teammateSameField, diffDesign(before, aiTouchesB))).toEqual(['b'])
+    const teammate: DesignNode = { ...before, children: [before.children![1]] } // a 被删
+
+    const plan = planAiLanding(before, teammate, diffDesign(before, aiInsert))
+    expect(plan.blocked.length).toBeGreaterThan(0)
+  })
+
+  it('队友把父级的顺序重排了 → AI 的排序计划被判结构冲突（不硬按旧顺序覆盖）', () => {
+    const before = base()
+    const aiReorder: DesignNode = { ...before, children: [before.children![1], before.children![0]] }
+    const teammateReorder: DesignNode = { ...before, children: [before.children![1], before.children![0]] } // 队友先排好了
+
+    // 队友已经把顺序改成 AI 想要的样子 → 此时"当前顺序"已与快照不同 → 判为结构冲突（让用户重发）
+    const plan = planAiLanding(before, teammateReorder, diffDesign(before, aiReorder))
+    expect(plan.blocked).toContain('root')
+  })
+
+  it('无并发：plan.diff 原样返回（回归保护）', () => {
+    const before = base()
+    const ai = aiRenamesB(before)
+    const diff = diffDesign(before, ai)
+    const plan = planAiLanding(before, before, diff)
+    expect(plan.blocked).toEqual([])
+    expect(plan.skipped).toEqual([])
+    expect(plan.diff).toEqual(diff)
   })
 })
