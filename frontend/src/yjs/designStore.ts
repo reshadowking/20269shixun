@@ -12,7 +12,7 @@ import * as Y from 'yjs'
 import { WebsocketProvider } from 'y-websocket'
 
 import { LOCKED_EDITABLE_STYLE_KEYS } from '@/design/beautify'
-import type { DesignDiff } from '@/design/applyDiff'
+import { applyNodePatch, type DesignDiff } from '@/design/applyDiff'
 import { findNode as findPlainNode } from '@/design/tree'
 import type { DesignNode } from '@/design/types'
 
@@ -829,7 +829,7 @@ export class DesignStore {
     try {
       for (const id of diff.removed) this.removeNode(id)
       for (const m of diff.moved) this.moveNodeTo(m.id, m.toParent, m.index)
-      for (const u of diff.updated) this.updateNode(u.id, () => u.node)
+      for (const u of diff.updated) this.updateNode(u.id, (cur) => applyNodePatch(cur, u.patch))
       for (const a of diff.added) this.insertChild(a.parentId, a.node, a.index)
       for (const o of diff.orders) this.reorderChildren(o.parentId, o.ids)
     } finally {

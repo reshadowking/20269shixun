@@ -101,6 +101,66 @@ describe('diffDesign / applyDesignDiff', () => {
     s.destroy()
   })
 
+  it('队友改了同一节点的**另一个字段** → AI 落地不能把它一起吞掉（字段级局部落地）', () => {
+    const s = store()
+    const before = s.getDesign()
+    // AI 这轮只给 a 加一个样式
+    const after: DesignNode = {
+      ...before,
+      children: [{ ...before.children![0], style: { color: 'danger' } }, before.children![1]],
+    }
+    // 队友在我等 AI 期间改了 a 的**文案**（不是 AI 碰的字段）
+    s.__applyRemoteForTests('a', (n) => ({ ...n, props: { ...n.props, text: '队友改的' } }))
+
+    applyDesignDiff(s, diffDesign(before, after))
+    const a = s.getDesign().children!.find((c) => c.id === 'a')!
+    expect(a.props?.text, 'AI 只改了样式，队友改的文案必须存活').toBe('队友改的')
+    expect(a.style?.color).toBe('danger')
+    s.destroy()
+  })
+
+  it('字段级补丁：AI 删掉一个 style 键时，其它键（含队友新加的）不受影响', () => {
+    const s = store()
+    const before = s.getDesign()
+    const after: DesignNode = {
+      ...before,
+      children: [
+        { ...before.children![0], style: { color: 'primary' } }, // AI 只改 color
+        before.children![1],
+      ],
+    }
+    // 队友在 a 上加了 fontSize（AI 没碰）
+    s.__applyRemoteForTests('a', (n) => ({ ...n, style: { ...n.style, fontSize: 20 } }))
+
+    const diff = diffDesign(before, after)
+    expect(Object.keys(diff.updated[0].patch.style ?? {})).toEqual(['color'])
+    applyDesignDiff(s, diff)
+    const a = s.getDesign().children!.find((c) => c.id === 'a')!
+    expect(a.style?.color).toBe('primary')
+    expect(a.style?.fontSize, '队友加的 fontSize 必须存活').toBe(20)
+    s.destroy()
+  })
+
+  it('字段级补丁：props 键被删（值为 null）+ hidden 切换都能正确落地', () => {
+    const s = store()
+    const before = s.getDesign()
+    const after: DesignNode = {
+      ...before,
+      children: [
+        { id: 'a', type: 'text', props: {}, style: {}, hidden: true }, // 删掉 props.text 并隐藏
+        before.children![1],
+      ],
+    }
+    const diff = diffDesign(before, after)
+    expect(diff.updated[0].patch.props).toEqual({ text: null })
+    expect(diff.updated[0].patch.hidden).toBe(true)
+    applyDesignDiff(s, diff)
+    const a = s.getDesign().children!.find((c) => c.id === 'a')!
+    expect(a.props?.text).toBeUndefined()
+    expect(a.hidden).toBe(true)
+    s.destroy()
+  })
+
   it('删除节点：AI 删掉的会被移除（且深层优先，不报错）', () => {
     const s = store()
     const before = s.getDesign()
@@ -192,5 +252,27 @@ describe('diffDesign / applyDesignDiff', () => {
       children: [before.children![0], { ...before.children![1], props: { text: '队友也改了 b' } }],
     }
     expect(overlappingIds(before, teammateAlsoB, diffDesign(before, aiTouchesB))).toEqual(['b'])
+  })
+
+  it('冲突判定按字段：队友改同节点的**其它字段**不算冲突（字段级落地后不再误报）', () => {
+    const before = base()
+    // AI 只改 b 的文案
+    const aiTouchesB: DesignNode = {
+      ...before,
+      children: [before.children![0], { ...before.children![1], props: { text: 'AI 改的' } }],
+    }
+    // 队友改的是 b 的样式（AI 没碰这个字段）
+    const teammateStyleOnly: DesignNode = {
+      ...before,
+      children: [before.children![0], { ...before.children![1], style: { color: 'danger' } }],
+    }
+    expect(overlappingIds(before, teammateStyleOnly, diffDesign(before, aiTouchesB))).toEqual([])
+
+    // 队友改的正是同一个字段 → 命中
+    const teammateSameField: DesignNode = {
+      ...before,
+      children: [before.children![0], { ...before.children![1], props: { text: '队友改的' } }],
+    }
+    expect(overlappingIds(before, teammateSameField, diffDesign(before, aiTouchesB))).toEqual(['b'])
   })
 })

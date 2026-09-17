@@ -22,8 +22,15 @@ export interface DesignDiff {
   removed: string[]
   /** 换父级 */
   moved: Array<{ id: string; toParent: string; index: number }>
-  /** 同 id、自身字段变了（不含 children——子树变化由各自的条目表达） */
-  updated: Array<{ id: string; node: DesignNode }>
+  /**
+   * 同 id、自身**部分字段**变了（不含 children——子树变化由各自的条目表达）。
+   *
+   * 2026-09-17（③ 字段级局部落地）：这里带的是**字段级补丁**而不是整节点快照。
+   * 原来落地时整节点替换，会把"队友在这期间改了同一节点的**另一个字段**"一起吞掉
+   * （实测：AI 只改 a 的样式，队友改的 a 文案被还原成旧值 = 静默丢数据）。
+   * 现在只写 AI 真正改过的键，队友改的其它键原样存活。
+   */
+  updated: Array<{ id: string; patch: NodePatch }>
   /** 新增子树的最顶层节点（父级必须在 before 里已存在） */
   added: Array<{ parentId: string; index: number; node: DesignNode }>
   /**
@@ -33,6 +40,97 @@ export interface DesignDiff {
    * 在删/移/改/加**之后**统一按顺序就位（此时新增节点已就位，索引也才是准的）。
    */
   orders: Array<{ parentId: string; ids: string[] }>
+}
+
+/** 字段级补丁：值为 `null` 表示**删除该键/该字段**（props/style 的值不会是 null）。 */
+export interface NodePatch {
+  type?: string
+  componentType?: string | null
+  props?: Record<string, unknown | null>
+  style?: Record<string, unknown | null>
+  x?: number | null
+  y?: number | null
+  hidden?: boolean | null
+}
+
+const NODE_LEVEL_KEYS = ['type', 'componentType', 'x', 'y', 'hidden'] as const
+
+function recordDelta(
+  prev: Record<string, unknown> | undefined,
+  next: Record<string, unknown> | undefined,
+): Record<string, unknown | null> {
+  const out: Record<string, unknown | null> = {}
+  for (const key of new Set([...Object.keys(prev ?? {}), ...Object.keys(next ?? {})])) {
+    const a = prev?.[key]
+    const b = next?.[key]
+    if (JSON.stringify(a) === JSON.stringify(b)) continue
+    out[key] = b === undefined ? null : b
+  }
+  return out
+}
+
+/** 算出 prev → next 只动了哪些字段（供落地时只覆盖这些字段）。 */
+export function patchOf(prev: DesignNode, next: DesignNode): NodePatch {
+  const patch: NodePatch = {}
+  if (prev.type !== next.type) patch.type = next.type
+  if ((prev.componentType ?? null) !== (next.componentType ?? null)) patch.componentType = next.componentType ?? null
+  const props = recordDelta(prev.props, next.props)
+  if (Object.keys(props).length) patch.props = props
+  const style = recordDelta(prev.style, next.style)
+  if (Object.keys(style).length) patch.style = style
+  // 逐个写而不是循环索引赋值：联合键名会让 TS 把目标类型收窄成 null|undefined
+  if ((prev.x ?? null) !== (next.x ?? null)) patch.x = next.x ?? null
+  if ((prev.y ?? null) !== (next.y ?? null)) patch.y = next.y ?? null
+  if ((prev.hidden ?? null) !== (next.hidden ?? null)) patch.hidden = next.hidden ?? null
+  return patch
+}
+
+/** 把字段级补丁合进"当前"节点（当前节点可能已被队友改过；没被补丁覆盖的键一律保留）。 */
+export function applyNodePatch(cur: DesignNode, patch: NodePatch): DesignNode {
+  const next: DesignNode = { ...cur }
+  if (patch.type !== undefined) next.type = patch.type as DesignNode['type']
+  if (patch.componentType !== undefined) {
+    if (patch.componentType === null) delete next.componentType
+    else next.componentType = patch.componentType as DesignNode['componentType']
+  }
+  if (patch.props) {
+    const props = { ...(cur.props ?? {}) } as Record<string, unknown>
+    for (const [key, value] of Object.entries(patch.props)) {
+      if (value === null) delete props[key]
+      else props[key] = value
+    }
+    next.props = props as DesignNode['props']
+  }
+  if (patch.style) {
+    const style = { ...(cur.style ?? {}) } as Record<string, unknown>
+    for (const [key, value] of Object.entries(patch.style)) {
+      if (value === null) delete style[key]
+      else style[key] = value
+    }
+    next.style = style as DesignNode['style']
+  }
+  for (const key of ['x', 'y', 'hidden'] as const) {
+    const value = patch[key]
+    if (value === undefined) continue
+    if (value === null) delete next[key]
+    else Object.assign(next, { [key]: value })
+  }
+  return next
+}
+
+/** 补丁涉及的字段名（`props.text` / `style.color` / `x`…），用于冲突判定。 */
+function patchFields(patch: NodePatch): string[] {
+  const fields: string[] = NODE_LEVEL_KEYS.filter((k) => patch[k] !== undefined)
+  for (const key of Object.keys(patch.props ?? {})) fields.push(`props.${key}`)
+  for (const key of Object.keys(patch.style ?? {})) fields.push(`style.${key}`)
+  return fields
+}
+
+function fieldValue(node: DesignNode, field: string): unknown {
+  const [head, tail] = field.split('.', 2)
+  if (tail === undefined) return (node as unknown as Record<string, unknown>)[head] ?? null
+  const bag = (node as unknown as Record<string, unknown>)[head] as Record<string, unknown> | undefined
+  return bag?.[tail] ?? null
 }
 
 interface Flat {
@@ -91,7 +189,7 @@ export function diffDesign(before: DesignNode, after: DesignNode): DesignDiff {
       diff.moved.push({ id, toParent: next.parent, index: next.index })
     }
     if (ownKey(prev.node) !== ownKey(next.node)) {
-      diff.updated.push({ id, node: next.node })
+      diff.updated.push({ id, patch: patchOf(prev.node, next.node) })
     }
     // 同父级重排：只看**两棵树都还在**的孩子的相对顺序（纯新增/删除造成的位移不算重排，
     // 那种情况 added/removed 已经表达，重排步骤会自己变成无操作）。
@@ -128,7 +226,8 @@ export function applyDesignDiff(store: DiffTarget, diff: DesignDiff): void {
   }
   for (const id of diff.removed) store.removeNode(id)
   for (const m of diff.moved) store.moveNodeTo(m.id, m.toParent, m.index)
-  for (const u of diff.updated) store.updateNode(u.id, () => u.node)
+  // 字段级合并：只写 AI 改过的键，队友在**同一节点其它字段**上的并发改动存活
+  for (const u of diff.updated) store.updateNode(u.id, (cur) => applyNodePatch(cur, u.patch))
   for (const add of diff.added) store.insertChild(add.parentId, add.node, add.index)
   // 顺序最后统一修：只有此时"整份 children 都在"（新增已插入、删除已生效），索引才与 after 对齐
   for (const o of diff.orders) store.reorderChildren(o.parentId, o.ids)
@@ -145,17 +244,25 @@ export function applyDesignDiff(store: DiffTarget, diff: DesignDiff): void {
 export function overlappingIds(before: DesignNode, current: DesignNode, diff: DesignDiff): string[] {
   const b = flatten(before)
   const c = flatten(current)
-  const touched = [
-    ...diff.updated.map((u) => u.id),
-    ...diff.removed,
-    ...diff.moved.map((m) => m.id),
-  ]
   const out: string[] = []
-  for (const id of touched) {
+  // 字段级落地后，"队友改了同节点的其它字段"不再会被覆盖 → 只有**同一字段**才算冲突
+  for (const u of diff.updated) {
+    const prev = b.get(u.id)
+    const now = c.get(u.id)
+    if (!prev || !now) continue
+    if (prev.parent !== now.parent) {
+      out.push(u.id)
+      continue
+    }
+    if (patchFields(u.patch).some((f) => JSON.stringify(fieldValue(prev.node, f)) !== JSON.stringify(fieldValue(now.node, f)))) {
+      out.push(u.id)
+    }
+  }
+  for (const id of [...diff.removed, ...diff.moved.map((m) => m.id)]) {
     const prev = b.get(id)
     const now = c.get(id)
     if (!prev || !now) continue
     if (ownKey(prev.node) !== ownKey(now.node) || prev.parent !== now.parent) out.push(id)
   }
-  return out
+  return [...new Set(out)]
 }
