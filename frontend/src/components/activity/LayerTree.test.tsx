@@ -83,6 +83,73 @@ describe('LayerTree 右键菜单（P0-5）', () => {
     rightClickRow('title')
     fireEvent.click(screen.getByTestId('layer-ctx-rename'))
     // 进入重命名输入框
-    expect(screen.getByTestId('layer-rename-input-title')).toBeInTheDocument()
+   expect(screen.getByTestId('layer-rename-input-title')).toBeInTheDocument()
+  })
+})
+
+/**
+ * 拖拽落点（2026-09-17 首次补测试）。
+ *
+ * 修前两处"拖了没反应，但目标行仍然高亮"：
+ * ① 跨父级拖到**叶子**节点 → `handleDrop` 只在同父时处理，跨父直接什么都不做；
+ * ② 拖到**空容器** → 旧判据要求"目标已有 children"，空容器被当成叶子。
+ */
+describe('LayerTree 拖拽落点', () => {
+  const TREE: DesignNode = {
+    id: 'root',
+    type: 'frame',
+    style: { layout: 'column' },
+    children: [
+      { id: 'title', type: 'text', props: { text: '标题' } },
+      { id: 'empty', type: 'frame', style: { layout: 'column' } },
+      {
+        id: 'card',
+        type: 'frame',
+        style: { layout: 'row' },
+        children: [{ id: 'btn', type: 'component', componentType: 'button', props: { text: '按钮' } }],
+      },
+    ],
+  }
+
+  function dragDrop(sourceId: string, targetId: string) {
+    const dataTransfer = { getData: () => sourceId, setData: () => {}, effectAllowed: 'move' }
+    fireEvent.dragStart(screen.getByTestId(`layer-${sourceId}`), { dataTransfer })
+    fireEvent.dragOver(screen.getByTestId(`layer-${targetId}`), { dataTransfer })
+    fireEvent.drop(screen.getByTestId(`layer-${targetId}`), { dataTransfer })
+  }
+
+  function ids(store: DesignStore, parentId: string): string[] {
+    const find = (n: DesignNode): DesignNode | undefined =>
+      n.id === parentId ? n : (n.children ?? []).map(find).find(Boolean)
+    return (find(store.getDesign())?.children ?? []).map((c) => c.id)
+  }
+
+  it('跨父级拖到叶子节点：移到目标所在父级的同一位置（旧实现静默无操作）', () => {
+    const store = new DesignStore(undefined, TREE)
+    renderTree(store)
+
+    dragDrop('btn', 'title') // btn 在 card 里 → 拖到 root 的叶子 title 上
+
+    expect(ids(store, 'root')).toEqual(['btn', 'title', 'empty', 'card'])
+    expect(ids(store, 'card')).toEqual([])
+  })
+
+  it('拖到空容器：移入该容器（旧实现把空容器当叶子，进不去）', () => {
+    const store = new DesignStore(undefined, TREE)
+    renderTree(store)
+
+    dragDrop('title', 'empty')
+
+    expect(ids(store, 'empty')).toEqual(['title'])
+    expect(ids(store, 'root')).toEqual(['empty', 'card'])
+  })
+
+  it('同父级重排仍然生效（回归）', () => {
+    const store = new DesignStore(undefined, TREE)
+    renderTree(store)
+
+    dragDrop('card', 'title') // 同父（root）：插到 title 的位置
+
+    expect(ids(store, 'root')).toEqual(['card', 'title', 'empty'])
   })
 })

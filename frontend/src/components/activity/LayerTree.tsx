@@ -59,14 +59,26 @@ export default function LayerTree({ design, selectedIds, onSelect, store }: Laye
     const target = findNodeById(design, targetId)
     const source = findNodeById(design, sourceId)
     if (!target || !source) return
-    const targetHasChildren = !!target.children?.length && target.type !== 'text'
-    const sourceParent = findParentOf(design, sourceId)
-    if (targetHasChildren) {
+    // 2026-09-17 修两处（都是"拖了没反应"，而行还是高亮的）：
+    // ① 目标行是**容器**（frame/group）→ 移入其末尾。旧实现要求"目标已经有 children"，
+    //    于是**空容器**进不去（被当成叶子）；
+    // ② 目标行是叶子 → 插到它**旁边**：同父 = 同级重排；跨父 = 移到目标所在父级的同一位置。
+    //    旧实现只在同父时处理，跨父拖到叶子什么都不做。
+    const isContainerTarget = target.type === 'frame' || target.type === 'group'
+    if (isContainerTarget) {
       store.moveNodeTo(sourceId, targetId, (target.children ?? []).length)
-    } else if (sourceParent && sourceParent.id === findParentOf(design, targetId)?.id) {
-      const siblings = sourceParent.children ?? []
-      const toIndex = siblings.findIndex((s) => s.id === targetId)
-      store.moveChild(sourceId, sourceParent.id, toIndex >= 0 ? toIndex : siblings.length)
+      return
+    }
+    const targetParent = findParentOf(design, targetId)
+    if (!targetParent) return
+    const siblings = targetParent.children ?? []
+    const targetIndex = siblings.findIndex((s) => s.id === targetId)
+    const index = targetIndex >= 0 ? targetIndex : siblings.length
+    const sourceParent = findParentOf(design, sourceId)
+    if (sourceParent && sourceParent.id === targetParent.id) {
+      store.moveChild(sourceId, targetParent.id, index)
+    } else {
+      store.moveNodeTo(sourceId, targetParent.id, index)
     }
   }
 
