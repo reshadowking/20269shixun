@@ -491,7 +491,12 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
   }
 
   const handleSaveSessionSnapshot = (label: string) => {
-    setSnapshots(saveSnapshot(sessionKey, design, label))
+    const { ok, list } = saveSnapshot(sessionKey, design, label)
+    setSnapshots(list)
+    // 2026-09-17：本地存储写失败不再静默（此前列表里显示"已保存"，刷新后却没有）
+    setSessionError(
+      ok ? '' : '快照保存失败（本地存储已满或不可用）：刷新后会丢失，请改用右上角「💾 保存」或清理浏览器存储。',
+    )
   }
 
   /** 回退到会话快照（4b：二次确认 + 可撤销） */
