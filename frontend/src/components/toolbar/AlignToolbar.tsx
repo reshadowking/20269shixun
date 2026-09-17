@@ -43,7 +43,11 @@ export default function AlignToolbar({ design, selectedIds, store }: AlignToolba
       // 测量各节点尺寸（画布世界坐标 = DOM 尺寸，缩放不影响 offsetWidth）
       const rects = group.map((id) => {
         const node = findNode(design, id)!
-        const el = document.querySelector(`[data-node-id="${id}"]`) as HTMLElement | null
+        // 2026-09-17 修两处：
+        // ① 全局 querySelector 可能命中别的投影层（T42 的教训）——匹配多于一个就当作测不到；
+        // ② **不能**在测不到时拿 0 当尺寸：hidden 节点不入 DOM，w/h=0 会让可见节点被对齐到错误位置。
+        const els = document.querySelectorAll(`[data-node-id="${id}"]`)
+        const el = els.length === 1 ? (els[0] as HTMLElement) : null
         return {
           id,
           x: node.x ?? 0,
@@ -52,6 +56,8 @@ export default function AlignToolbar({ design, selectedIds, store }: AlignToolba
           h: el?.offsetHeight ?? 0,
         }
       })
+      // 测不全就整批不动（与「转自由画布」同一口径：宁可不动，也不要错位）
+      if (rects.some((r) => r.w <= 0 || r.h <= 0)) return
       const changes = alignFree(rects, op)
       Object.entries(changes).forEach(([id, delta]) => {
         store.updateNode(id, (n) => ({ ...n, ...delta }))
