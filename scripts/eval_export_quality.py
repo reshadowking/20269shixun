@@ -47,6 +47,11 @@ COMPONENT_TAG = {
 
 TAG_RE = re.compile(r"<(/?)([a-zA-Z][a-zA-Z0-9-]*)[^>]*>")
 TEXT_RE = re.compile(r">([^<>]+?)<")
+# 用户可见文本也可能落在**属性**里：input 的 placeholder、image 的 alt 等。
+# 只从标签间文本取值会系统性漏计——实测 scripts/designs/login.json 的
+# 「请输入邮箱或手机号」「请输入密码」明明在产物 `<input placeholder="…">` 里，
+# 却被算成未命中（文本一致率 0.750，实为 1.000；聚合还原度因此少 3.3 个百分点）。
+ATTR_TEXT_RE = re.compile(r'\b(?:placeholder|alt|title|aria-label)="([^"]*)"')
 
 
 def _walk(node: dict):
@@ -129,6 +134,7 @@ def extract_from_code(code: str) -> dict:
         else:
             depth = max(0, depth - 1)
     texts = [html.unescape(t.strip()) for t in TEXT_RE.findall(code) if t.strip()]
+    texts += [html.unescape(v.strip()) for v in ATTR_TEXT_RE.findall(code) if v.strip()]
     # 容器数 = 布局 div 数（组件标记 div 已被跳过）
     return {"tags": tags, "texts": texts, "max_depth": max_depth, "container_count": tags.get("div", 0)}
 
