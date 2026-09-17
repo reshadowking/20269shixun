@@ -233,6 +233,10 @@ export default function PropertyPanel({ node, onUpdate, onDelete, onMoveLayer, o
             max={field.max}
             value={stringVal}
             onChange={(e) => {
+              // 2026-09-17 修：`Number('') === 0`，而输入框清空（全选删除准备重打）时
+              // `e.target.value` 就是空串 → 旧实现把宽度/字号/间距直接写成 0（节点塌掉、
+              // 文字消失）。空串视为"还没输完"，不落树；等用户输入数字再写。
+              if (e.target.value.trim() === '') return
               const v = Number(e.target.value)
               if (!Number.isNaN(v)) onChange(v)
             }}
