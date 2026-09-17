@@ -52,6 +52,19 @@ def _find(node: dict, node_id: str) -> tuple[dict, list | None, int] | None:
     return None
 
 
+def _collect_ids(node: Any, out: list[str]) -> None:
+    """收集子树里所有 id（含自身）；非 dict 元素跳过。"""
+    if not isinstance(node, dict):
+        return
+    node_id = node.get("id")
+    if isinstance(node_id, str):
+        out.append(node_id)
+    children = node.get("children")
+    if isinstance(children, list):
+        for child in children:
+            _collect_ids(child, out)
+
+
 def _declared_props(component_type: Any) -> frozenset[str]:
     from .generate import component_prop_names  # 局部导入避免模块级循环
 
@@ -60,8 +73,12 @@ def _declared_props(component_type: Any) -> frozenset[str]:
 
 def apply_ops(tree: dict[str, Any], ops: Any) -> tuple[dict[str, Any], list[str], set[str], str]:
     """返回 (新树 | 原树, 受影响节点 id, 被显式删除的 id, 拒绝原因)。原因非空时新树无效。"""
-    if not isinstance(ops, list) or not ops:
-        return tree, [], set(), "ops 必须是非空数组（无改动请返回空数组并把 user_request 说清楚）"
+    if not isinstance(ops, list):
+        return tree, [], set(), f"ops 必须是数组：{ops!r}"
+    if not ops:
+        # 空数组 = 模型判定"无需改动"（提示词明确要求无改动时返回 {"ops":[]}）。
+        # 这是合法结果，不是失败：原树原样返回、原因留空，由调用方按"零改动"呈现。
+        return tree, [], set(), ""
     if len(ops) > MAX_OPS:
         return tree, [], set(), f"ops 数量超限（{len(ops)} > {MAX_OPS}）"
 
@@ -103,6 +120,14 @@ def apply_ops(tree: dict[str, Any], ops: Any) -> tuple[dict[str, Any], list[str]
             node = copy.deepcopy(node)
             if not node.get("id"):
                 node["id"] = f"{op['parent']}-c{len(children)}"  # 与 repair_design 的派生规则一致
+            # 重复 id 会破坏整棵树的节点定位（前端查找/选中、Yjs 同步、导出 React key 都按 id 走），
+            # 而 structure_loss_reason 用的是计数比较、抓不到"多出来一个同 id 节点"，所以在这里挡。
+            incoming: list[str] = []
+            _collect_ids(node, incoming)
+            duplicated = [i for i in incoming if _find(work, i) is not None]
+            if len(incoming) != len(set(incoming)) or duplicated:
+                bad = duplicated[0] if duplicated else incoming[0]
+                return tree, [], set(), f"插入的节点 id 已存在：{bad}（id 必须唯一）"
             children.insert(index, node)
             affected.append(str(node["id"]))
             continue
@@ -130,6 +155,10 @@ def apply_ops(tree: dict[str, Any], ops: Any) -> tuple[dict[str, Any], list[str]
         elif kind == "move":
             if siblings is None:
                 return tree, [], set(), "根节点不可移动"
+            # index 必须是整数：模型偶尔输出 null / "0" 这类，int() 会抛 TypeError/ValueError
+            # 一路穿到接口层变成 502「AI 生成失败：int() argument must be...」（实测）。
+            if not isinstance(op["index"], int) or isinstance(op["index"], bool):
+                return tree, [], set(), f"move 的 index 必须是整数：{op['index']!r}"
             # 防环（2026-09-17 实测复现）：移到自己或自己的后代里时，子树会先被 pop 掉、
             # 再插进"已脱离主树"的那份旧引用里 → 节点与它的整棵子树**凭空消失**（静默丢数据）。
             # 前端 `designStore.moveNodeTo` 一直有这条守卫，服务端 ops 引擎漏了；这里补齐。

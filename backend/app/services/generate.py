@@ -545,15 +545,16 @@ INCREMENTAL_SYSTEM = """你是 AI 设计修改器。基于给定的 DesignNode �
    - 说"把按钮/标题/卡片/某个组件 改为 X 色" → 只改该组件的前景色（文字）或背景，禁止改页面背景；
    - 用户已明确"背景不变/保留背景"时，背景必须保持上一轮的值（不得沿用之前误改的色）；
    - 说法含糊（如只说"改为红色"没说目标）时：优先只改前景/强调元素，保持背景不变。
-4. 输出修改后的【完整 DesignNode 树】（不是 patch、不是片段），节点 id 与原来一致，结构与原来一致。
-4. 组件类型必须用 {"type":"component","componentType":"xxx"}；样式颜色优先令牌名
+4. 只改必要的字段：节点 id 与节点结构必须与原来一致（只有用户明确要求增删节点时才改变）。
+5. 组件类型必须用 {"type":"component","componentType":"xxx"}；样式颜色优先令牌名
    （primary/secondary/danger/success/background/text-primary/text-secondary/text-light/border），用户指定 hex 原样。
-5. 字号 fontSize 用数字（8-96）；间距 gap/圆角 radius 用数字。
-6. 输出必须是合法 JSON（完整 DesignNode 树），不要输出任何其他内容；JSON 语法必须正确（属性间逗号、对象闭合）。
-7. 需求里出现分页、弹窗等组件白名单外的元素：禁止自创 componentType
+6. 字号 fontSize 用数字（8-96）；间距 gap/圆角 radius 用数字。
+7. 输出必须是合法 JSON，不要输出任何其他内容；JSON 语法必须正确（属性间逗号、对象闭合）；
+   输出什么形态由下文「修改指令的输出形态」一节规定，不要自行换一种形态。
+8. 需求里出现分页、弹窗等组件白名单外的元素：禁止自创 componentType
    （如 pagination/dialog，会导致整稿被拒）；用最接近的合法组件表达——
    分页→一排 button、弹窗→frame + 按钮。
-8. 若用户要求与界面设计无关（例如写诗、算术、闲聊），保持 current_design 原样不变，不要为了
+9. 若用户要求与界面设计无关（例如写诗、算术、闲聊），保持 current_design 原样不变，不要为了
    "完成指令"去改动任何节点。"""
 
 # T4 批2：锁定阶段的额外约束段（仅 locked=True 时追加到增量提示词末尾）
@@ -577,8 +578,8 @@ HISTORY_USAGE_SECTION = """
 def ops_prompt_section() -> str:
     """T23：op 白名单与输出形态（运行期由 `ops.OP_TYPES` 生成，禁止手抄）。"""
     lines = [
-        "\n\n## 修改指令的输出形态（本版起以本节为准）",
-        '只输出 {"ops":[…]} 操作列表——不要再输出完整 DesignNode 树（旧约束"输出完整树"自本版作废）。',
+        "\n\n## 修改指令的输出形态",
+        '只输出 {"ops":[…]} 操作列表，不要输出完整 DesignNode 树。',
         "可用 op（字段名逐字使用）：",
     ]
     for name, fields in OP_TYPES.items():
@@ -592,6 +593,18 @@ def ops_prompt_section() -> str:
         '删除节点只能用 remove 显式声明；无改动时返回空数组 {"ops":[]}。'
     )
     return "\n".join(lines)
+
+
+def legacy_tree_prompt_section() -> str:
+    """PROMPT_OPS_ENABLED=0 时的输出形态段（A/B 度量脚本用它对照旧行为）。
+
+    与 ops 段互斥、且用了同一个标题：基础约束段（INCREMENTAL_SYSTEM）本身不再声明
+    输出形态，避免出现"基础段要求整树、追加段要求 ops"的自相矛盾提示词。
+    """
+    return (
+        "\n\n## 修改指令的输出形态\n"
+        "输出修改后的完整 DesignNode 树（不是 patch、不是片段），节点 id 与原来一致，结构与原来一致。"
+    )
 
 
 def incremental_system(locked: bool = False, assets: list[dict[str, Any]] | None = None) -> str:
@@ -614,7 +627,7 @@ def incremental_system(locked: bool = False, assets: list[dict[str, Any]] | None
         + component_contract_section()
         + form_page_section()
         + assets_prompt_section(assets)
-        + (ops_prompt_section() if get_settings().prompt_ops_enabled else "")
+        + (ops_prompt_section() if get_settings().prompt_ops_enabled else legacy_tree_prompt_section())
         + HISTORY_USAGE_SECTION
     )
     if locked:
@@ -914,6 +927,7 @@ def generate_design(
                 error = f"参数填充调用失败：{describe_api_error(exc)}"
                 filled = None
         ops_applied: list[str] = []
+        no_change = False
         if filled is None or not isinstance(filled, dict):
             fallback = True
             if not error:
@@ -929,15 +943,22 @@ def generate_design(
             # T23：编辑模式优先按 ops 落地（显式增量）；返回整树时走下方兼容路径
             ops_removed: set[str] = set()
             if is_edit and isinstance(filled.get("ops"), list):
-                filled, ops_applied, ops_removed, ops_reason = apply_ops(current_design or {}, filled["ops"])
-                if ops_reason:
-                    gen_logger.warning("ops 落地被拒绝：%s", ops_reason)
-                    fallback = True
-                    error = f"AI 修改指令无法落地（{ops_reason}），画布保持原样"
+                if not filled["ops"]:
+                    # 空 ops = 模型判定"无需改动"（提示词就是这么要求的）→ 合法结果，不是失败。
+                    # 原树原样返回并跳过下面的修复/结构闸门：零改动不该把现有画布重写一遍。
+                    gen_logger.info("ops 为空：模型判定无需改动，原树返回")
+                    no_change = True
                     filled = default
                 else:
-                    gen_logger.info("ops 落地成功：%s 条，影响 %s 个节点", len(ops_applied), len(ops_applied))
-            if not fallback:
+                    filled, ops_applied, ops_removed, ops_reason = apply_ops(current_design or {}, filled["ops"])
+                    if ops_reason:
+                        gen_logger.warning("ops 落地被拒绝：%s", ops_reason)
+                        fallback = True
+                        error = f"AI 修改指令无法落地（{ops_reason}），画布保持原样"
+                        filled = default
+                    else:
+                        gen_logger.info("ops 落地成功：%s 条，影响 %s 个节点", len(ops_applied), len(ops_applied))
+            if not fallback and not no_change:
                 # T17：模型常把整棵树包一层——先解包再修复，避免"只差一层壳"整稿回退模板
                 unwrapped, source = unwrap_design(filled)
                 if unwrapped is not None:

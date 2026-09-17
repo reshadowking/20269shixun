@@ -1,6 +1,7 @@
 """T23：结构化增量（ops）——六种 op、整批原子拒绝、与 T16 闸门联动、整树兼容路径。"""
 import json
 
+from app.config import get_settings
 from app.services.generate import generate_design
 from app.services.llm import LLMClient
 from app.services.ops import MAX_INSERT_NODES, apply_ops
@@ -85,6 +86,62 @@ class TestApplyOps:
             tree, _, _, reason = apply_ops(CURRENT, ops)
             assert reason, f"应被拒绝：{ops[:1]}"
             assert tree == CURRENT
+
+    def test_non_list_ops_rejected(self):
+        """ops 不是数组：拒绝（不是崩），原树原样。"""
+        for bad in ({"op": "set_text"}, "set_text", None):
+            tree, _, _, reason = apply_ops(CURRENT, bad)
+            assert reason and "数组" in reason, bad
+            assert tree == CURRENT
+
+    def test_empty_ops_is_a_legal_noop(self):
+        """空 ops 是提示词明确要求的"无改动"表达 → 合法结果，不是失败。
+
+        2026-09-17 真实模型实测：用户问「这个页面现在是什么风格？」，DeepSeek 按
+        ops_prompt_section 的"无改动时返回空数组"返回 {"ops":[]}，旧实现却按非法拒绝，
+        前端显示「⚠️ 修改失败（画布保持原样）原因：AI 修改指令无法落地（ops 必须是非空数组…）」。
+        """
+        tree, affected, removed, reason = apply_ops(CURRENT, [])
+        assert reason == ""
+        assert tree == CURRENT and affected == [] and removed == set()
+
+        result = generate_design("这个页面现在是什么风格？", LLMClient(mock_responder=_responder([])), current_design=CURRENT)
+        assert result.fallback is False, result.error
+        assert result.error == ""
+        assert result.design == CURRENT
+        assert result.ops_applied == []
+
+    def test_insert_duplicate_id_rejected(self):
+        """重复 id 会让节点定位（前端查找/选中、Yjs、导出 key）全部歧义，必须在 ops 层挡掉。"""
+        cases = [
+            {"id": "title", "type": "text"},  # 与现有节点同 id
+            {"id": "fresh", "type": "frame", "children": [{"id": "buy", "type": "text"}]},  # 子树里撞已有 id
+            {"id": "n1", "type": "frame", "children": [{"id": "n1", "type": "text"}]},  # 自身内部重复
+        ]
+        for node in cases:
+            tree, _, _, reason = apply_ops(CURRENT, [{"op": "insert", "parent": "root", "index": 0, "node": node}])
+            assert reason and "已存在" in reason, node
+            assert tree == CURRENT
+
+    def test_move_index_must_be_integer(self):
+        """index 不是整数时旧实现会抛 TypeError/ValueError → 接口层 502
+        「AI 生成失败：int() argument must be a string…」（实测）。现在必须按可读原因整批拒绝。
+        """
+        for bad in (None, "0", "abc", 1.5, True):
+            tree, _, _, reason = apply_ops(
+                CURRENT, [{"op": "move", "id": "title", "parent": "root", "index": bad}]
+            )
+            assert reason and "整数" in reason, bad
+            assert tree == CURRENT
+
+        result = generate_design(
+            "把标题挪到最后",
+            LLMClient(mock_responder=_responder([{"op": "move", "id": "title", "parent": "root", "index": None}])),
+            current_design=CURRENT,
+        )
+        assert result.fallback is True
+        assert "无法落地" in result.error and "整数" in result.error
+        assert result.design == CURRENT
 
 
 class TestOpsEndToEnd:
@@ -192,3 +249,37 @@ class TestOpsEndToEnd:
         for probe in ("背景不变", "最外层容器", "只改该组件"):
             assert probe in INCREMENTAL_SYSTEM
             assert probe in text
+
+    def test_prompt_declares_output_shape_exactly_once(self):
+        """输出形态只能由形态段规定：基础约束段不得再要求"输出完整树"。
+
+        旧版基础段写「输出修改后的【完整 DesignNode 树】」，追加的 ops 段又写「不要再输出
+        完整树」——同一个 system 里两条互斥指令，模型只能二选一（实测两种形态都出现过）。
+        """
+        from app.services.generate import (
+            INCREMENTAL_SYSTEM,
+            incremental_system,
+            legacy_tree_prompt_section,
+            ops_prompt_section,
+        )
+
+        assert "输出修改后的【完整 DesignNode 树】" not in INCREMENTAL_SYSTEM
+        assert "（完整 DesignNode 树）" not in INCREMENTAL_SYSTEM
+
+        ops_text = incremental_system(False)
+        assert ops_prompt_section() in ops_text
+        assert legacy_tree_prompt_section() not in ops_text
+        assert ops_text.count("## 修改指令的输出形态") == 1
+
+        # PROMPT_OPS_ENABLED=0（A/B 度量脚本的对照臂）→ 只出现整树形态段
+        settings = get_settings()
+        original = settings.prompt_ops_enabled
+        settings.prompt_ops_enabled = False
+        try:
+            legacy_text = incremental_system(False)
+        finally:
+            settings.prompt_ops_enabled = original
+        assert legacy_tree_prompt_section() in legacy_text
+        assert ops_prompt_section() not in legacy_text
+        assert legacy_text.count("## 修改指令的输出形态") == 1
+        assert "输出修改后的完整 DesignNode 树" in legacy_text
