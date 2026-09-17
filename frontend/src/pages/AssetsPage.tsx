@@ -172,7 +172,9 @@ function AssetActions({
 
 interface AssetList {
   images: AssetRow[]
+  /** 账号级用量（服务端按 owner 统计，不随 folder_id 过滤） */
   used_bytes: number
+  used_count?: number
   limit_count: number
   limit_bytes: number
 }
@@ -461,6 +463,12 @@ export default function AssetsPage() {
 
   const used = data?.used_bytes ?? 0
   const count = data?.images.length ?? 0
+  /**
+   * 2026-09-17：`count` 是**当前范围**的条数，`used`/`usedCount` 是**账号**用量（配额按账号算，
+   * 见 images.py 的 upload_image）。两者口径不同，所以下面分开说：进文件夹后条数标「本范围」，
+   * "已用"始终是账号数字——否则会出现"看着还有 20MB，一上传却报容量已达上限"。
+   */
+  const usedCount = data?.used_count ?? count
   /** 文件夹计数是全账号口径（与当前浏览范围无关），所以"全部"能用它显示总数 */
   const totalCount = folders.folders.reduce((sum, f) => sum + f.count, 0) + folders.ungrouped
   const scopeBtnCls = (active: boolean) =>
@@ -589,7 +597,8 @@ export default function AssetsPage() {
       <div className="mb-1 flex items-center gap-3">
         <h1 className="text-lg font-semibold">我的资产</h1>
         <span className="text-xs text-muted-foreground" data-testid="assets-usage">
-          {count}/{data?.limit_count ?? '—'} 张 · 已用 {humanSize(used)} / {humanSize(data?.limit_bytes ?? 0)}
+          {scope !== 'all' && `本范围 ${count} 张 · `}
+          {usedCount}/{data?.limit_count ?? '—'} 张 · 已用 {humanSize(used)} / {humanSize(data?.limit_bytes ?? 0)}
         </span>
         <input
           ref={fileRef}

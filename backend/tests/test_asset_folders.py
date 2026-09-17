@@ -75,6 +75,28 @@ def test_upload_into_folder_and_filter(client):
     assert client.get("/api/images?folder_id=abc", headers=alice).status_code == 422
 
 
+def test_usage_stays_account_wide_when_filtering_by_folder(client):
+    """配额是**账号级**的（上传校验按 owner 求和），列表里的"已用"也必须按账号算。
+
+    否则在文件夹里看到的是"这个文件夹才 72 字节、还早着呢"，一上传却报"容量已达上限"——
+    页面数字和服务端判定互相打脸。
+    """
+    alice = _register(client, "fold_usage")
+    folder_id = _create_folder(client, alice, "图标").json()["id"]
+    _upload(client, alice, folder_id=folder_id, name="in.png")
+    _upload(client, alice, name="loose.png")
+    per_image = len(PNG)
+
+    scoped = client.get(f"/api/images?folder_id={folder_id}", headers=alice).json()
+    assert len(scoped["images"]) == 1  # 列表按文件夹过滤
+    assert scoped["used_count"] == 2  # 但用量（数量/字节）不跟着过滤
+    assert scoped["used_bytes"] == 2 * per_image
+    assert scoped["limit_count"] == 50 and scoped["limit_bytes"] == 20 * 1024 * 1024
+
+    whole = client.get("/api/images", headers=alice).json()
+    assert whole["used_count"] == 2 and whole["used_bytes"] == 2 * per_image
+
+
 def test_move_asset_between_folders(client):
     alice = _register(client, "fold_carol")
     first = _create_folder(client, alice, "A").json()["id"]

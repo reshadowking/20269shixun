@@ -235,9 +235,18 @@ def list_images(
     # 2026-09-16 拖拽排序：手工 sort_order 优先，未排过的（全 0）仍按新→旧展示
     rows = db.execute(stmt.order_by(Image.sort_order.asc(), Image.id.desc())).scalars().all()
     index = _reference_index(db)
+    # 2026-09-17 修：用量（数量/字节）必须**按账号**统计，不能跟着 `folder_id` 过滤。
+    # 配额是账号级的（见 upload_image 的 used_count/used_bytes），列表却被文件夹过滤 ——
+    # 原来 used_bytes 取的是"当前范围之和"，于是文件夹里显示"才用了几百字节"，一上传却报
+    # "容量已达上限"，页面数字和服务端判定互相打脸。列表过滤、用量不过滤。
+    used_count = db.execute(select(func.count()).select_from(Image).where(Image.owner_id == owner)).scalar_one()
+    used_bytes = db.execute(
+        select(func.coalesce(func.sum(Image.size), 0)).where(Image.owner_id == owner)
+    ).scalar_one()
     return {
         "images": [_row_payload(db, r, index.get(r.id, [])) for r in rows],
-        "used_bytes": sum(r.size for r in rows),
+        "used_bytes": int(used_bytes),
+        "used_count": int(used_count),
         "limit_count": MAX_ASSETS_PER_USER,
         "limit_bytes": MAX_BYTES_PER_USER,
     }

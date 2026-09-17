@@ -191,6 +191,27 @@ describe('AssetsPage（T44 文件夹）', () => {
     )
   })
 
+  /**
+   * 用量口径（2026-09-17）：配额是**账号级**的（服务端上传时按 owner 求和），所以"已用"
+   * 也必须按账号显示；`images.length` 只描述**当前范围**。
+   * 改前：进文件夹后显示的是这个文件夹的字节数 —— 看着"还有 20MB"，一上传却报"容量已达上限"。
+   */
+  it('进文件夹后：条数标成「本范围」，「已用」仍是账号口径', async () => {
+    const fetchMock = mockFetch(
+      { images: [{ ...IMAGE, folder_id: 1 }], used_bytes: 4096, used_count: 2, limit_count: 50, limit_bytes: 20971520 },
+      { folders: FOLDERS },
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    renderPage()
+
+    fireEvent.click(await screen.findByTestId('folder-1'))
+
+    const usage = screen.getByTestId('assets-usage')
+    await waitFor(() => expect(usage).toHaveTextContent('本范围 1 张'))
+    expect(usage).toHaveTextContent('2/50 张')
+    expect(usage).toHaveTextContent('4.0 KB')
+  })
+
   it('卡片上的文件夹下拉把资产移进去（PATCH /folder）', async () => {
     const fetchMock = mockFetch(
       { images: [{ ...IMAGE, folder_id: null }], used_bytes: 2048, limit_count: 50, limit_bytes: 20971520 },
