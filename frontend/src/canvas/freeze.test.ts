@@ -178,3 +178,60 @@ describe('measureChildren（公式：÷scale、只减 border）', () => {
     }
   })
 })
+
+/**
+ * 2026-09-17：② 「冻结错乱」剩下两个嫌疑里**能在 jsdom 确定性验证**的部分。
+ * 真实布局测量要真栈，但下面两条是纯数学性质，任何一条不成立都会导致"越冻越偏"：
+ *   ① 不动点：把已冻结的结果再冻一次，必须一模一样（自动冻结会在每次 AI 落地后跑）；
+ *   ② 作用域：只写直接子节点的 x/y/宽高，嵌套容器的内部一个字节都不动。
+ */
+describe('冻结的数学性质（防"越冻越偏"）', () => {
+  const measurementsOf = (nodes: DesignNode[]): FreezeMeasurement[] =>
+    nodes.map((n) => ({
+      id: n.id,
+      x: n.x ?? 0,
+      y: n.y ?? 0,
+      width: Number(n.style?.width ?? 0),
+      height: Number(n.style?.height ?? 0),
+    }))
+
+  it('不动点：对已冻结的树再冻一次，结果完全一致（ceil/round 不带漂移）', () => {
+    const children = [
+      { id: 'a', type: 'frame', style: { width: '100%', gap: 8 } },
+      { id: 'b', type: 'frame', style: { width: 233.2, height: 41.6 } },
+      { id: 'c', type: 'text', style: {} },
+    ] as DesignNode[]
+    const first = freezeToFreeLayout(children, [
+      { id: 'a', x: 24.4, y: 12.6, width: 300.2, height: 80.4 },
+      { id: 'b', x: 0, y: 100.6, width: 200.2, height: 40.5 },
+      { id: 'c', x: 10.5, y: 200.4, width: 50.5, height: 20.5 },
+    ])
+    const second = freezeToFreeLayout(first, measurementsOf(first))
+    expect(second).toEqual(first)
+    // 再三确认：第三次也一样（重复自动冻结不允许累积误差）
+    expect(freezeToFreeLayout(second, measurementsOf(second))).toEqual(first)
+  })
+
+  it('作用域：只写直接子节点；嵌套容器的内部子树原样保留', () => {
+    const nested: DesignNode = {
+      id: 'box',
+      type: 'frame',
+      style: { layout: 'column' },
+      children: [{ id: 'inner-text', type: 'text', props: { text: '内层' }, style: { fontSize: 14 } }],
+    }
+    const children: DesignNode[] = [nested, { id: 'sibling', type: 'text', props: { text: '兄弟' }, style: {} }]
+
+    const frozen = freezeToFreeLayout(children, [
+      { id: 'box', x: 0, y: 0, width: 320, height: 200 },
+      { id: 'sibling', x: 0, y: 210, width: 320, height: 24 },
+    ])
+
+    expect(frozen[0].x).toBe(0)
+    expect(frozen[0].style?.width).toBe(320)
+    // 内层子树必须一个字节都没动（否则"外层 free + 内层被改写"才是真的错乱来源）
+    expect(frozen[0].children).toEqual(nested.children)
+    expect(frozen[0].style?.layout).toBe('column')
+    // 没被测到的节点原样返回
+    expect(freezeToFreeLayout(children, [{ id: 'box', x: 1, y: 2, width: 3, height: 4 }])[1]).toBe(children[1])
+  })
+})
