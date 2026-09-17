@@ -130,6 +130,11 @@ def apply_ops(tree: dict[str, Any], ops: Any) -> tuple[dict[str, Any], list[str]
         elif kind == "move":
             if siblings is None:
                 return tree, [], set(), "根节点不可移动"
+            # 防环（2026-09-17 实测复现）：移到自己或自己的后代里时，子树会先被 pop 掉、
+            # 再插进"已脱离主树"的那份旧引用里 → 节点与它的整棵子树**凭空消失**（静默丢数据）。
+            # 前端 `designStore.moveNodeTo` 一直有这条守卫，服务端 ops 引擎漏了；这里补齐。
+            if _find(node, str(op["parent"])) is not None:
+                return tree, [], set(), f"不能把节点移到它自己或它的子节点下面：{op['parent']}"
             target = _find(work, str(op["parent"]))
             if target is None:
                 return tree, [], set(), f"目标父节点不存在：{op['parent']}"

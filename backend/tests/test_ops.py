@@ -126,6 +126,42 @@ class TestOpsEndToEnd:
         assert blocked.fallback is True
         assert blocked.design == CURRENT
 
+    def test_move_into_own_subtree_is_rejected(self):
+        """2026-09-17 实测复现的 P1：移到自己的后代（或自己）下面 → 子树会**凭空消失**。
+
+        根因：`siblings.pop()` 先把子树摘掉，再把节点插进"已脱离主树"的旧引用里。
+        前端 `designStore.moveNodeTo` 一直有防环守卫，服务端 ops 引擎漏了。
+        """
+        tree = {
+            "id": "root",
+            "type": "frame",
+            "children": [
+                {"id": "a", "type": "frame", "children": [{"id": "a1", "type": "text", "props": {"text": "内层"}}]},
+                {"id": "b", "type": "text", "props": {"text": "兄弟"}},
+            ],
+        }
+        for parent in ("a1", "a"):  # 后代 / 自己
+            out, _affected, _removed, reason = apply_ops(tree, [{"op": "move", "id": "a", "parent": parent, "index": 0}])
+            assert reason, f"parent={parent} 应被拒绝（否则丢子树）"
+            assert "子节点" in reason or "自己" in reason
+            assert out == tree, f"parent={parent} 拒绝后树必须原样"
+
+    def test_move_to_sibling_parent_still_works(self):
+        """护栏不能把合法的换父级一起挡掉。"""
+        tree = {
+            "id": "root",
+            "type": "frame",
+            "children": [
+                {"id": "a", "type": "frame", "children": [{"id": "a1", "type": "text", "props": {"text": "内层"}}]},
+                {"id": "b", "type": "frame", "children": []},
+            ],
+        }
+        out, affected, _removed, reason = apply_ops(tree, [{"op": "move", "id": "a1", "parent": "b", "index": 0}])
+        assert reason == ""
+        assert "a1" in affected
+        assert [c["id"] for c in out["children"][1]["children"]] == ["a1"]
+        assert out["children"][0]["children"] == []
+
     def test_illegal_ops_keep_canvas(self):
         result = generate_design(
             "删掉一个不存在的节点",
