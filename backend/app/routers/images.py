@@ -171,10 +171,11 @@ async def upload_image(
 
     storage = Path(get_settings().storage_root)
     storage.mkdir(parents=True, exist_ok=True)
-    name = f"{uuid.uuid4().hex}{ext}"
-    (storage / name).write_bytes(data)
 
-    # T38：归属 + 配额（数量/容量）——资产库的前提是"这是谁的"
+    # T38：归属 + 配额（数量/容量）——资产库的前提是"这是谁的"。
+    # 2026-09-17 修：配额校验必须**在落盘之前**。原来先 write_bytes 再校验配额，
+    # 超限时已经写进磁盘的 2MB 文件就永远没人删（没有对应 DB 行 → 也查不出来），
+    # 用户反复重试就是反复泄漏。与上面"上传前先校验文件夹"同一条原则。
     used_count = db.execute(select(func.count()).select_from(Image).where(Image.owner_id == owner)).scalar_one()
     used_bytes = db.execute(
         select(func.coalesce(func.sum(Image.size), 0)).where(Image.owner_id == owner)
@@ -183,6 +184,9 @@ async def upload_image(
         raise HTTPException(status_code=422, detail=f"资产数量已达上限（{MAX_ASSETS_PER_USER} 个），请先删除不再使用的图片")
     if used_bytes + len(data) > MAX_BYTES_PER_USER:
         raise HTTPException(status_code=422, detail="资产总容量已达上限（20MB），请先删除不再使用的图片")
+
+    name = f"{uuid.uuid4().hex}{ext}"
+    (storage / name).write_bytes(data)
 
     row = Image(
         filename=file.filename or name,

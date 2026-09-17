@@ -65,6 +65,20 @@ def _isolate_llm_runtime_config(tmp_path_factory):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_asset_storage(tmp_path, monkeypatch):
+    """把上传目录指到临时目录，**绝不写开发者的 backend/designs/images**。
+
+    事故背景（2026-09-17 发现）：所有上传用例（test_images / test_image_visibility /
+    test_image_assets …）都写进了开发者的真实资产目录——全量跑一次 pytest 就多几十个
+    72 字节的孤儿文件（本地已堆到 932 个，其中 909 个是 72 字节的测试小图），
+    它们与测试库（SQLite）不同源，因此永远不会被测试清掉，只能靠人工分辨。
+    """
+    from app.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "storage_root", str(tmp_path / "images"))
+
+
+@pytest.fixture(autouse=True)
 def _relax_ai_limits(monkeypatch):
     """T22：限流/熔断是进程内全局状态——测试里放宽阈值并逐用例清零。
 
