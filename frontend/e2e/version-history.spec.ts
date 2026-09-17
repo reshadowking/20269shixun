@@ -63,7 +63,9 @@ test('版本历史：存版本 → 恢复只改本地 → 保存才写回服务�
   await expect(page.getByTestId('node-btn1')).toContainText('改过的文案')
   await page.getByTestId('save-design').click()
   await expect(page.getByTestId('unsaved-indicator')).toHaveCount(0, { timeout: 10_000 })
-  expect(await serverText(request, token, id, 'btn1')).toBe('改过的文案')
+  // ⚠️ 必须轮询：保存是异步 PUT，`unsaved-indicator` 在"提示还没渲染"时也会瞬间 count=0，
+  // 直接查服务器会抢在 PUT 之前（Postgres 上就是这么红的）。
+  await expect.poll(() => serverText(request, token, id, 'btn1'), { timeout: 10_000 }).toBe('改过的文案')
 
   // ③ 恢复 v1：确认框 → 画布回退；**服务器此时仍是"改过的文案"**（恢复只改本地）
   page.on('dialog', (d) => void d.accept())
