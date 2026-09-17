@@ -209,25 +209,55 @@ class LLMClient:
         except APITimeoutError as exc:
             # 超时往往是一次性抖动：重试一次主模型，仍失败再切备用（备用超时减半，控制总时长）
             logger.warning("主模型超时（%s），重试一次", describe_api_error(exc))
+            # 2026-09-17：重试前先看预算。原实现只在**入口**与备用超时上考虑预算，
+            # 实测预算只剩 8s 时仍会发起 30s 的备用请求（最坏总耗时 8+8+30≈46s）。
+            self._raise_if_expired(deadline)
             try:
                 return self._create(client, self.cfg("llm_model"), system, user, temperature, history, kind)
             except Exception as exc2:  # noqa: BLE001
                 logger.warning("重试仍失败，切备用模型: %s", describe_api_error(exc2))
                 return self._create(
-                    self._backup_client(), self.cfg("llm_backup_model"), system, user, temperature, history, kind
+                    self._backup_client(deadline),
+                    self.cfg("llm_backup_model"),
+                    system,
+                    user,
+                    temperature,
+                    history,
+                    kind,
                 )
         except Exception as exc:  # noqa: BLE001 - 限流/鉴权等切备用模型
             logger.warning("主模型调用失败（%s），切备用模型", describe_api_error(exc))
             return self._create(
-                self._backup_client(), self.cfg("llm_backup_model"), system, user, temperature, history, kind
+                self._backup_client(deadline),
+                self.cfg("llm_backup_model"),
+                system,
+                user,
+                temperature,
+                history,
+                kind,
             )
 
-    def _backup_client(self) -> OpenAI:
-        """备用模型客户端：超时减半（如 60s → 30s），避免重试链路总时长失控。"""
+    @staticmethod
+    def _raise_if_expired(deadline: Any | None) -> None:
+        """预算耗尽就不再发起下一次请求（重试 / 备用同样受约束）。"""
+        if deadline is not None and deadline.remaining() <= 0:
+            raise LLMDeadlineExceeded("时间预算已耗尽")
+
+    def _backup_client(self, deadline: Any | None = None) -> OpenAI:
+        """备用模型客户端：超时减半（如 60s → 30s），且**不得超过剩余预算**。
+
+        2026-09-17 修：原来无论剩多少预算都固定用它（实测预算 8s 仍发 30s 的请求），
+        与 `ai_gateway.GenerationDeadline` 的"整条链路时间预算"口径矛盾
+        （也直接影响"生成耗时 ≤30s"这条指标）。
+        """
+        self._raise_if_expired(deadline)
+        timeout = max(15.0, float(self.cfg("llm_timeout_seconds")) / 2)
+        if deadline is not None:
+            timeout = min(timeout, deadline.remaining())
         return OpenAI(
             base_url=self.cfg("llm_base_url"),
             api_key=self.cfg("llm_api_key"),
-            timeout=max(15.0, float(self.cfg("llm_timeout_seconds")) / 2),
+            timeout=timeout,
         )
 
     def _create(

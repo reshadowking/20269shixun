@@ -131,6 +131,56 @@ class TestDeadline:
         time.sleep(0.06)
         assert deadline.expired()
 
+    def test_backup_and_retry_never_exceed_remaining_budget(self, monkeypatch):
+        """重试 / 备用模型都不得超出剩余预算（2026-09-17 修）。
+
+        实测（改前）：预算 8s → 三次尝试的超时分别是 [8.0, 8.0, **30.0**]（备用那步固定 30s），
+        最坏总耗时约 46s，与 ai_gateway 的"整条链路时间预算"口径矛盾，也会打破 ≤30s 的指标。
+        """
+        from openai import APITimeoutError
+
+        from app.services.llm import LLMClient
+
+        client = LLMClient()
+        client.runtime = {"llm_mode": "real", "llm_api_key": "sk-test", "llm_timeout_seconds": 60.0}
+        attempts: list[tuple[str, float]] = []
+
+        def always_timeout(_client, model, system, user, temperature, history=None, kind=""):
+            attempts.append((model, float(_client.timeout)))
+            raise APITimeoutError(request=None)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(client, "_create", always_timeout)
+        deadline = GenerationDeadline(8.0)
+        with pytest.raises(APITimeoutError):
+            client._real_chat("sys", "user", 0.5, deadline=deadline)
+
+        assert attempts, "应当至少尝试过主模型"
+        assert all(t <= 8.5 for _, t in attempts), f"有尝试超出剩余预算：{attempts}"
+
+    def test_expired_budget_skips_backup_entirely(self, monkeypatch):
+        """主模型失败时若预算已被吃光 → 连备用都不发（抛 LLMDeadlineExceeded，交上层兜底）。
+
+        这是 2026-09-17 新增 `_raise_if_expired` 的直接验收点：改前会照样发起 30s 的备用请求。
+        """
+        from openai import APIStatusError
+
+        from app.services.llm import LLMClient, LLMDeadlineExceeded
+
+        client = LLMClient()
+        client.runtime = {"llm_mode": "real", "llm_api_key": "sk-test", "llm_timeout_seconds": 60.0}
+        calls: list[str] = []
+
+        def fail_main(_client, model, system, user, temperature, history=None, kind=""):
+            calls.append(model)
+            time.sleep(0.25)  # 把 0.2s 的预算吃光后再失败
+            raise APIStatusError("boom", response=type("R", (), {"status_code": 500, "request": None})(), body=None)
+
+        monkeypatch.setattr(client, "_create", fail_main)
+        deadline = GenerationDeadline(0.2)
+        with pytest.raises(LLMDeadlineExceeded):
+            client._real_chat("sys", "user", 0.5, deadline=deadline)
+        assert calls == [get_settings().llm_model], f"耗尽预算后不应再发起备用调用：{calls}"
+
     def test_budget_exhausted_skips_further_calls(self, client, auth_headers, monkeypatch):
         """第一次调用把预算吃光 → 填充阶段不再发起调用，直接兜底并给出可读原因。"""
         from app.services import llm as llm_module
