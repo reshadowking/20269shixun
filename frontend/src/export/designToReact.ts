@@ -8,7 +8,7 @@ import { componentRegistry } from '@/components/canvas/registry'
 import type { AssetMap } from '@/export/inlineAssets'
 import type { ExportElement } from '@/components/canvas/types'
 import type { DesignNode } from '@/design/types'
-import { escapeHtml } from '@/design/escape'
+import { escapeHtml, escapeJsxText } from '@/design/escape'
 import { styleToCss } from '@/design/styleToCss'
 
 /** style 转 React 内联样式对象字面量。
@@ -47,7 +47,7 @@ function serializeReactElement(el: ExportElement, componentType?: string, assets
   const inner = el.children
     ? el.children.map((c) => serializeReactElement(c, undefined, assets)).join('')
     : el.text !== undefined
-      ? escapeHtml(el.text)
+      ? escapeJsxText(el.text)
       : ''
   const open = `<${el.tag}${dc}${styleStr}${attrsStr}`
   if (VOID_TAGS.has(el.tag)) return `${open} />`
@@ -60,12 +60,12 @@ function componentTag(node: DesignNode, assets?: AssetMap): string {
   if (def?.buildExport) return serializeReactElement(def.buildExport(node), node.componentType!, assets)
   const props = node.props ?? {}
   const style = styleLiteral(node.style)
-  const text = escapeHtml(typeof props.text === 'string' ? props.text : '')
+  const text = escapeJsxText(typeof props.text === 'string' ? props.text : '')
   // B1-2 全量迁移：所有组件经 registry.buildExport 序列化，此处仅为未注册组件兜底（契约测试保证不会发生）
   const ctitle = typeof props.title === 'string' ? props.title : ''
   const ccontent = typeof props.content === 'string' ? props.content : ''
   const ctext = text ? `<p>${text}</p>` : ''
-  const inner = `${ctext}${ctitle ? `<h3>${escapeHtml(ctitle)}</h3>` : ''}${ccontent ? `<p>${escapeHtml(ccontent)}</p>` : ''}`
+  const inner = `${ctext}${ctitle ? `<h3>${escapeJsxText(ctitle)}</h3>` : ''}${ccontent ? `<p>${escapeJsxText(ccontent)}</p>` : ''}`
   return `<div data-component="${node.componentType ?? 'card'}"${reactStyleAttr(style)}>${inner}</div>`
 }
 
@@ -75,7 +75,7 @@ function nodeToJsx(node: DesignNode, depth: number, assets?: AssetMap): string {
   const style = styleLiteral(node.style)
 
   if (node.type === 'text') {
-    const text = escapeHtml(typeof node.props?.text === 'string' ? node.props.text : '')
+    const text = escapeJsxText(typeof node.props?.text === 'string' ? node.props.text : '')
     return `${pad}<div${reactStyleAttr(style)}>${text}</div>`
   }
   if (node.type === 'component') {

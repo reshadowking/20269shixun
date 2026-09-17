@@ -14,6 +14,7 @@ import ts from 'typescript'
 
 import type { DesignNode } from '@/design/types'
 
+import { designToHtml } from './designToHtml'
 import { designToReactApp } from './designToReact'
 
 /** 用 TS 解析器检查语法（TSX！否则 `<div>` 会被当成类型断言） */
@@ -78,5 +79,36 @@ describe('导出产物语法守门（designToReact）', () => {
   it('空设计稿也零语法错（没有任何子节点）', () => {
     const bare: DesignNode = { id: 'root', type: 'frame', style: {} }
     expect(syntaxErrors(designToReactApp(bare, true))).toEqual([])
+  })
+
+  /**
+   * 文本里的花括号（2026-09-17 审计发现）。
+   *
+   * `escapeHtml` 只处理 & < > " '——足够 HTML 通道，但**不够 JSX 文本位**：
+   * 文本 `总价 {价格} 元` 会原样拼成 `<div>总价 {价格} 元</div>`，JSX 把 `{价格}`
+   * 当成 JS 表达式（`价格` 是合法标识符 → 编译过、运行期 ReferenceError，导出页直接白屏；
+   * 换成 `{1 +}` 这类内容则是编译错）。HTML 通道没有这个问题，所以这是"两通道不一致"。
+   */
+  it('文本里的花括号必须转义成实体（否则 JSX 当表达式 → 导出页白屏/编译错）', () => {
+    const design: DesignNode = {
+      id: 'root',
+      type: 'frame',
+      style: { layout: 'column' },
+      children: [
+        { id: 't1', type: 'text', props: { text: '总价 {价格} 元' }, style: {} },
+        { id: 'b1', type: 'component', componentType: 'button', props: { text: '确认{提交}' }, style: {} },
+      ],
+    }
+    const react = designToReactApp(design, false)
+    expect(react, 'JSX 文本位不能出现裸花括号').not.toMatch(/>[^<]*\{[^}]*\}[^<]*</)
+    expect(react).toContain('&#123;价格&#125;')
+    expect(syntaxErrors(react)).toEqual([])
+
+    // HTML 通道是文本节点，花括号本来就是字面量、且不会被吞掉（两通道渲染结果一致：
+    // 都是"总价 {价格} 元"）。这里刻意不要求 HTML 也实体化——它没有 JSX 表达式位的问题，
+    // 强行统一只会让产物更难读。本断言锁的是"两通道都不能丢字符"。
+    const html = designToHtml(design)
+    expect(html).toContain('{价格}')
+    expect(html).toContain('确认{提交}')
   })
 })
