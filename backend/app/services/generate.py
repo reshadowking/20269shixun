@@ -177,6 +177,27 @@ def component_contract_section() -> str:
     return "\n".join(lines) + COMPONENT_FEW_SHOT
 
 
+def assets_prompt_section(assets: list[dict[str, Any]] | None) -> str:
+    """用户资产库里的图片（2026-09-17）。
+
+    为什么需要：此前生成链路**完全看不到用户上传的图**（`GenerateRequest` 也没有资产字段），
+    模型只能用 `image` 组件的占位或外链——"用我上传的图做个页面"根本做不到。
+
+    口径：url 原样注入（`/api/images/<id>`，导出时会内联成 base64，不会 404）；
+    **没有合适的图就不要用 image 组件**，禁止编造外链——否则产物里是一堆打不开的图。
+    """
+    if not assets:
+        return ""
+    lines = ["\n\n## 可用图片（用户资产库；image 组件的 props.src 只能从下面这些 url 里逐字选）"]
+    for a in assets[:12]:
+        name = str(a.get("name") or a.get("filename") or "").strip()
+        url = str(a.get("url") or "").strip()
+        if url:
+            lines.append(f"- {name or '(未命名)'} → {url}")
+    lines.append("没有合适的图就不要放 image 组件；**禁止编造外链或占位图地址**。")
+    return "\n".join(lines)
+
+
 def form_page_section() -> str:
     """表单页三条约束（2026-09-16，来自导出产物验收）。
 
@@ -573,7 +594,7 @@ def ops_prompt_section() -> str:
     return "\n".join(lines)
 
 
-def incremental_system(locked: bool = False) -> str:
+def incremental_system(locked: bool = False, assets: list[dict[str, Any]] | None = None) -> str:
     """组装增量修改 system 提示词（T4 批2）：既有约束 + 效果词典 + 图标清单 +（locked 时）锁定约束段。
 
     - INCREMENTAL_SYSTEM 既有约束文本逐字保留（多处测试断言依赖），词典为追加式拼装；
@@ -592,6 +613,7 @@ def incremental_system(locked: bool = False) -> str:
         + icon_prompt_section()
         + component_contract_section()
         + form_page_section()
+        + assets_prompt_section(assets)
         + (ops_prompt_section() if get_settings().prompt_ops_enabled else "")
         + HISTORY_USAGE_SECTION
     )
@@ -600,14 +622,28 @@ def incremental_system(locked: bool = False) -> str:
     return text
 
 
-def fill_system_text() -> str:
-    """FILL_SYSTEM + 运行期注入段（图标 T9 + 组件字段契约 T18 + 对话上下文规则 T24）。"""
-    return FILL_SYSTEM + icon_prompt_section() + component_contract_section() + form_page_section() + HISTORY_USAGE_SECTION
+def fill_system_text(assets: list[dict[str, Any]] | None = None) -> str:
+    """FILL_SYSTEM + 运行期注入段（图标 T9 + 组件字段契约 T18 + 表单页/资产 + 对话上下文规则 T24）。"""
+    return (
+        FILL_SYSTEM
+        + icon_prompt_section()
+        + component_contract_section()
+        + form_page_section()
+        + assets_prompt_section(assets)
+        + HISTORY_USAGE_SECTION
+    )
 
 
-def free_system_text() -> str:
-    """FREE_SYSTEM + 运行期注入段（图标 T9 + 组件字段契约 T18 + 对话上下文规则 T24）。"""
-    return FREE_SYSTEM + icon_prompt_section() + component_contract_section() + form_page_section() + HISTORY_USAGE_SECTION
+def free_system_text(assets: list[dict[str, Any]] | None = None) -> str:
+    """FREE_SYSTEM + 运行期注入段（同上）。"""
+    return (
+        FREE_SYSTEM
+        + icon_prompt_section()
+        + component_contract_section()
+        + form_page_section()
+        + assets_prompt_section(assets)
+        + HISTORY_USAGE_SECTION
+    )
 
 SUMMARY_SYSTEM = """你是需求摘要器。把用户的长篇设计需求压缩为简洁的结构化需求描述（200 字以内），供下游生成设计稿。
 硬约束：
@@ -743,6 +779,7 @@ def generate_design(
     locked: bool = False,
     history: list[dict] | None = None,
     deadline: GenerationDeadline | None = None,
+    assets: list[dict[str, Any]] | None = None,
 ) -> GenerateResult:
     """生成设计稿。current_design 非空时走【增量修改】模式（P0-1）：
     基于当前树只改用户指定部分，其他节点保持不变；失败兜底返回原树。
@@ -755,6 +792,9 @@ def generate_design(
 
     deadline（T20）：整条链路的时间预算；每次发起真实调用前检查剩余量，
     不足以再跑一次时直接走兜底（不再发请求、不再重试/切备用模型）。mock 模式不受其约束。
+
+    assets（2026-09-17）：用户资产库的图片（`[{name,url}]`），注入"可用图片"段——
+    让模型能引用上传过的图，而不是编外链。为空时行为与改造前逐字相同。
     """
     settings = get_settings()
     client = client or LLMClient()
@@ -834,14 +874,14 @@ def generate_design(
         if is_edit:
             default = current_design  # 增量失败兜底：返回原树（画布不变，不丢用户调整）
             user_payload = {"user_request": fill_prompt, "current_design": current_design, "history": history or []}
-            fill_system = incremental_system(locked)
+            fill_system = incremental_system(locked, assets)
         else:
             is_free = template_name == "free"
             default = free_default_design(prompt) if is_free else TEMPLATES.get(template_name, TEMPLATES["landing"])
             user_payload = {"user_request": fill_prompt, "intent": intent, "history": history or []}
             if not is_free:
                 user_payload["template_skeleton"] = default
-            fill_system = free_system_text() if is_free else fill_system_text()
+            fill_system = free_system_text(assets) if is_free else fill_system_text(assets)
         if circuit_open:
             fallback = True
             error = "AI 服务暂时不可用（已自动降级）"

@@ -23,6 +23,8 @@ router = APIRouter(tags=["generate"])
 
 
 class GenerateRequest(BaseModel):
+    """生成请求。`assets` 是 2026-09-17 新增的用户资产库图片（可选，向后兼容）。"""
+
     # 上限 8000 字符：超长需求先进长提示词摘要（>400 字符），不再被接口直接拒绝
     prompt: str = Field(min_length=1, max_length=8000)
     design_system: str = Field(default="brand-design-token-23v1", max_length=100)
@@ -36,6 +38,9 @@ class GenerateRequest(BaseModel):
     # T24：会话 id（可选，向后兼容）——服务端据此取最近 2 轮历史（含上一轮指令原文）。
     # 与 T21 的记账复用同一字段；缺省/越权/不存在都会安全降级为"无历史"。
     session_key: str | None = Field(default=None, max_length=64)
+    # 2026-09-17：用户资产库里的图片（[{id,name,url}]，最多 12 条生效）。
+    # 让模型能引用"我上传过的图"，而不是编外链；不传 = 行为与改造前逐字相同。
+    assets: list[dict] = Field(default_factory=list, max_length=12)
 
 
 class GenerateResponse(BaseModel):
@@ -78,6 +83,7 @@ async def generate(req: GenerateRequest, _user: str = Depends(get_current_user),
             locked=req.locked,
             history=history,
             deadline=deadline,
+            assets=req.assets,
         )
     except GatewayBusy as exc:
         # 取不到槽位 = 没开始干活：503（与"干了但降级"的 200+fallback 语义区分）

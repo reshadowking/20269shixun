@@ -42,6 +42,24 @@ interface ChatMessage {
   ephemeral?: boolean
 }
 
+/**
+ * 取用户资产库里可用的图片（2026-09-17，供生成时注入提示词）。
+ *
+ * 只取前 12 张（提示词体积）且**失败即静默降级**为"没有资产"——取图失败绝不能挡住生成。
+ * 导出时这些 url 会被内联成 base64（ADR-008），所以产物里不会 404。
+ */
+async function loadAssetsForPrompt(): Promise<Array<{ id: number; name: string; url: string }>> {
+  try {
+    const resp = await api<{ images?: Array<{ id: number; filename?: string; url?: string }> }>('/api/images')
+    return (resp.images ?? [])
+      .filter((img) => typeof img.url === 'string' && img.url)
+      .slice(0, 12)
+      .map((img) => ({ id: img.id, name: img.filename ?? `图片 ${img.id}`, url: String(img.url) }))
+  } catch {
+    return []
+  }
+}
+
 /** B2-2/D1：单条合规拉回明细（与后端 ComplianceFix 对齐） */
 export interface ComplianceFixItem {
   node_id: string
@@ -359,6 +377,10 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
         // 客户端——闸门按服务端 design_locks 查表，谎报 locked 只会得到被拒结果。
         body.locked = locked === true
       }
+      // 2026-09-17：把用户资产库的图片带给模型（"用我上传的图"才做得到）。
+      // 每次生成前现取（一张图可能刚上传），失败就当没有资产——绝不因为取图失败而挡住生成。
+      const assets = await loadAssetsForPrompt()
+      if (assets.length) body.assets = assets
       const resp = await api<GenerateResponse>('/api/generate', {
         method: 'POST',
         body: JSON.stringify(body),
