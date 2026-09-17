@@ -208,3 +208,48 @@ describe('ProjectsPage（列表搜索与排序）', () => {
     expect(readProjectSort()).toBe('created_desc')
   })
 })
+
+/**
+ * 过期响应竞态（2026-09-17）：`load()` 没有请求序号/取消，慢的旧响应会覆盖新结果。
+ * 用户故事：搜索词或排序刚改，列表却显示**上一个条件**的结果（得再点一下才刷新）。
+ */
+describe('ProjectsPage 过期响应', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    localStorage.clear()
+  })
+
+  it('慢的旧响应不能覆盖新结果（按条件变化的过期响应必须丢弃）', async () => {
+    let designsCalls = 0
+    // 用对象挂载 resolve，避免 TS 把闭包里的赋值当成"从未发生"而收窄成 never
+    const gate: { resolve?: (v: unknown) => void } = {}
+    const firstPending = new Promise<unknown>((resolve) => {
+      gate.resolve = resolve
+    })
+    const ok = (body: unknown) => ({ ok: true, status: 200, json: async () => body })
+    const row = (name: string) => ({ ...DESIGN, id: 2, name })
+
+    const fetchMock = vi.fn(async (url: string) => {
+      const path = String(url)
+      if (path.includes('/api/workspaces')) return ok({ workspaces: [] })
+      designsCalls += 1
+      if (designsCalls === 1) return firstPending // 首个请求：挂着不返回
+      return ok({ designs: [row('新结果')], total: 1 })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    renderPage()
+    await waitFor(() => expect(designsCalls).toBe(1))
+
+    // 改搜索词 → 防抖后发第二个请求（立刻返回"新结果"）
+    fireEvent.change(screen.getByTestId('projects-search'), { target: { value: '新' } })
+    await waitFor(() => expect(screen.getByText('新结果')).toBeInTheDocument(), { timeout: 3000 })
+    expect(designsCalls).toBeGreaterThanOrEqual(2)
+
+    // 现在让"过期"的首个响应回来：它不能覆盖已经渲染的新结果
+    gate.resolve?.(ok({ designs: [row('旧结果')], total: 1 }))
+    await new Promise((r) => setTimeout(r, 60))
+    expect(screen.queryByText('旧结果')).not.toBeInTheDocument()
+    expect(screen.getByText('新结果')).toBeInTheDocument()
+  })
+})

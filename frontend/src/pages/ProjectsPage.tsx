@@ -2,7 +2,7 @@
  * T36：「我的项目」页（从首页列表迁出，逻辑与既有实现一致：分页 / 删除确认 / 空态）。
  * 数据仍走既有 `/api/designs`，不新增后端契约。
  */
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 
 import DesignThumbnail from '@/components/chat/DesignThumbnail'
@@ -56,7 +56,16 @@ export default function ProjectsPage() {
   /** T46a-4：可写入的工作区（owner/editor）——只有多于一个时才显示"移动"入口 */
   const [workspaces, setWorkspaces] = useState<WorkspaceRow[]>([])
 
+  /**
+   * 请求序号（2026-09-17）：`load` 会被"搜索词变化 / 排序变化 / 翻页 / 删除后重载"多次触发，
+   * 而**网络返回顺序不保证**——慢的旧响应会用上一个条件的结果覆盖新结果
+   * （实测：改搜索词后列表闪回旧关键词的结果，得再点一次才刷新）。
+   * 规则：只让最新一次请求写状态，过期响应整段丢弃（含它的 loading/error）。
+   */
+  const reqSeq = useRef(0)
+
   const load = useCallback(async (nextOffset: number) => {
+    const seq = ++reqSeq.current
     setLoading(true)
     setError('')
     try {
@@ -68,13 +77,15 @@ export default function ProjectsPage() {
       })
       if (debouncedQ) params.set('q', debouncedQ)
       const resp = await api<{ designs: DesignRow[]; total: number }>(`/api/designs?${params.toString()}`)
+      if (seq !== reqSeq.current) return // 过期响应：用户已经换了条件或翻了别的页
       setRows(resp.designs)
       setTotal(resp.total)
       setOffset(nextOffset)
     } catch (err) {
+      if (seq !== reqSeq.current) return // 过期请求的失败也不该污染当前视图
       setError(err instanceof Error ? err.message : '加载失败')
     } finally {
-      setLoading(false)
+      if (seq === reqSeq.current) setLoading(false)
     }
   }, [debouncedQ, sort])
 
