@@ -1271,7 +1271,18 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
         {/* 中间：画布（AI 生成期间锁定） */}
         <div
           className="relative flex-1"
-          onPointerDown={() => {
+          onPointerDown={(e) => {
+            /**
+             * 2026-09-17 修（主流程）：**点在右键菜单/推荐浮层上时不要清空它们**。
+             *
+             * 原来这里无条件 `setCtxMenu(null)`：pointerdown 先冒泡到这里 → React 立刻卸载菜单 →
+             * 浏览器随后才派发 `click`，而目标（菜单项）已经从 DOM 里没了 → **整个右键菜单点不动**
+             * （推荐组件 / 智能优化 / 复制 / 删除 全是死的）。E2E `component-recommend.spec.ts` 抓到的：
+             * 点「✨ 推荐组件」后浮层从未出现。
+             * 菜单自己会在点完某项后关闭（各 onClick 里都 `setCtxMenu(null)`），所以这里只需跳过它自己。
+             */
+            const el = e.target as HTMLElement | null
+            if (el?.closest('[data-testid="context-menu"], [data-testid="recommend-popover"]')) return
             setCtxMenu(null)
             setRecommendPop(null)
           }}
