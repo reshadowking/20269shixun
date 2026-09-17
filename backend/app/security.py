@@ -91,6 +91,19 @@ def _verify_pbkdf2(password: str, stored: str) -> bool:
     return hmac.compare_digest(actual, expected)
 
 
+def _pbkdf2_iterations(stored: str) -> int | None:
+    """读哈希串里记录的迭代数（畸形/非新方案返回 None）。"""
+    prefix, _, rest = stored.partition("$")
+    if prefix != PBKDF2_PREFIX:
+        return None
+    iterations_text, _, _ = rest.partition("$")
+    try:
+        iterations = int(iterations_text)
+    except ValueError:
+        return None
+    return iterations if iterations >= 1 else None
+
+
 def _hash_with_salt(password: str, salt: str) -> str:
     return hashlib.sha256(f"{salt}::{password}".encode()).hexdigest()
 
@@ -104,9 +117,17 @@ def verify_password_full(password: str, password_hash: str) -> tuple[bool, bool]
     理论上可被逐字节测出哈希前缀；口令哈希比较没有理由不用常量时间——
     与 `routers/images.py` 的公开链接凭证、`routers/collab.py` 的内网令牌同一口径。
     同日起：新方案走 `_verify_pbkdf2`；旧方案的三种盐都算"需要升级"。
+    并且**迭代数偏低**的新方案哈希也算"需要升级"（例如后来把 `password_hash_iterations` 调高了，
+    老用户下次登录就顺手按新迭代数重写 —— 否则那个数字永远只影响新注册的人）。
     """
     if password_hash.startswith(PBKDF2_PREFIX + "$"):
-        return _verify_pbkdf2(password, password_hash), False
+        ok = _verify_pbkdf2(password, password_hash)
+        if not ok:
+            return False, False
+        # 迭代数写在哈希串里：低于当前配置就请调用方重写一次（无需用户做任何事）
+        stored = _pbkdf2_iterations(password_hash)
+        current = max(1, int(get_settings().password_hash_iterations))
+        return True, stored is not None and stored < current
     # 旧方案（全局盐 / jwt_secret / 历史硬编码盐）：命中即通过，并请调用方升级
     settings = get_settings()
     for salt in (settings.password_salt, settings.jwt_secret, *_LEGACY_HASH_SALTS):

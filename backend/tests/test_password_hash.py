@@ -60,6 +60,31 @@ def test_new_hash_is_not_marked_as_legacy():
     assert ok and not used_legacy
 
 
+def test_low_iteration_hash_is_flagged_for_rehash(monkeypatch):
+    """把 `password_hash_iterations` 调高之后，老哈希（迭代数低）要被标记"该重写"。
+
+    否则那个配置项只影响新注册的人，老用户的哈希永远停留在旧强度。
+    """
+    from app.config import get_settings
+    from app.security import PBKDF2_PREFIX
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "password_hash_iterations", 1000)
+    weak = hash_password("demo123")
+    assert weak.startswith(PBKDF2_PREFIX + "$1000$")
+
+    # 同强度：不需要重写
+    assert verify_password_full("demo123", weak) == (True, False)
+
+    # 把配置调高 → 该哈希被标记为重写对象（校验仍然通过）
+    monkeypatch.setattr(settings, "password_hash_iterations", 5000)
+    ok, needs_rehash = verify_password_full("demo123", weak)
+    assert ok and needs_rehash
+
+    # 新写入的哈希（5000）则不需要
+    assert verify_password_full("demo123", hash_password("demo123")) == (True, False)
+
+
 def test_malformed_hash_never_passes_and_never_raises():
     for bad in ("", "not-a-hash", f"{PBKDF2_PREFIX}$", f"{PBKDF2_PREFIX}$abc$x$y", f"{PBKDF2_PREFIX}$0$a$b"):
         ok, _ = verify_password_full("demo123", bad)
@@ -95,3 +120,29 @@ def test_legacy_row_is_upgraded_on_login(client):
 
     # 升级后的哈希照常能登录（迁移不能把人锁在门外）
     assert client.post("/api/auth/login", json={"username": "hash_up", "password": "pw123456"}).status_code == 200
+
+
+def test_low_iteration_row_is_upgraded_on_login(client, monkeypatch):
+    """接口级：把 `password_hash_iterations` 调高后，用户下次登录会按新迭代数重写哈希。"""
+    from app.config import get_settings
+    from app.security import PBKDF2_PREFIX
+
+    settings = get_settings()
+    # 先用"低迭代数"建号（模拟历史数据）
+    monkeypatch.setattr(settings, "password_hash_iterations", 1000)
+    assert client.post("/api/auth/register", json={"username": "iter_up", "password": "pw123456"}).status_code == 200
+
+    # 把强度调高（真实场景：升级配置后重启），再登录一次
+    monkeypatch.setattr(settings, "password_hash_iterations", 4000)
+    assert client.post("/api/auth/login", json={"username": "iter_up", "password": "pw123456"}).status_code == 200
+
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.username == "iter_up").first()
+        assert user is not None
+        assert user.password_hash.startswith(f"{PBKDF2_PREFIX}$4000$"), "登录后应按新迭代数重写"
+    finally:
+        db.close()
+
+    # 重写后照常能登录
+    assert client.post("/api/auth/login", json={"username": "iter_up", "password": "pw123456"}).status_code == 200
