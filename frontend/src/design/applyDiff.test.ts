@@ -112,6 +112,33 @@ describe('diffDesign / applyDesignDiff', () => {
     s.destroy()
   })
 
+  it('同父级重排（把后面的模块挪到最前）必须落地——不能整条被丢掉', () => {
+    const s = store()
+    const before = s.getDesign() // [a, b]
+    const after: DesignNode = { ...before, children: [before.children![1], before.children![0]] } // [b, a]
+
+    applyDesignDiff(s, diffDesign(before, after))
+    expect(s.getDesign().children?.map((c) => c.id)).toEqual(['b', 'a'])
+    s.destroy()
+  })
+
+  it('重排 + 新增同时发生（新节点插到最前）：最终顺序必须与 AI 返回一致', () => {
+    const s = store()
+    const before = s.getDesign() // [a, b]
+    const after: DesignNode = {
+      ...before,
+      children: [
+        { id: 'x', type: 'text', props: { text: '新插到最前' }, style: {} },
+        before.children![0],
+        before.children![1],
+      ],
+    }
+
+    applyDesignDiff(s, diffDesign(before, after))
+    expect(s.getDesign().children?.map((c) => c.id)).toEqual(['x', 'a', 'b'])
+    s.destroy()
+  })
+
   it('根 id 不同 ⇒ 整体替换（上轮接线失败的那一类：empty → root）', () => {
     const s = store()
     const before: DesignNode = { id: 'empty', type: 'frame' } // 画布还没加载时的空稿

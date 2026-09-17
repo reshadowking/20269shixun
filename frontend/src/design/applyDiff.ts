@@ -26,6 +26,13 @@ export interface DesignDiff {
   updated: Array<{ id: string; node: DesignNode }>
   /** 新增子树的最顶层节点（父级必须在 before 里已存在） */
   added: Array<{ parentId: string; index: number; node: DesignNode }>
+  /**
+   * 同父级的**相对顺序**变化（2026-09-17 修）：`moved` 只在换父级时记录，
+   * 于是"把促销模块挪到最上面"（ops 的 move，父级不变）会产生一个空 diff ——
+   * 落地时什么都不做，界面还会显示"没有需要改动的地方"。这里带上每个父级的目标顺序，
+   * 在删/移/改/加**之后**统一按顺序就位（此时新增节点已就位，索引也才是准的）。
+   */
+  orders: Array<{ parentId: string; ids: string[] }>
 }
 
 interface Flat {
@@ -60,11 +67,11 @@ function ownKey(node: DesignNode): string {
 
 export function diffDesign(before: DesignNode, after: DesignNode): DesignDiff {
   if (before.id !== after.id) {
-    return { replace: after, removed: [], moved: [], updated: [], added: [] }
+    return { replace: after, removed: [], moved: [], updated: [], added: [], orders: [] }
   }
   const b = flatten(before)
   const a = flatten(after)
-  const diff: DesignDiff = { removed: [], moved: [], updated: [], added: [] }
+  const diff: DesignDiff = { removed: [], moved: [], updated: [], added: [], orders: [] }
 
   // 删除：before 有、after 没有 —— 深层优先，避免删父后子节点定位失败
   diff.removed = [...b.keys()]
@@ -86,6 +93,15 @@ export function diffDesign(before: DesignNode, after: DesignNode): DesignDiff {
     if (ownKey(prev.node) !== ownKey(next.node)) {
       diff.updated.push({ id, node: next.node })
     }
+    // 同父级重排：只看**两棵树都还在**的孩子的相对顺序（纯新增/删除造成的位移不算重排，
+    // 那种情况 added/removed 已经表达，重排步骤会自己变成无操作）。
+    const beforeIds = (prev.node.children ?? []).map((c) => c.id)
+    const afterIds = (next.node.children ?? []).map((c) => c.id)
+    const beforeCommon = beforeIds.filter((id) => afterIds.includes(id))
+    const afterCommon = afterIds.filter((id) => beforeIds.includes(id))
+    if (beforeCommon.join(',') !== afterCommon.join(',')) {
+      diff.orders.push({ parentId: id, ids: afterIds })
+    }
   }
   return diff
 }
@@ -97,6 +113,8 @@ export interface DiffTarget {
   moveNodeTo(id: string, newParentId: string, index: number): void
   updateNode(id: string, updater: (node: DesignNode) => DesignNode): void
   insertChild(parentId: string, node: DesignNode, index?: number): void
+  /** 按目标顺序重排某父级的子节点（同父级重排必须走它，moveNodeTo 不覆盖这一情形） */
+  reorderChildren(parentId: string, orderedIds: string[]): void
 }
 
 /**
@@ -112,6 +130,8 @@ export function applyDesignDiff(store: DiffTarget, diff: DesignDiff): void {
   for (const m of diff.moved) store.moveNodeTo(m.id, m.toParent, m.index)
   for (const u of diff.updated) store.updateNode(u.id, () => u.node)
   for (const add of diff.added) store.insertChild(add.parentId, add.node, add.index)
+  // 顺序最后统一修：只有此时"整份 children 都在"（新增已插入、删除已生效），索引才与 after 对齐
+  for (const o of diff.orders) store.reorderChildren(o.parentId, o.ids)
 }
 
 /**

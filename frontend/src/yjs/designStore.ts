@@ -12,6 +12,7 @@ import * as Y from 'yjs'
 import { WebsocketProvider } from 'y-websocket'
 
 import { LOCKED_EDITABLE_STYLE_KEYS } from '@/design/beautify'
+import type { DesignDiff } from '@/design/applyDiff'
 import { findNode as findPlainNode } from '@/design/tree'
 import type { DesignNode } from '@/design/types'
 
@@ -818,7 +819,7 @@ export class DesignStore {
    *    旧实现 `resetDesign` 本来就不经过该守卫；若这里不关，服务端放行的合法效果
    *    会被客户端二次否决（实测：`locked-edit` 用例「合法效果照常落地」直接红）。
    */
-  applyAiDiff(diff: { replace?: DesignNode; removed: string[]; moved: Array<{ id: string; toParent: string; index: number }>; updated: Array<{ id: string; node: DesignNode }>; added: Array<{ parentId: string; index: number; node: DesignNode }> }): void {
+  applyAiDiff(diff: DesignDiff): void {
     if (diff.replace) {
       this.resetDesign(diff.replace)
       return
@@ -830,6 +831,7 @@ export class DesignStore {
       for (const m of diff.moved) this.moveNodeTo(m.id, m.toParent, m.index)
       for (const u of diff.updated) this.updateNode(u.id, () => u.node)
       for (const a of diff.added) this.insertChild(a.parentId, a.node, a.index)
+      for (const o of diff.orders) this.reorderChildren(o.parentId, o.ids)
     } finally {
       this.beautifyLock = lock
     }
@@ -944,6 +946,38 @@ export class DesignStore {
         // 新副本保证协作端合并语义一致：删除 + 新增）
         children.insert(target, [plainToY(yToPlain(arr[from] as YNode))])
         children.delete(from < target ? from : from + 1, 1)
+      },
+      LOCAL_ORIGIN,
+    )
+  }
+
+  /**
+   * 按目标顺序重排某父级的子节点（单个事务；AI 差量落地用，2026-09-17）。
+   *
+   * 存在的理由：`moveNodeTo` 只在**换父级**时被记录，同父级的顺序变化（ops 的 move、
+   * "把某个模块挪到最上面"）不会产生任何 diff 条目 —— 落地时被整条丢掉。
+   * 逐位就位：第 i 位不是期望 id 就把期望节点搬过来（先插副本再删原件，与 moveChild 同款，
+   * 规避 Yjs 同事务"先删后插"的集成问题）；期望 id 已不存在（被队友删了）则跳过，不硬造。
+   */
+  reorderChildren(parentId: string, orderedIds: string[]): void {
+    if (this._blockedByRole('调整顺序')) return
+    if (this._blockStructuralWhileLocked()) return
+    this.pendingUndoMeta = { kind: 'structural', writes: [], nodeIds: [parentId, ...orderedIds] }
+    this.ydoc.transact(
+      () => {
+        const root = this.designMap.get(ROOT_KEY) as YNode | undefined
+        const parent = root ? findYNode(root, parentId) : null
+        const children = parent?.get('children')
+        if (!(children instanceof Y.Array)) return
+        for (let i = 0; i < orderedIds.length; i++) {
+          const arr = children.toArray() as YNode[]
+          const want = orderedIds[i]
+          if (arr[i]?.get('id') === want) continue
+          const from = arr.findIndex((c) => c?.get('id') === want)
+          if (from < 0) continue
+          children.insert(i, [plainToY(yToPlain(arr[from]))])
+          children.delete(from < i ? from : from + 1, 1)
+        }
       },
       LOCAL_ORIGIN,
     )

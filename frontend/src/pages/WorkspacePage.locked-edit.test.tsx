@@ -57,7 +57,19 @@ function mockFetch() {
       if (gateVerdict === 'reject') {
         return { ok: true, status: 200, json: async () => ({ ok: false, design: body.before, changed_ids: [], dropped: [], reason: '结构变更' }) }
       }
-      return { ok: true, status: 200, json: async () => ({ ok: true, design: AI_EDITED, changed_ids: ['ai-text'], dropped: [], reason: '' }) }
+      // 与真实后端同口径（sessions.py apply_locked_edit_endpoint）：
+      // 未锁定 = 直接放行并返回 changed_ids: []；锁定 = 逐位置比对后给出被改节点 id。
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          ok: true,
+          design: AI_EDITED,
+          changed_ids: serverLocked ? ['ai-text'] : [],
+          dropped: [],
+          reason: '',
+        }),
+      }
     }
     if (path.includes('/api/generate')) {
       return { ok: true, status: 200, json: async () => ({ design: AI_EDITED, template: 'edit', compliance: 100, violations: 0, violations_detail: [], fallback: false, mock: false, error: '', style_attrs: 0 }) }
@@ -151,6 +163,9 @@ describe('T4 批1：锁定期 AI 落地闸门（页面接线）', () => {
     typeAndSend('把标题改成 AI 新标题')
     // 修改落地：AI 的文本节点出现在画布
     expect(await screen.findByText('AI 新标题')).toBeInTheDocument()
+    // 落地之后不能报错：面板必须是成功回执，而不是"生成失败：…"
+    expect(await screen.findByText(/已应用修改/)).toBeInTheDocument()
+    expect(screen.queryByText(/生成失败/)).not.toBeInTheDocument()
     // 仍然走了闸门（始终调用），服务端放行
     expect(lastGateBody?.session_key).toBe('s-gate')
     expect(screen.queryByText(/已阻止/)).not.toBeInTheDocument()
