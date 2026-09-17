@@ -12,6 +12,7 @@ from datetime import UTC, datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session as DbSession
 
 from ..db import get_db
@@ -133,7 +134,18 @@ def invite_by_username(
         raise HTTPException(status_code=409, detail=f"「{target.username}」已是成员（当前角色：{existing.role}）")
 
     db.add(WorkspaceMember(workspace_id=workspace_id, user_id=target.id, role=req.role))
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # 竞态：同一刻另一位成员也在邀请同一个人 → 撞 uq_workspace_members。
+        # 语义上就是"已经是成员"，回 409（与上面 existing 分支同一句话），不是 500。
+        db.rollback()
+        current = _member(db, workspace_id, target.id)
+        if current is None:
+            raise  # 不是可恢复冲突 → 原样抛出
+        raise HTTPException(
+            status_code=409, detail=f"「{target.username}」已是成员（当前角色：{current.role}）"
+        ) from None
     logger.info("%s 直接把 %s 加为工作区 %s 的 %s", _user, target.username, workspace_id, req.role)
     return {"ok": True, "username": target.username, "role": req.role}
 
@@ -157,7 +169,20 @@ def join_workspace(req: JoinRequest, db: DbSession = Depends(get_db), _user: str
     if existing is None:
         db.add(WorkspaceMember(workspace_id=invite.workspace_id, user_id=me, role=invite.role))
     invite.used_by = me
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # 竞态：同一用户并发（或双击）加入同一工作区 → 撞 uq_workspace_members。
+        # 文档口径本就是"已是成员时加入为幂等（不降级）"，这里把竞态也归到同一语义：
+        # 回滚（失败的 INSERT 已污染会话）→ 重查成员 → 返回既有角色。
+        db.rollback()
+        invite = db.get(WorkspaceInvite, req.token)
+        existing = _member(db, invite.workspace_id, me) if invite is not None else None
+        if existing is None:
+            raise  # 不是可恢复冲突 → 原样抛出
+        if invite.used_by is None:
+            invite.used_by = me  # 回滚把"标记已用"一起撤了，补回来（保持一次性语义）
+            db.commit()
     ws = db.get(Workspace, invite.workspace_id)
     logger.info("用户 %s 通过邀请加入工作区 %s（role=%s）", _user, invite.workspace_id, existing.role if existing else invite.role)
     return {"workspace_id": invite.workspace_id, "name": ws.name if ws else "", "role": existing.role if existing else invite.role}

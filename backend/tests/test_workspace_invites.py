@@ -61,6 +61,71 @@ class TestInviteFlow:
         assert client.post(f"/api/workspaces/{ws['id']}/invites", json={}, headers=stranger).status_code == 404
 
 
+class TestMembershipRace:
+    """`workspace_members` 有唯一约束 (workspace_id, user_id)。
+
+    并发 join / 并发"按用户名邀请"同一人时，后到的请求会撞这个约束——
+    必须按幂等 / 409 处理，而不是把 IntegrityError 冒成 500（2026-09-17 实测）。
+    两条用例都用"存在性检查看不到已有成员"的打桩**确定性地**复现那个竞态窗口。
+    """
+
+    def test_join_race_is_idempotent_not_500(self, client, monkeypatch):
+        owner, guest = _register(client, "raceowner1"), _register(client, "raceguest1")
+        ws = _my_workspaces(client, owner)[0]
+        t1 = client.post(f"/api/workspaces/{ws['id']}/invites", json={"role": "viewer"}, headers=owner).json()["token"]
+        assert client.post("/api/workspaces/join", json={"token": t1}, headers=guest).json()["role"] == "viewer"
+
+        # 第二张邀请：模拟"同一刻另一个窗口也在加入"
+        t2 = client.post(f"/api/workspaces/{ws['id']}/invites", json={"role": "editor"}, headers=owner).json()["token"]
+        from app.routers import workspaces as ws_router
+
+        real_member = ws_router._member
+        calls = {"n": 0}
+
+        def race_member(db, workspace_id, user_id):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return None  # 检查那一刻"还不是成员"
+            return real_member(db, workspace_id, user_id)
+
+        monkeypatch.setattr(ws_router, "_member", race_member)
+        resp = client.post("/api/workspaces/join", json={"token": t2}, headers=guest)
+        monkeypatch.setattr(ws_router, "_member", real_member)
+
+        assert resp.status_code == 200, f"并发加入应幂等成功，实际 {resp.status_code}"
+        assert resp.json()["role"] == "viewer", "不降级也不升级：保持既有角色"
+
+    def test_invite_by_username_race_is_409_not_500(self, client, monkeypatch):
+        owner = _register(client, "raceowner2")
+        _register(client, "raceguest2")  # 目标账号必须先存在（invite_by_username 要求已注册）
+        ws = _my_workspaces(client, owner)[0]
+        body = {"username": "raceguest2", "role": "viewer"}
+        assert client.post(f"/api/workspaces/{ws['id']}/invites/by-username", json=body, headers=owner).status_code == 200
+
+        members = client.get(f"/api/workspaces/{ws['id']}/members", headers=owner).json()["members"]
+        target_id = next(m["user_id"] for m in members if m["username"] == "raceguest2")
+
+        from app.routers import workspaces as ws_router
+
+        real_member = ws_router._member
+        calls = {"target": 0}
+
+        def race_member(db, workspace_id, user_id):
+            # 邀请方自己的成员校验照常；只让"目标是否已是成员"这次假装查不到
+            if user_id == target_id:
+                calls["target"] += 1
+                if calls["target"] == 1:
+                    return None  # 检查那一刻"还不是成员"
+            return real_member(db, workspace_id, user_id)
+
+        monkeypatch.setattr(ws_router, "_member", race_member)
+        resp = client.post(f"/api/workspaces/{ws['id']}/invites/by-username", json=body, headers=owner)
+        monkeypatch.setattr(ws_router, "_member", real_member)
+
+        assert resp.status_code == 409, f"竞态下应回 409（已是成员），实际 {resp.status_code}"
+        assert "已是成员" in resp.json()["detail"]
+
+
 class TestDesignAccessByMembership:
     def _create_design(self, client, headers, name="跨账号协作稿"):
         design = {"id": "root", "type": "frame", "children": []}
