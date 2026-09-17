@@ -860,6 +860,8 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
       }
       store.pushSnapshot()
       setUndoCount((c) => c + 1)
+      // TODO(③)：改走差量落地（`@/design/applyDiff` 已就绪并有用例）——接线时
+      // `WorkspacePage.locked-edit.test.tsx`「合法效果照常落地」会红，需先查清再切。
       store.resetDesign(resp.design)
       setSelectedIds(new Set())
       const changed = resp.changed_ids?.length ? resp.changed_ids : changedIds
