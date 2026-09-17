@@ -66,7 +66,13 @@ def _require_valid_parent(db: DbSession, owner: int, parent_id: int | None, movi
             seen.add(cur)
             node = folders.get(cur)
             cur = node.parent_id if node else None
-    if _depth_of(folders, parent_id) + (0 if moving_id is None else _subtree_height(folders, moving_id)) >= MAX_DEPTH:
+    # 深度口径：目标父级在第 `d` 层（顶层=1），挂上去的东西自身高 `h` 层
+    # → 最深节点落在 d + h 层，允许条件是 d + h <= MAX_DEPTH。
+    # 新建的文件夹是叶子（h=1）；移动时 h = 该子树的高度。
+    # 2026-09-17 修：原来移动这一支写成 `d + h >= MAX_DEPTH`（多算一层），
+    # 于是"把 2 层子树搬到顶层目录下"（结果正好 3 层 = 上限）被误拒。
+    subtree_height = 1 if moving_id is None else _subtree_height(folders, moving_id)
+    if _depth_of(folders, parent_id) + subtree_height > MAX_DEPTH:
         raise HTTPException(status_code=422, detail=f"目录层级最多 {MAX_DEPTH} 层")
 
 

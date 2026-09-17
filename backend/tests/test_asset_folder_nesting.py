@@ -82,6 +82,27 @@ def test_depth_limit(client):
     assert client.patch(f"/api/asset-folders/{l1}/parent", headers=alice, json={"parent_id": l2}).status_code == 422
 
 
+def test_move_subtree_to_exactly_max_depth_is_allowed(client):
+    """差一修正（2026-09-17）：把 2 层子树搬到顶层目录下 → 结果正好 3 层 = 上限，必须放行。
+
+    旧实现用的是 `depth_of(parent) + subtree_height >= MAX_DEPTH`（对"移动"这一支多算了一层），
+    于是这个完全合法的搬运被拒绝，提示"目录层级最多 3 层"。
+    口径：顶层 = 1 层，子树搬过去后最深节点落在 depth_of(parent) + height 处。
+    """
+    alice = _register(client, "nest_henry")
+    top = _folder(client, alice, "顶层A").json()["id"]
+    other = _folder(client, alice, "顶层B").json()["id"]
+    mid = _folder(client, alice, "子层", parent_id=other).json()["id"]
+
+    # other(1) → mid(2)，把 other? 不行，要把 [other 子树（高 2）] 搬到 top(1) 下 → 最深 3 层
+    assert client.patch(f"/api/asset-folders/{other}/parent", headers=alice, json={"parent_id": top}).status_code == 200
+    assert _tree(client, alice) == {top: None, other: top, mid: other}
+
+    # 再加一层就要拒绝（4 层）
+    denied = _folder(client, alice, "第四层", parent_id=mid)
+    assert denied.status_code == 422, denied.text
+
+
 def test_delete_middle_folder_lifts_children_and_assets(client):
     """删中间层：资产与子目录都上提一层——不删任何东西，也不留孤儿。"""
     alice = _register(client, "nest_erin")
