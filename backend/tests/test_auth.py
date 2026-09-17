@@ -155,25 +155,28 @@ class TestPasswordHashSaltMigration:
         resp = client.post("/api/auth/login", json={"username": "demo", "password": "demo123"})
         assert resp.status_code == 200, resp.text
 
-        from app.security import hash_password
+        from app.security import PBKDF2_PREFIX, verify_password
 
         db = SessionLocal()
         try:
             user = db.query(User).filter(User.username == "demo").first()
-            assert user.password_hash == hash_password("demo123")  # 已升级到当前盐
+            # 2026-09-17：升级目标从"当前盐的单轮 SHA-256"换成 PBKDF2（每用户随机盐）——
+            # 断言口径随之改为"能校验通过 + 是新方案"，不再比对某个固定哈希串。
+            assert user.password_hash.startswith(PBKDF2_PREFIX + "$"), "已升级到新方案"
+            assert verify_password("demo123", user.password_hash)
             assert user.password_hash != legacy_hash
         finally:
             db.close()
 
-    def test_new_scheme_hash_unchanged_by_jwt_secret(self):
-        """哈希只依赖 password_salt：改 .env 的 JWT_SECRET 不会改变同一口令的哈希。"""
-        import hashlib
+    def test_new_scheme_hash_unchanged_by_jwt_secret(self, monkeypatch):
+        """旧事故回归：口令哈希与 jwt_secret 解耦——轮换密钥后已存的哈希仍能校验通过。"""
+        from app.security import get_settings, hash_password, verify_password
 
-        from app.security import get_settings, hash_password
+        settings = get_settings()
+        stored = hash_password("demo123")
+        monkeypatch.setattr(settings, "jwt_secret", "rotated-secret-at-least-32-bytes-long!!")
 
-        assert hash_password("demo123") == hashlib.sha256(
-            f"{get_settings().password_salt}::demo123".encode()
-        ).hexdigest()
+        assert verify_password("demo123", stored)
         assert get_settings().password_salt != get_settings().jwt_secret
 
     def test_wrong_password_still_rejected(self, client, auth_headers):

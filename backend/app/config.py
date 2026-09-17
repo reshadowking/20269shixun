@@ -37,6 +37,11 @@ class Settings(BaseSettings):
     # 登录/注册凭证尝试的限流（按 ip+用户名；0 = 不限制）。只对**失败**计费，
     # 所以正常登录不受影响，靠刷口令的暴力破解会在几十次之后被 429 挡住。
     login_rate_limit_per_minute: int = 20
+    # 口令哈希的 PBKDF2 迭代数（2026-09-17：口令哈希从"全局盐+单轮 SHA-256"升级为
+    # PBKDF2-HMAC-SHA256 + 每用户随机盐）。600k 是本机约 110ms、OWASP 对
+    # PBKDF2-HMAC-SHA256 的推荐值；测试里由 conftest 压到 1k 以免拖慢套件。
+    # 注意：迭代数**写进哈希串**，改这个值只影响新写入的哈希，旧哈希照旧可验证。
+    password_hash_iterations: int = 600000
     ai_daily_token_quota: int = 200000
     ai_daily_token_quota_per_user: int = 50000
 

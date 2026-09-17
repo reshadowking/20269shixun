@@ -93,6 +93,9 @@ def _relax_ai_limits(monkeypatch):
     monkeypatch.setattr(settings, "ai_global_rate_limit_per_minute", 100000)
     # 登录限流：成套用例会成批打 /api/auth/login（同一个 testclient IP），必须放宽
     monkeypatch.setattr(settings, "login_rate_limit_per_minute", 100000)
+    # 口令哈希（PBKDF2 600k ≈ 110ms/次）：成套用例要建号/登录几百次，压到 1k 免得拖慢
+    # 整个套件。算法与格式不变（迭代数写进哈希串），校验路径照旧。
+    monkeypatch.setattr(settings, "password_hash_iterations", 1000)
     monkeypatch.setattr(settings, "ai_daily_token_quota", 0)
     monkeypatch.setattr(settings, "ai_daily_token_quota_per_user", 0)
     rate_limit._reset_for_tests()
