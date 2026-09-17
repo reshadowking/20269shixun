@@ -142,4 +142,51 @@ describe('美化效果落地（差量，不清撤销栈）', () => {
 
     expect(await screen.findByText(/版面已确认：不能回退到旧快照/)).toBeInTheDocument()
   })
+
+  /**
+   * 删除会话的文案要说实话（2026-09-17）：
+   * 删**当前**会话会把画布切到新的空白草稿（原草稿仍在本地，可从首页「继续上次编辑」找回），
+   * 此前无论删哪个会话都写"画布内容不受影响" —— 与行为不符。
+   */
+  it('删除「当前」会话的确认框要说明画布会切到空白草稿', async () => {
+    const sessionsPayload = {
+      sessions: [
+        { session_id: 's-beautify', title: '当前会话', design_id: null, created_at: null, updated_at: null },
+      ],
+      total: 1,
+    }
+    const fetchMock = vi.fn(async (url: string, options?: RequestInit) => {
+      const path = String(url)
+      const method = options?.method ?? 'GET'
+      if (path.includes('/beautify-lock')) {
+        return method === 'GET' ? json({ locked: false }) : json({ ok: true, locked: false })
+      }
+      if (path.includes('/api/sessions?')) return json(sessionsPayload)
+      if (path.includes('/messages')) return json({ messages: [], pruned: 0 })
+      if (path.includes('/tool-calls')) return json({ ok: true, id: 1 })
+      if (method === 'DELETE') return json({ ok: true })
+      if (path.includes('/api/sessions')) {
+        return json({ session_id: 's-beautify', title: 't', design_id: null, created_at: null, updated_at: null, agent_state: {} })
+      }
+      throw new Error(`unexpected fetch: ${method} ${path}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const confirmSpy = vi.fn((_message?: string) => false) // 取消即可：本条只验文案
+    vi.stubGlobal('confirm', confirmSpy)
+
+    render(
+      <MemoryRouter initialEntries={['/workspace?session=s-beautify&from=draft']}>
+        <WorkspacePage />
+      </MemoryRouter>,
+    )
+    fireEvent.click(await screen.findByTestId('activity-ai'))
+    fireEvent.click(await screen.findByTestId('session-current')) // 展开会话列表（删除按钮在里面）
+    fireEvent.click(await screen.findByTestId('session-delete-s-beautify'))
+
+    expect(confirmSpy).toHaveBeenCalled()
+    const text = String(confirmSpy.mock.calls[0][0])
+    expect(text).toContain('删除会话')
+    expect(text, '当前会话被删时画布会切走，必须说清').toContain('空白草稿')
+    expect(text).not.toContain('画布内容不受影响')
+  })
 })

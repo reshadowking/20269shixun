@@ -474,7 +474,13 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
   /** 删除会话（4b：二次确认；连带服务端消息与本地快照） */
   const handleDeleteSession = (key: string) => {
     const target = sessions.find((x) => x.session_id === key)
-    if (!window.confirm(`删除会话「${target?.title ?? key}」？消息与快照将删除且不可恢复，画布内容不受影响。`)) return
+    // 2026-09-17：文案要说实话——删**当前**会话会把画布切到新的空白草稿（原草稿仍在本地，
+    // 可从首页「继续上次编辑」找回），此前统一写"画布内容不受影响"，与行为不符。
+    const isCurrent = key === sessionKey
+    const tail = isCurrent
+      ? '当前会话的画布会切到新的空白草稿；原草稿仍留在本地，可回首页用「继续上次编辑」找回。'
+      : '画布内容不受影响。'
+    if (!window.confirm(`删除会话「${target?.title ?? key}」？消息与快照将删除且不可恢复。${tail}`)) return
     void (async () => {
       try {
         await sessionApi.remove(key)
