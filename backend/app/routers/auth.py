@@ -108,4 +108,10 @@ def login(req: LoginRequest, request: Request, db: Session = Depends(get_db)):
         user.password_hash = hash_password(req.password)
         db.commit()
         logger.info("已升级账号 %s 的口令哈希到当前盐（jwt_secret 轮换后的平滑迁移）", user.username)
+    # 2026-09-17：演示账号登录时确保它有**个人工作区**（幂等，已存在直接返回）。
+    # 踩过：注册路径建了个人工作区，而"首次登录自动建号"这条没建 —— 在**全新库**
+    # （docker compose 新 volume / 新同事 / CI）上 demo 登录后 `/api/workspaces` 是空的，
+    # 邀请协作、按工作区看稿这些入口没有落脚点（E2E `readonly-drag` 的前置就是这么红的）。
+    if req.username == settings.demo_user:
+        create_personal_workspace(db, user.id, user.username)
     return LoginResponse(token=create_token(req.username), username=req.username)

@@ -31,6 +31,41 @@ def test_login_empty_password(client):
     assert resp.status_code == 422
 
 
+def test_demo_first_login_creates_personal_workspace(client, monkeypatch):
+    """全新库上"首次登录自动建号"必须和注册走同一套：**建个人工作区**。
+
+    踩过：注册路径调了 `create_personal_workspace`，登录自动建号那条没调。
+    开发库上因为早期注册过/保存过稿件（保存路径会懒建）一直看不出来，
+    但在**全新库**（docker compose 新 volume / 新同事 / CI）上：
+    demo 登录后 `/api/workspaces` 是空的 → 邀请协作、按工作区看稿这些入口没有落脚点。
+    E2E `readonly-drag` 的前置（"demo 应有个人工作区"）就是这么红的。
+
+    这里把 `demo_user` 改成一个**没用过**的名字，从而确定性地走"首次登录自动建号"分支
+    （不动共享测试库里的 demo，避免影响其它用例）。
+    """
+    from app.config import get_settings
+
+    settings = get_settings()
+    fresh = "wscase_demo"
+    monkeypatch.setattr(settings, "demo_user", fresh)
+
+    assert client.post("/api/auth/login", json={"username": fresh, "password": settings.demo_password}).status_code == 200
+
+    from app.db import SessionLocal
+    from app.models import User
+    from app.services.workspaces import personal_workspace_of
+
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.username == fresh).first()
+        assert user is not None
+        ws = personal_workspace_of(db, user.id)
+        assert ws is not None, "首次登录自动建号必须同时建个人工作区"
+        assert ws.name == f"{fresh} 的工作区"
+    finally:
+        db.close()
+
+
 def test_login_sql_injection_payload(client):
     """SQL 注入防护：注入 payload 必须走参数化查询，返回 401 而非 500/越权。"""
     payloads = [
