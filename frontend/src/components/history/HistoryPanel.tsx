@@ -62,7 +62,15 @@ export default function HistoryPanel({ savedId, onRestore, onVersionSaved }: His
   }
 
   const handleRestore = (v: VersionItem) => {
-    if (!window.confirm(`恢复到 v${v.version_no}？将覆盖当前设计（可先保存当前版本）。`)) return
+    // 2026-09-17：明确"恢复只改本地画布"——这一步**不落库**，必须再点一次保存才会写回服务器，
+    // 否则用户以为已经恢复，关掉标签页再打开却发现还是旧内容。
+    if (
+      !window.confirm(
+        `恢复到 v${v.version_no}？将覆盖当前画布（可先点「存版本」保留当前状态）。\n` +
+          '注意：恢复只改本地画布，需再点右上角「💾 保存」才会写回服务器。',
+      )
+    )
+      return
     onRestore(v.design)
     setMsg(`已恢复到 v${v.version_no}`)
   }
