@@ -29,6 +29,47 @@ export interface FreezeMeasureResult {
 }
 
 /**
+ * 等版面稳定再测量（2026-09-17）。
+ *
+ * 背景：验收反馈"转自由画布有时排版错乱"。头号嫌疑是**测量时机太早**——
+ * 生成/打开后立刻测，此时 web font 还没加载完、`<img>` 还没解码，
+ * 测到的高度偏小；冻结把它写进 `style.height` 后，图片/文字按真实尺寸渲染 → 错位。
+ *
+ * 做法：等 `document.fonts.ready` + 容器内未完成的 `<img>` 落定（load 或 error）+ 两帧 rAF。
+ * **带超时兜底**（默认 1200ms）：任何一项卡住也不会让「转自由画布」永远转圈。
+ * 纯函数式依赖注入（el / 全局对象都可传），便于单测。
+ */
+export async function waitForLayoutStable(el: HTMLElement | null, timeoutMs = 1200): Promise<void> {
+  const timeout = new Promise<void>((resolve) => setTimeout(resolve, timeoutMs))
+  const fontsReady = (async () => {
+    const fonts = globalThis.document?.fonts
+    if (fonts?.ready) await fonts.ready
+  })().catch(() => undefined)
+  const imagesReady = el
+    ? Promise.all(
+        Array.from(el.querySelectorAll('img'))
+          .filter((img) => !img.complete)
+          .map(
+            (img) =>
+              new Promise<void>((resolve) => {
+                img.addEventListener('load', () => resolve(), { once: true })
+                img.addEventListener('error', () => resolve(), { once: true })
+              }),
+          ),
+      )
+    : Promise.resolve()
+  const twoFrames = new Promise<void>((resolve) => {
+    const raf = globalThis.requestAnimationFrame
+    if (typeof raf !== 'function') {
+      resolve()
+      return
+    }
+    raf(() => raf(() => resolve()))
+  })
+  await Promise.race([Promise.all([fontsReady, imagesReady, twoFrames]).then(() => undefined), timeout])
+}
+
+/**
  * 读取容器内直接子节点的冻结坐标（画布单位）。
  *
  * @param container 画布容器（含 data-testid="canvas-sheet" 的祖先即可）

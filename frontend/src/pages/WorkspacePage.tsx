@@ -8,7 +8,7 @@ import BeautifyPanel from '@/components/beautify/BeautifyPanel'
 import CodeViewer from '@/components/export/CodeViewer'
 import AIChatPanel from '@/components/chat/AIChatPanel'
 import { NodeRenderer } from '@/canvas/NodeRenderer'
-import { freezeToFreeLayout } from '@/canvas/freeze'
+import { freezeToFreeLayout, waitForLayoutStable, type FreezeMeasurement } from '@/canvas/freeze'
 import type { DesignCanvasHandle } from '@/canvas/DesignCanvas'
 import { EFFECT_SPECS } from '@/design/beautify'
 import { loadBaseSnapshot, saveBaseSnapshot, type BaseSnapshot } from '@/lib/baseSnapshot'
@@ -732,8 +732,10 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
   }
 
   /** P1-13（缺陷 6 替代方案）：flex/网格布局 → 自由画布（子节点铺网格坐标，可拖拽） */
-  const handleConvertToFree = () => {
+  const convertingFreeRef = useRef(false)
+  const handleConvertToFree = async () => {
     if (!design.children?.length) return
+    if (convertingFreeRef.current) return // 等待测量期间重复点击：忽略（避免二次冻结覆盖）
     // 语义（P1-13）：保留当前视觉现状，只把子节点变成可拖拽——**不是重新排布**
     if (store.isBeautifyLocked) {
       setErrorMsg('版面已确认：请先解除版面锁定再转自由画布')
@@ -745,7 +747,18 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
       return
     }
     const childIds = design.children.filter((c) => !c.hidden).map((c) => c.id)
-    const { measurements, missing } = canvas.measureFreeze(design.id, childIds)
+    convertingFreeRef.current = true
+    let measurements: FreezeMeasurement[]
+    let missing: string[]
+    try {
+      // 2026-09-17：先等版面稳定（字体/图片/两帧 rAF，带超时）再测量——
+      // "测早了 → 冻结写进的小尺寸把版面压错位"是验收反馈里排第一的嫌疑。
+      // 查询限定在本页子树（T42 的教训：全局 querySelector 会命中别的画布/预览层）。
+      await waitForLayoutStable(pageRef.current?.querySelector<HTMLElement>('[data-testid="canvas-sheet"]') ?? null)
+      ;({ measurements, missing } = canvas.measureFreeze(design.id, childIds))
+    } finally {
+      convertingFreeRef.current = false
+    }
     if (measurements.length === 0) {
       setErrorMsg('未能测量到任何节点，已取消转换')
       return
