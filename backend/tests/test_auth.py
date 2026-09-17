@@ -59,6 +59,42 @@ def test_login_weird_types(client):
     assert resp.status_code == 422
 
 
+class TestRegister:
+    """开放注册（T46a）：重名 409；并发下的竞态也不能变成 500。"""
+
+    def test_duplicate_username_returns_409(self, client):
+        body = {"username": "auth_dup", "password": "secret123"}
+        assert client.post("/api/auth/register", json=body).status_code == 200
+        resp = client.post("/api/auth/register", json=body)
+        assert resp.status_code == 409
+        assert "占用" in resp.json()["detail"]
+
+    def test_race_between_check_and_insert_is_409_not_500(self, client, monkeypatch):
+        """并发注册同名：存在性检查与 INSERT 之间没有锁，第二个 INSERT 会撞 users.username 唯一约束。
+
+        `register` 没有 IntegrityError 处理 → 未捕获异常（500）。同项目其它写入点
+        （建文件夹 / 保存版本 / 幂等建会话）都做了 try/except → 409 或幂等，这里漏了。
+        为**确定性地**复现那个竞态窗口，把"存在性检查"打桩成查不到（等价于另一个请求刚插进来）。
+        """
+        body = {"username": "auth_race", "password": "secret123"}
+        assert client.post("/api/auth/register", json=body).status_code == 200  # 先占号
+
+        from sqlalchemy.orm import Query
+
+        original_first = Query.first
+
+        def race_first(self):
+            entity = (self.column_descriptions or [{}])[0].get("entity")
+            if getattr(entity, "__name__", "") == "User":
+                return None  # 模拟"检查通过时对方还没插进来"
+            return original_first(self)
+
+        monkeypatch.setattr(Query, "first", race_first)
+        resp = client.post("/api/auth/register", json=body)
+        assert resp.status_code == 409, f"竞态下应回 409（重名），实际 {resp.status_code}"
+        assert "占用" in resp.json()["detail"]
+
+
 class TestPasswordHashSaltMigration:
     """P1-1 事故回归：口令盐与 jwt_secret 解耦——轮换密钥不再把所有账号锁在门外。"""
 

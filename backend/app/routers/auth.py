@@ -3,6 +3,7 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..config import get_settings
@@ -47,7 +48,15 @@ def register(req: RegisterRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=409, detail="用户名已被占用")
     user = User(username=req.username, password_hash=hash_password(req.password))
     db.add(user)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # 竞态：两个请求同时通过上面的存在性检查，后到的那条撞 Users.username 唯一约束。
+        # 之前这里没有捕获 → 未处理异常（HTTP 500，前端也拿不到"重名"这个可读原因）。
+        # 与同项目其它写入点对齐（建文件夹 / 保存版本号 / 幂等建会话都是捕获后给 409 或幂等）。
+        # rollback 必须做：失败的 INSERT 已经污染了这个会话。
+        db.rollback()
+        raise HTTPException(status_code=409, detail="用户名已被占用") from None
     db.refresh(user)
     create_personal_workspace(db, user.id, user.username)
     logger.info("新用户注册：%s（已创建个人工作区）", user.username)
