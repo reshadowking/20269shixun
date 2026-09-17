@@ -86,6 +86,11 @@ def main() -> int:
     parser.add_argument("--out", default=str(ROOT / "docs" / "T27-golden-report.json"))
     parser.add_argument("--only", default="", help="逗号分隔的用例 id 白名单")
     parser.add_argument("--model", default="", help="覆盖运行时模型名（可选）")
+    parser.add_argument(
+        "--allow-real",
+        action="store_true",
+        help="允许在 real 模式下真跑（会产生真实 API 费用）；不加则遇到 real 模式直接拒绝",
+    )
     args = parser.parse_args()
 
     from app.services.llm import LLMClient
@@ -101,6 +106,22 @@ def main() -> int:
         return 2
 
     rows, failures = [], []
+    # 2026-09-17：**先亮出"这一轮会打哪个模式/端点"** 再开跑。
+    # 踩过：脚本自己 `LLMClient()` 读 `backend/.env`（real + 真实 Key），而"我以为在 mock"——
+    # 于是无意中真的打了 8 次 DeepSeek。加一行前置提示，跑之前就能看出来。
+    probe = LLMClient()
+    mode = "mock（不打外网）" if probe.is_mock else "REAL（会真的调用付费 API，产生费用）"
+    print(f"[模式] {mode} | 端点 {probe.cfg('llm_base_url')} | 模型 {probe.cfg('llm_model')}")
+    if not probe.is_mock:
+        # 硬护栏（2026-09-17）：与 E2E globalSetup 的"宁可不跑、不烧 Key"同一口径。
+        # 代价是本脚本在 real 模式下必须显式加 `--allow-real`；不想要费用就别加。
+        if not args.allow_real:
+            print("[拒绝] 当前是 REAL 模式：会真的调用付费 API。")
+            print("       确实要跑真实模型 → 加 `--allow-real`；只想跑离线结构断言 → 在**同一个命令**里带上")
+            print("       LLM_MODE=mock 与 LLM_CONFIG_FILE=<mock 配置路径>（脚本靠后者覆盖 data/llm-config.json）。")
+            return 2
+        print("[提示] 已显式允许 REAL 模式：这一轮会产生真实调用费用。")
+
     for case in cases:
         client = LLMClient()
         if args.model:
