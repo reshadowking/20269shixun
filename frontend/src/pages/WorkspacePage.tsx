@@ -568,7 +568,10 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
       })
       store.pushSnapshot()
       setUndoCount((c) => c + 1)
-      store.resetDesign(resp.design)
+      // 2026-09-17：改**差量落地**（原来 resetDesign 整树替换，与 ③ 里修掉的 AI 路径同一类问题）——
+      // 服务端只改了这个节点的效果，整树替换会 ① 吞掉队友在这期间的并发改动；
+      // ② 让所有人画布整体重挂；③ 清空发起者的操作级撤销栈（「↩ 撤销」直接变灰）。
+      store.applyAiDiff(diffDesign(design, resp.design))
       sessionApi.recordToolCall(sessionKey, `apply-effects:${key}`, true).catch(() => {})
     } catch (err) {
       sessionApi.recordToolCall(sessionKey, `apply-effects:${key}`, false).catch(() => {})
@@ -579,7 +582,7 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
   }
 
   /** T4 批3：批量应用高级效果（同类节点 / 选中多个）。
-   * 后端原子生效（任一 target 非法整批 422），成功后单次快照 + 整树替换 = 一步撤销。 */
+   * 后端原子生效（任一 target 非法整批 422），成功后单次快照 + **差量落地**。 */
   const handleApplyEffectBatch = async (nodeIds: string[], key: string, value: string | number | null) => {
     if (nodeIds.length === 0) return
     setBeautifying(true)
@@ -597,7 +600,8 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
       })
       store.pushSnapshot()
       setUndoCount((c) => c + 1)
-      store.resetDesign(resp.design)
+      // 同单人应用：差量落地（避免吞并发改动 / 画布重挂 / 清撤销栈）
+      store.applyAiDiff(diffDesign(design, resp.design))
       // 部分失败可读反馈（原子语义下服务端整批拒绝走 catch；此处防未来部分语义静默吞掉）
       if (resp.failed?.length) {
         setBeautifyError(`以下节点未能应用效果：${resp.failed.map((f) => f.node_id).join('、')}`)
@@ -728,7 +732,8 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
         method: 'POST',
         body: JSON.stringify({ design }),
       })
-      store.resetDesign(resp.design)
+      // 2026-09-17：同样改差量落地——优化只改布局样式，整树替换会吞并发改动 / 画布重挂 / 清撤销栈。
+      store.applyAiDiff(diffDesign(design, resp.design))
       setSelectedIds(new Set())
       setOptimizeReport(resp.report)
     } catch (err) {
