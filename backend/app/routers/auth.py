@@ -44,8 +44,17 @@ class RegisterRequest(BaseModel):
 
 
 @router.post("/api/auth/register", response_model=LoginResponse)
-def register(req: RegisterRequest, db: Session = Depends(get_db)):
-    """T46a：开放注册——建用户 + **个人工作区**（owner），并直接返回 token。"""
+def register(req: RegisterRequest, request: Request, db: Session = Depends(get_db)):
+    """T46a：开放注册——建用户 + **个人工作区**（owner），并直接返回 token。
+
+    2026-09-17：补上**按 IP 的注册限流**（登录口先补的，注册口当时漏了）——
+    原来可以无限批量建号（每个号还自动带一个个人工作区）。
+    """
+    # 注册**每次调用都计费**（与登录"只对失败计费"不同）：拦的是批量建号本身
+    try:
+        rate_limit.check_register(request.client.host if request.client else "unknown")
+    except RateLimited as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
     if db.query(User).filter(User.username == req.username).first() is not None:
         raise HTTPException(status_code=409, detail="用户名已被占用")
     user = User(username=req.username, password_hash=hash_password(req.password))

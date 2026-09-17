@@ -10,7 +10,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 
 import { ASSET_VIEWS, ASSET_VIEW_LABEL, readAssetView, writeAssetView, type AssetView } from '@/lib/assetView'
-import { api } from '@/lib/api'
+import { ApiError, api } from '@/lib/api'
 import { loadLatestDraft } from '@/lib/designSession'
 
 interface AssetRow {
@@ -283,7 +283,10 @@ export default function AssetsPage() {
     } catch (err) {
       // T47：被引用时后端返回 409 且带可读原因 → 二次确认后用 force 删（明确知情）
       const msg = err instanceof Error ? err.message : '删除失败'
-      if (msg.includes('引用') && window.confirm(`${msg}\n\n仍要删除吗？（这些设计稿会缺图）`)) {
+      // 2026-09-17：判定用**状态码**，不再靠错误文案里有没有"引用"两个字 ——
+      // 后端一改文案，这个"仍要删除"入口就会静默消失（用户既删不掉、也没有第二次确认）。
+      const referenced = err instanceof ApiError && err.status === 409
+      if (referenced && window.confirm(`${msg}\n\n仍要删除吗？（这些设计稿会缺图）`)) {
         try {
           await api(`/api/images/${row.id}?force=true`, { method: 'DELETE' })
           await load()
@@ -484,6 +487,12 @@ export default function AssetsPage() {
   const usedCount = data?.used_count ?? count
   /** 文件夹计数是全账号口径（与当前浏览范围无关），所以"全部"能用它显示总数 */
   const totalCount = folders.folders.reduce((sum, f) => sum + f.count, 0) + folders.ungrouped
+  /**
+   * 2026-09-17：「全部素材」角标原来只由**文件夹接口**的计数相加得到，而那个接口失败时
+   * 前端会静默降级成"空文件夹" → 角标显示 **0**，看起来像"我的资产全没了"。
+   * 用 `GET /api/images` 已经带回来的账号口径 `used_count` 兜底。
+   */
+  const allCount = totalCount || (data?.used_count ?? 0)
   const scopeBtnCls = (active: boolean) =>
     `flex w-full items-center justify-between rounded px-2 py-1 text-left text-[13px] ${
       active ? 'bg-primary/10 font-medium text-primary' : 'text-muted-foreground hover:bg-accent'
@@ -509,7 +518,7 @@ export default function AssetsPage() {
             <button className={scopeBtnCls(scope === 'all')} data-testid="folder-all" onClick={() => setScope('all')}>
               <span>全部素材</span>
               <span className="text-[11px] text-muted-foreground" data-testid="folder-count-all">
-                {totalCount}
+                {allCount}
               </span>
             </button>
           </li>

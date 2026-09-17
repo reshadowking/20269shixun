@@ -98,6 +98,63 @@ describe('AssetsPage（T38）', () => {
       expect((call?.[1]?.headers as Record<string, string> | undefined)?.['Content-Type']).toBeUndefined()
     })
   })
+
+  /**
+   * 2026-09-17：被引用（409）时的"仍要删除"入口，判定必须用**状态码**。
+   *
+   * 旧实现是 `msg.includes('引用')` —— 后端把文案从"…仍被 N 份设计稿引用…"改成别的说法
+   * （例如"使用"），force 删除入口就会**静默消失**：用户点删除只看到一句报错，
+   * 既删不掉也没有第二次确认。同项目其它地方（公开链接凭证、会话 401）都是按状态码判定。
+   */
+  it('被引用（409）时二次确认后走 force 删除 —— 判定用状态码，不靠错误文案', async () => {
+    const calls: string[] = []
+    const fetchMock = vi.fn(async (url: string, options?: RequestInit) => {
+      const path = String(url)
+      calls.push(`${options?.method ?? 'GET'} ${path}`)
+      if (path.includes('/api/asset-folders')) {
+        return { ok: true, status: 200, json: async () => ({ folders: [], ungrouped: 0, limit_folders: 30 }) }
+      }
+      if ((options?.method ?? 'GET') === 'DELETE') {
+        if (path.includes('force=true')) return { ok: true, status: 200, json: async () => ({ ok: true }) }
+        // ⚠️ 文案故意**不含** "引用" 二字
+        return { ok: false, status: 409, json: async () => ({ detail: '该资产仍被 2 份设计稿使用' }) }
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ images: [IMAGE], used_bytes: 2048, used_count: 1, limit_count: 50, limit_bytes: 20971520 }),
+      }
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('confirm', () => true)
+    renderPage()
+
+    fireEvent.click(await screen.findByTestId('asset-delete-7'))
+
+    await waitFor(() => expect(calls.some((c) => c.includes('force=true'))).toBe(true))
+  })
+
+  /**
+   * 2026-09-17：「全部素材」的角标原来只由**文件夹接口**的计数相加得到，
+   * 而那个接口失败时前端会静默降级成空文件夹 → 角标显示 **0**，看起来"我的资产全没了"。
+   * 现在 `GET /api/images` 已带账号口径 `used_count`，用它兜底。
+   */
+  it('文件夹接口挂掉时：全部素材角标回落到账号口径（不能显示 0）', async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (String(url).includes('/api/asset-folders')) {
+        return { ok: false, status: 404, json: async () => ({ detail: 'not found' }) }
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ images: [IMAGE], used_bytes: 2048, used_count: 5, limit_count: 50, limit_bytes: 20971520 }),
+      }
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    renderPage()
+
+    expect(await screen.findByTestId('folder-count-all')).toHaveTextContent('5')
+  })
 })
 
 describe('AssetsPage（T46b 可见性）', () => {

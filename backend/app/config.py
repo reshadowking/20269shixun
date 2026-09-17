@@ -42,6 +42,10 @@ class Settings(BaseSettings):
     # PBKDF2-HMAC-SHA256 的推荐值；测试里由 conftest 压到 1k 以免拖慢套件。
     # 注意：迭代数**写进哈希串**，改这个值只影响新写入的哈希，旧哈希照旧可验证。
     password_hash_iterations: int = 600000
+    # 注册限流（按 ip；0 = 不限制）。与登录口的区别：**每次调用都计费**——注册是"建号"，
+    # 光拦失败没有意义（批量建号本身就是攻击面）。30/min 对正常用户（注册一次）等于不限，
+    # 对脚本则很快打满。
+    register_rate_limit_per_minute: int = 30
     ai_daily_token_quota: int = 200000
     ai_daily_token_quota_per_user: int = 50000
 

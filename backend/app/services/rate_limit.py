@@ -26,6 +26,12 @@ _global_bucket: tuple[float, float] = (0.0, 0.0)
 """
 _login_buckets: dict[str, tuple[float, float]] = {}
 _LOGIN_BUCKETS_MAX = 10000
+"""
+注册限流的桶：key = ip。与登录的桶分开——**每次注册调用都扣**（批量建号本身就是攻击面，
+只拦失败没有意义），而登录只对失败计费。键空间同样受攻击者影响（换个 IP 就换桶），
+所以沿用同一个粗暴上限。
+"""
+_register_buckets: dict[str, tuple[float, float]] = {}
 
 
 def _take(state: tuple[float, float], capacity: int, now: float, cost: int) -> tuple[bool, tuple[float, float]]:
@@ -60,6 +66,7 @@ def _reset_for_tests() -> None:
     global _global_bucket
     _user_buckets.clear()
     _login_buckets.clear()
+    _register_buckets.clear()
     _global_bucket = (0.0, 0.0)
 
 
@@ -95,3 +102,20 @@ def note_login_failure(key: str) -> None:
 def clear_login_failures(key: str) -> None:
     """凭证正确时清空该 key —— 否则用户手滑几次之后，成功登录过的账号还会被自己挡在门外。"""
     _login_buckets.pop(key, None)
+
+
+def check_register(key: str) -> None:
+    """注册**之前**检查并按次扣减（`key` = 客户端 IP）；用尽抛 `RateLimited`（调用方转 429）。
+
+    与 `check_login` 的差别：注册不区分成功/失败，每次都扣 —— 拦的是"批量建号"本身。
+    `register_rate_limit_per_minute = 0` 表示不限制（与其它限流同一约定）。
+    """
+    capacity = get_settings().register_rate_limit_per_minute
+    if capacity <= 0:
+        return
+    if len(_register_buckets) >= _LOGIN_BUCKETS_MAX and key not in _register_buckets:
+        _register_buckets.clear()  # 与登录桶同一套粗暴上限（IP 是攻击者可变的）
+    ok, bucket = _take(_register_buckets.get(key, (0.0, 0.0)), capacity, time.monotonic(), 1)
+    _register_buckets[key] = bucket
+    if not ok:
+        raise RateLimited(f"注册过于频繁，请稍后再试（限制 {capacity} 次/分钟）")
