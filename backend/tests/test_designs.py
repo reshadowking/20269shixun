@@ -5,6 +5,40 @@ SAMPLE = {"id": "root", "type": "frame", "style": {"layout": "column", "width": 
 
 
 class TestDesignsCrud:
+    def test_rich_tree_round_trip_is_byte_exact(self, client, auth_headers):
+        """保存 → 打开必须**逐字段一致**（演示最怕"存了再打开少东西"）。
+
+        覆盖容易在序列化/元数据计算里被吃掉的字段：x/y（free 布局）、hidden、
+        componentType、嵌套 children、数组/对象型 props、emoji、小数坐标、布尔值、
+        以及 root 上并行存在的 props+style。
+        """
+        rich = {
+            "id": "root",
+            "type": "frame",
+            "style": {"layout": "free", "width": 800, "height": 600, "background": "background"},
+            "props": {"note": "根节点也可以有 props"},
+            "children": [
+                {"id": "hero", "type": "frame", "x": 12.5, "y": -3, "style": {"layout": "column", "gap": 8},
+                 "children": [
+                     {"id": "t1", "type": "text", "props": {"text": "标题 🎉 {占位}"}, "style": {"fontSize": 20}},
+                     {"id": "hidden1", "type": "text", "props": {"text": "隐藏项"}, "hidden": True},
+                 ]},
+                {"id": "img", "type": "component", "componentType": "image",
+                 "props": {"src": "/api/images/7", "alt": "配图", "fit": "cover"}},
+                {"id": "chart", "type": "component", "componentType": "chart",
+                 "props": {"chartType": "bar", "xKey": "day", "yKey": "value", "data": [{"day": "一", "value": 3.5}]}},
+                {"id": "sw", "type": "component", "componentType": "switch", "props": {"label": "通知", "checked": False}},
+            ],
+        }
+        did = client.post("/api/designs", json={"name": "往返", "design": rich}, headers=auth_headers).json()["id"]
+        got = client.get(f"/api/designs/{did}", headers=auth_headers).json()["design"]
+        assert got == rich
+
+        # 再 PUT 一次（更新路径同样不能丢字段）
+        rich2 = {**rich, "children": [{**rich["children"][0], "y": 40}]}
+        assert client.put(f"/api/designs/{did}", json={"design": rich2}, headers=auth_headers).status_code == 200
+        assert client.get(f"/api/designs/{did}", headers=auth_headers).json()["design"] == rich2
+
     def test_create_list_get(self, client, auth_headers):
         resp = client.post("/api/designs", json={"name": "我的设计", "design": SAMPLE}, headers=auth_headers)
         assert resp.status_code == 200
@@ -13,8 +47,11 @@ class TestDesignsCrud:
         assert resp.json()["width"] == 720
 
         lst = client.get("/api/designs", headers=auth_headers).json()["designs"]
-        assert len(lst) == 1
-        assert lst[0]["name"] == "我的设计"
+        # 不假设"整个库里只有我这一份"：同一测试会话里其它用例也会建稿（新增前面的用例时
+        # 这条就会变成 `assert 2 == 1`）。改成"我这份在列表里且名字对"。
+        mine = [d for d in lst if d["id"] == did]
+        assert len(mine) == 1
+        assert mine[0]["name"] == "我的设计"
 
         full = client.get(f"/api/designs/{did}", headers=auth_headers).json()
         assert full["design"]["children"][0]["props"]["text"] == "标题"
