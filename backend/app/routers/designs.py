@@ -97,15 +97,21 @@ def _save_version(db, design: Design, note: str = "") -> None:
     ).scalar_one_or_none()
     version_no = (latest.version_no if latest else 0) + 1
     db.add(Version(design_id=design.id, version_no=version_no, design_json=design.design_json, note=note, operator=""))
-    # 清理超过上限的旧版本
-    old = db.execute(
-        select(Version)
-        .where(Version.design_id == design.id)
-        .order_by(Version.version_no.asc())
-        .offset(MAX_VERSIONS)
-    ).scalars().all()
-    for v in old:
-        db.delete(v)
+    # 清理超过上限的旧版本：保留**最新的** MAX_VERSIONS 版。
+    #
+    # 2026-09-17 实测修：原实现是 `order_by(version_no.asc()).offset(MAX_VERSIONS)` + delete，
+    # 而本项目的 `sessionmaker(autoflush=False)`（见 db.py）让这次 SELECT **看不到**刚 add 的
+    # 这一版 —— 于是升序跳过前 30 条后删掉的是"上一版"，刚写入的那版反而留下。
+    # 结果不是"保留最旧的 30 版"，而是历史出现**永久空洞**：
+    # 36 次保存后实测拿到 ['v34', 'v28', 'v27', …]（v29–v33 都被删了）。
+    # 现按版本号直接截断，不依赖 flush/可见性，也不需要新的异常路径：
+    cutoff = version_no - MAX_VERSIONS
+    if cutoff > 0:
+        old = db.execute(
+            select(Version).where(Version.design_id == design.id, Version.version_no <= cutoff)
+        ).scalars().all()
+        for v in old:
+            db.delete(v)
 
 
 class DesignCreate(BaseModel):

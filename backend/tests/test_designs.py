@@ -56,6 +56,34 @@ class TestDesignsCrud:
         full = client.get(f"/api/designs/{did}", headers=auth_headers).json()
         assert full["design"]["children"][0]["props"]["text"] == "标题"
 
+    def test_version_history_keeps_the_newest_versions(self, client, auth_headers):
+        """"保留最近 30 版"必须是**最新的** 30 版。
+
+        2026-09-17 实测缺陷：`_save_version` 的裁剪是
+        `order_by(version_no.asc()).offset(MAX_VERSIONS)` + delete —— 升序跳过前 30 条后，
+        被删掉的正是**刚写进去的那一版**（升序里的第 31 条）。于是第 31 次保存起，
+        版本历史永远停在最旧的 30 版，新保存的稿子一版都进不了历史。
+        """
+        did = client.post("/api/designs", json={"name": "版本上限", "design": SAMPLE}, headers=auth_headers).json()["id"]
+
+        def put(text: str) -> None:
+            design = {
+                "id": "root", "type": "frame", "style": {"layout": "column"},
+                "children": [{"id": "t", "type": "text", "props": {"text": text}}],
+            }
+            assert client.put(f"/api/designs/{did}", json={"design": design}, headers=auth_headers).status_code == 200
+
+        for i in range(35):  # 创建 1 版 + 35 次更新 = 36 版 → 只该留最新 30 版
+            put(f"v{i}")
+
+        versions = client.get(f"/api/designs/{did}/versions", headers=auth_headers).json()["versions"]
+        texts = [v["design"]["children"][0]["props"]["text"] for v in versions]
+        assert len(versions) == 30, texts
+        # 不仅"最新在"，还要"没有空洞"：保留的应当是连续的最近 30 版（v34…v5）
+        assert texts == [f"v{i}" for i in range(34, 4, -1)], texts
+        assert texts[0] == "v34", f"最新一版必须在历史里，实际最新是 {texts[0]!r}"
+        assert "v0" not in texts, "最旧的版本应被裁掉"
+
     def test_update_auto_version(self, client, auth_headers):
         did = client.post("/api/designs", json={"name": "v测试", "design": SAMPLE}, headers=auth_headers).json()["id"]
         SAMPLE2 = {"id": "root", "type": "frame", "style": {"layout": "row"},
