@@ -48,7 +48,15 @@ async def main() -> None:
 
             r2 = await session.call_tool("get_component_library_tool", {})
             library = json.loads(r2.content[0].text)
-            assert len(library["components"]) == 15
+            # 数量以**单一来源** shared/component-library.json 为准，不写死数字：
+            # 本脚本原来写死 `== 15`，T9 把组件扩到 18（icon/switch/tabs）之后它就一直是红的
+            # —— 同一个坑在 MCP 工具描述里也踩过一次（aaf1534）。
+            expected_components = len(
+                json.loads((ROOT / "shared" / "component-library.json").read_text(encoding="utf-8"))["components"]
+            )
+            assert len(library["components"]) == expected_components, (
+                f"MCP 组件库 {len(library['components'])} 个 ≠ shared/component-library.json 的 {expected_components} 个"
+            )
             print("components:", len(library["components"]), "| first:", library["components"][0]["type"])
 
             r3 = await session.call_tool(
