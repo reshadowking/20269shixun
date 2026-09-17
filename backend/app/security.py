@@ -1,5 +1,6 @@
 """最简 JWT 鉴权（v2.2 §9.4：演示固定账号，不做注册/角色）。"""
 import hashlib
+import hmac
 from datetime import UTC, datetime, timedelta
 
 import jwt
@@ -42,12 +43,16 @@ def verify_password_full(password: str, password_hash: str) -> tuple[bool, bool]
     """校验口令，返回 (是否通过, 是否走了历史盐)。
 
     历史盐命中 → 调用方应把 user.password_hash 重写为 hash_password(password) 完成升级。
+
+    2026-09-17：比较改成 `hmac.compare_digest`（常量时间）。`==` 是短路比较，
+    理论上可被逐字节测出哈希前缀；口令哈希比较没有理由不用常量时间——
+    与 `routers/images.py` 的公开链接凭证、`routers/collab.py` 的内网令牌同一口径。
     """
-    if hash_password(password) == password_hash:
+    if hmac.compare_digest(hash_password(password), password_hash):
         return True, False
     settings = get_settings()
     for salt in (settings.jwt_secret, *_LEGACY_HASH_SALTS):
-        if _hash_with_salt(password, salt) == password_hash:
+        if hmac.compare_digest(_hash_with_salt(password, salt), password_hash):
             return True, True
     return False, False
 
