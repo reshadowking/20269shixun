@@ -91,6 +91,8 @@ def _relax_ai_limits(monkeypatch):
     settings = get_settings()
     monkeypatch.setattr(settings, "ai_rate_limit_per_minute", 100000)
     monkeypatch.setattr(settings, "ai_global_rate_limit_per_minute", 100000)
+    # 登录限流：成套用例会成批打 /api/auth/login（同一个 testclient IP），必须放宽
+    monkeypatch.setattr(settings, "login_rate_limit_per_minute", 100000)
     monkeypatch.setattr(settings, "ai_daily_token_quota", 0)
     monkeypatch.setattr(settings, "ai_daily_token_quota_per_user", 0)
     rate_limit._reset_for_tests()

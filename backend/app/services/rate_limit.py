@@ -14,6 +14,18 @@ class RateLimited(RuntimeError):
 
 _user_buckets: dict[str, tuple[float, float]] = {}
 _global_bucket: tuple[float, float] = (0.0, 0.0)
+"""
+登录限流的桶：key = `"{ip}|{username}"`。与生成限流**分开计数** —— 登录失败不该吃掉生成
+额度，反之亦然。
+
+为什么 key 里带 ip：只按用户名限流的话，任何人都能靠刷错口令把某个账号"锁掉一分钟"；
+带上 ip 之后，"同一个人从同一处反复猜"才被拦。
+
+键空间是**攻击者可控**的（用户名随便填），所以下面做了一个粗暴但够用的上限，
+避免被人塞满内存（进程内实现的已知限制，与生成限流同一档）。
+"""
+_login_buckets: dict[str, tuple[float, float]] = {}
+_LOGIN_BUCKETS_MAX = 10000
 
 
 def _take(state: tuple[float, float], capacity: int, now: float, cost: int) -> tuple[bool, tuple[float, float]]:
@@ -47,4 +59,39 @@ def check(user: str, cost: int = 1) -> None:
 def _reset_for_tests() -> None:
     global _global_bucket
     _user_buckets.clear()
+    _login_buckets.clear()
     _global_bucket = (0.0, 0.0)
+
+
+def check_login(key: str) -> None:
+    """登录**之前**检查额度；用尽则抛 `RateLimited`（调用方转 429）。
+
+    只检查、不扣减：额度由**失败**累积（见 `note_login_failure`）。这样正常用户（口令正确）
+    永远不会把自己的额度打满，而暴力破解者每猜错一次就少一次机会。
+    """
+    capacity = get_settings().login_rate_limit_per_minute
+    if capacity <= 0:
+        return  # 0 = 不限制（与 ai_rate_limit_per_minute 同一约定）
+    tokens, last = _login_buckets.get(key, (0.0, 0.0))
+    now = time.monotonic()
+    refreshed = min(float(capacity), tokens + (now - last) * capacity / 60.0) if last else float(capacity)
+    if refreshed < 1:
+        raise RateLimited("登录尝试过于频繁，请稍后再试")
+
+
+def note_login_failure(key: str) -> None:
+    """记一次凭证失败。成功后调用 `clear_login_failures` 把该 key 的计数清掉。"""
+    capacity = get_settings().login_rate_limit_per_minute
+    if capacity <= 0:
+        return
+    if len(_login_buckets) >= _LOGIN_BUCKETS_MAX and key not in _login_buckets:
+        _login_buckets.clear()  # 粗暴但够用：宁可放行一批，也不无限涨
+    tokens, last = _login_buckets.get(key, (0.0, 0.0))
+    now = time.monotonic()
+    refreshed = min(float(capacity), tokens + (now - last) * capacity / 60.0) if last else float(capacity)
+    _login_buckets[key] = (max(0.0, refreshed - 1.0), now)
+
+
+def clear_login_failures(key: str) -> None:
+    """凭证正确时清空该 key —— 否则用户手滑几次之后，成功登录过的账号还会被自己挡在门外。"""
+    _login_buckets.pop(key, None)

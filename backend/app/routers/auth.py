@@ -1,7 +1,7 @@
 """最简 JWT 登录（v2.2 §9.4）。"""
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -10,6 +10,8 @@ from ..config import get_settings
 from ..db import get_db
 from ..models import User
 from ..security import create_token, get_current_user, hash_password, verify_password_full
+from ..services import rate_limit
+from ..services.rate_limit import RateLimited
 from ..services.workspaces import create_personal_workspace
 
 logger = logging.getLogger(__name__)
@@ -64,8 +66,18 @@ def register(req: RegisterRequest, db: Session = Depends(get_db)):
 
 
 @router.post("/api/auth/login", response_model=LoginResponse)
-def login(req: LoginRequest, db: Session = Depends(get_db)):
+def login(req: LoginRequest, request: Request, db: Session = Depends(get_db)):
+    """登录。2026-09-17：补上凭证尝试限流——此前 `/api/auth/login` 完全没有限制，
+    口令可被无限次高速猜测（生成接口早就有 rate_limit，登录口漏了）。"""
     settings = get_settings()
+    # 按 ip + 用户名限流：只对**失败**计费，所以正常登录不受影响
+    # （key 带 ip 是为了避免"任何人刷错口令就能把别人的账号锁一分钟"）。
+    client_ip = request.client.host if request.client else "unknown"
+    limit_key = f"{client_ip}|{req.username}"
+    try:
+        rate_limit.check_login(limit_key)
+    except RateLimited as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
     # 演示固定账号：首次登录自动建号
     user = db.query(User).filter(User.username == req.username).first()
     if user is None and req.username == settings.demo_user and req.password == settings.demo_password:
@@ -83,10 +95,14 @@ def login(req: LoginRequest, db: Session = Depends(get_db)):
         else:
             db.refresh(user)
     if user is None:
+        rate_limit.note_login_failure(limit_key)
         raise HTTPException(status_code=401, detail="用户名或密码错误")
     ok, used_legacy_salt = verify_password_full(req.password, user.password_hash)
     if not ok:
+        rate_limit.note_login_failure(limit_key)
         raise HTTPException(status_code=401, detail="用户名或密码错误")
+    # 凭证正确：清掉该 key 的失败计数，避免"手滑几次之后连自己都被挡"
+    rate_limit.clear_login_failures(limit_key)
     if used_legacy_salt:
         # 历史盐（旧实现以 jwt_secret 为盐）命中：改写成当前盐的哈希，避免轮换密钥后被锁在门外
         user.password_hash = hash_password(req.password)

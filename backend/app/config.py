@@ -34,6 +34,9 @@ class Settings(BaseSettings):
     ai_breaker_open_seconds: float = 30.0
     ai_rate_limit_per_minute: int = 10
     ai_global_rate_limit_per_minute: int = 60
+    # 登录/注册凭证尝试的限流（按 ip+用户名；0 = 不限制）。只对**失败**计费，
+    # 所以正常登录不受影响，靠刷口令的暴力破解会在几十次之后被 429 挡住。
+    login_rate_limit_per_minute: int = 20
     ai_daily_token_quota: int = 200000
     ai_daily_token_quota_per_user: int = 50000
 
