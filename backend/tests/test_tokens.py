@@ -1,4 +1,6 @@
 """令牌生成物与 design-system.yaml 一致性测试 + /api/tokens 接口测试。"""
+import json
+import re
 from pathlib import Path
 
 import yaml
@@ -6,6 +8,9 @@ import yaml
 from app.design import tokens
 
 SHARED_YAML = Path(__file__).resolve().parent.parent.parent / "shared" / "design-system.yaml"
+FRONTEND_TS = (
+    Path(__file__).resolve().parent.parent.parent / "frontend" / "src" / "design" / "tokens.generated.ts"
+)
 
 
 def test_generated_matches_yaml():
@@ -20,6 +25,33 @@ def test_generated_matches_yaml():
         assert tokens.SPACING[theme] == source["themes"][theme]["spacing"]
         assert tokens.RADIUS[theme] == source["themes"][theme]["radius"]
     assert tokens.ALLOWED_HEX_COLORS == source.get("allowed_hex_colors", [])
+
+
+def test_frontend_generated_matches_yaml():
+    """前端生成物（画布与导出真正读的那份）也必须与 YAML 一致（2026-09-17 补）。
+
+    背景：后端生成物早有 `test_generated_matches_yaml` 守门，但 `tokens.generated.ts`
+    **没有任何对 YAML 的比对** —— 而它才是画布取色、导出取色的来源。一旦它落后于 YAML
+    （手工改了那份"DO NOT EDIT"的生成物，或生成脚本的 TS 分支出问题），就会出现
+    「合规检查器说这是令牌色、画布上却还是旧颜色」的漂移，而全套测试依旧全绿。
+
+    这里直接解析 TS 里的 `THEMES` / `ALLOWED_HEX_COLORS` 字面量做比对（不引新依赖，
+    与 test_icon_library / test_contract 的"跨语言同源"守门同范式）。
+    """
+    source = yaml.safe_load(SHARED_YAML.read_text(encoding="utf-8"))
+    ts = FRONTEND_TS.read_text(encoding="utf-8")
+    themes = json.loads(re.search(r"export const THEMES = (\{.*?\}) as const;", ts, re.DOTALL).group(1))
+    allowed = json.loads(
+        re.search(r"export const ALLOWED_HEX_COLORS: readonly string\[\] = (\[.*?\]);", ts, re.DOTALL).group(1)
+    )
+
+    assert set(themes) == set(source["themes"])
+    for theme, spec in source["themes"].items():
+        assert themes[theme]["colors"] == spec["colors"], f"{theme} 颜色与 YAML 不一致"
+        assert themes[theme]["typography"] == spec["typography"], f"{theme} 排版与 YAML 不一致"
+        assert themes[theme]["spacing"] == spec["spacing"], f"{theme} 间距与 YAML 不一致"
+        assert themes[theme]["radius"] == spec["radius"], f"{theme} 圆角与 YAML 不一致"
+    assert allowed == source.get("allowed_hex_colors", [])
 
 
 def test_color_value_lookup():
