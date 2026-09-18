@@ -13,6 +13,7 @@ import { describe, expect, it } from 'vitest'
 import ts from 'typescript'
 
 import type { DesignNode } from '@/design/types'
+import { componentRegistry } from '@/components/canvas/registry'
 
 import { designToHtml } from './designToHtml'
 import { designToReactApp } from './designToReact'
@@ -79,6 +80,39 @@ describe('导出产物语法守门（designToReact）', () => {
   it('空设计稿也零语法错（没有任何子节点）', () => {
     const bare: DesignNode = { id: 'root', type: 'frame', style: {} }
     expect(syntaxErrors(designToReactApp(bare, true))).toEqual([])
+  })
+
+  /**
+   * 2026-09-18：把守门从"手写几个组件"扩到**全部已注册组件**，并且由注册表驱动——
+   * 以后新增组件（改 `registry.ts` 一行）会自动进这条守门，不用记得回来加用例。
+   *
+   * 每个组件都造两个节点：props 全空的（最坏输入，AI 漏字段时的样子）+ 带样式的
+   * （确保 style 序列化分支也走到）。任何一条让产物语法坏掉都会在这里红。
+   */
+  it('全部已注册组件（props 全空 / 带样式两种）一起导出：零语法错', () => {
+    const types = Object.keys(componentRegistry)
+    expect(types.length, '组件数量少于 18 说明注册表被改动').toBeGreaterThanOrEqual(18)
+
+    const design: DesignNode = {
+      id: 'root',
+      type: 'frame',
+      style: { layout: 'column', width: 720, background: 'background' },
+      children: types.flatMap((t) => [
+        { id: `c-${t}`, type: 'component', componentType: t as never, props: {}, style: {} },
+        {
+          id: `cs-${t}`,
+          type: 'component',
+          componentType: t as never,
+          props: {},
+          style: { width: 120, height: 40, background: 'primary', color: 'text-primary', radius: 8, shadow: 'none' },
+        },
+      ]),
+    }
+
+    const code = designToReactApp(design, true)
+    expect(syntaxErrors(code)).toEqual([])
+    // 每个组件都必须真的出现在产物里（否则"零语法错"可能只是因为漏导出了）
+    for (const t of types) expect(code, `${t} 没有出现在产物里`).toContain(`data-component="${t}"`)
   })
 
   /**
