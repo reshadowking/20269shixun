@@ -190,3 +190,29 @@ export function freezeToFreeLayout(
     }
   })
 }
+
+/**
+ * 收集**所有需要冻结的容器**（前序：父在前、子在后）。
+ *
+ * 为什么要整棵树：只冻结根节点的直接子节点时，嵌套容器（卡片里的价格行、导航里的链接组…）
+ * 仍然是 flex —— 用户拖动它们只会**重排顺序**，看起来就是"AI 生成的稿子大部分拖不动"。
+ *
+ * 规则：
+ * - 有可见子节点、且自身 `layout !== 'free'` 的容器 → 要冻；
+ * - 自身已经是 free 的容器跳过（幂等：重复冻结不该改坐标），但**继续往下走**——
+ *   外层是 free 不代表里层也能自由摆放；
+ * - 没有子节点的节点（text / button / image…）天然不需要冻结。
+ *
+ * 返回顺序即调用方的测量顺序；测量全部发生在写入之前（先量后写），
+ * 因此各层量到的都是"还是 flex 时"的真实几何。
+ */
+export function collectFreezeTargets(root: DesignNode): DesignNode[] {
+  const out: DesignNode[] = []
+  const walk = (node: DesignNode) => {
+    const visible = (node.children ?? []).filter((c) => !c.hidden)
+    if (visible.length > 0 && node.style?.layout !== 'free') out.push(node)
+    for (const child of node.children ?? []) walk(child)
+  }
+  walk(root)
+  return out
+}

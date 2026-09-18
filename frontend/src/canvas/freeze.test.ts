@@ -11,7 +11,7 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import type { DesignNode } from '@/design/types'
-import { freezeToFreeLayout, measureChildren, type FreezeMeasurement } from './freeze'
+import { collectFreezeTargets, freezeToFreeLayout, measureChildren, type FreezeMeasurement } from './freeze'
 
 function child(id: string, style?: DesignNode['style']): DesignNode {
   return { id, type: 'frame', style }
@@ -273,5 +273,44 @@ describe('冻结的数学性质（防"越冻越偏"）', () => {
     expect(frozen[0].style?.layout).toBe('column')
     // 没被测到的节点原样返回
     expect(freezeToFreeLayout(children, [{ id: 'box', x: 1, y: 2, width: 3, height: 4 }])[1]).toBe(children[1])
+  })
+})
+
+describe('collectFreezeTargets（2026-09-18：整棵树都要能拖）', () => {
+  const leaf = (id: string): DesignNode => ({ id, type: 'text', props: { text: id }, style: {} })
+  const frame = (id: string, layout: NonNullable<DesignNode['style']>['layout'], children: DesignNode[]): DesignNode => ({
+    id,
+    type: 'frame',
+    style: { layout },
+    children,
+  })
+
+  it('嵌套容器一并收集：只冻根节点一层会让卡片内部拖不动', () => {
+    const tree = frame('root', 'column', [
+      frame('card', 'column', [leaf('t1'), leaf('t2')]),
+      frame('price-row', 'row', [leaf('now'), leaf('old')]),
+      leaf('note'),
+    ])
+    expect(collectFreezeTargets(tree).map((n) => n.id)).toEqual(['root', 'card', 'price-row'])
+  })
+
+  it('前序顺序（父在前、子在后）：测量必须先于任何写入', () => {
+    const tree = frame('root', 'column', [frame('inner', 'column', [frame('deepest', 'row', [leaf('x')])])])
+    expect(collectFreezeTargets(tree).map((n) => n.id)).toEqual(['root', 'inner', 'deepest'])
+  })
+
+  it('已经是 free 的容器不再收集（幂等），但它的子孙继续收', () => {
+    const tree = frame('root', 'free', [frame('card', 'column', [leaf('t1')])])
+    expect(collectFreezeTargets(tree).map((n) => n.id)).toEqual(['card'])
+  })
+
+  it('没有可见子节点的容器不收集（空容器 / 子节点全隐藏）', () => {
+    const hidden = { ...leaf('h'), hidden: true } as DesignNode
+    const tree = frame('root', 'column', [frame('empty', 'column', []), frame('all-hidden', 'column', [hidden])])
+    expect(collectFreezeTargets(tree).map((n) => n.id)).toEqual(['root'])
+  })
+
+  it('已经是自由画布的空画布：没有任何目标', () => {
+    expect(collectFreezeTargets(frame('root', 'free', [leaf('a')]))).toEqual([])
   })
 })

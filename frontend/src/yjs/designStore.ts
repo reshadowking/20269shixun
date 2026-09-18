@@ -819,6 +819,25 @@ export class DesignStore {
     updates: Array<{ id: string; x: number; y: number; width: number; height: number }>,
     containerSize?: { width: number; height: number },
   ): { ok: boolean; reason?: string } {
+    return this.convertToFreeLayoutBatch([{ parentId, updates, containerSize }])
+  }
+
+  /**
+   * 多层版本的转自由画布（2026-09-18）：一次冻结**整棵树**的每个 flex 容器。
+   *
+   * 为什么必须是同一个事务：自动冻结/一键转自由画布现在会写多个容器，
+   * 若逐层各开一个事务，Ctrl+Z 就得按好几次才能退回布局原样（每层一个撤销步），
+   * 中途停下会留下"外层 free + 内层 flex"的半成品——比不冻更糟。
+   *
+   * 语义与单层完全一致（越权/锁定整批不落、先收集后写入）。
+   */
+  convertToFreeLayoutBatch(
+    groups: Array<{
+      parentId: string
+      updates: Array<{ id: string; x: number; y: number; width: number; height: number }>
+      containerSize?: { width: number; height: number }
+    }>,
+  ): { ok: boolean; reason?: string } {
     if (this._blockedByRole('转自由画布')) return { ok: false, reason: 'read-only' }
     if (this.beautifyLock) {
       this._rejectBlocked('版面已确认：请先解除版面锁定再转自由画布')
@@ -829,50 +848,55 @@ export class DesignStore {
       () => {
         const root = this.designMap.get(ROOT_KEY) as YNode | undefined
         if (!root) return
-        const parent = findYNode(root, parentId)
-        if (!parent) return
+        // 先收集全部写入，任一越权/缺失则整批不落（原子语义）
+        const writes: Array<{ target: YNode; next: DesignNode }> = []
+        const nodeIds: string[] = []
+        for (const g of groups) {
+          const parent = findYNode(root, g.parentId)
+          if (!parent) return
 
-        const prevParent = yToPlain(parent)
-        const nextParent: DesignNode = {
-          ...prevParent,
-          style: {
-            ...(prevParent.style ?? {}),
-            layout: 'free' as const,
-            // 2026-09-17：容器自己的盒子也要一起冻。子节点变绝对定位后不再撑高父容器，
-            // 而模板/AI 产物的容器多是 auto 高度 → 只冻结子节点会把容器塌成"只剩 padding"
-            // 的一条（E2E 实测 demo 根节点 276 → 64），背景/圆角消失、子节点浮在容器外。
-            ...(containerSize
-              ? { width: Math.round(containerSize.width), height: Math.round(containerSize.height) }
-              : {}),
-          },
-        }
-        if (!this._allowedWhileLocked(prevParent, nextParent)) {
-          this._rejectBlocked('版面已确认：仅允许修改样式效果（布局/文本/结构已锁定）')
-          return
-        }
-
-        // 先收集全部目标，任一越权则整批不落（原子语义）
-        const targets: Array<{ target: YNode; next: DesignNode }> = []
-        for (const u of updates) {
-          const target = findYNode(root, u.id)
-          if (!target) continue
-          const prev = yToPlain(target)
-          const next: DesignNode = {
-            ...prev,
-            x: Math.round(u.x),
-            y: Math.round(u.y),
-            style: { ...(prev.style ?? {}), width: u.width, height: u.height },
+          const prevParent = yToPlain(parent)
+          const nextParent: DesignNode = {
+            ...prevParent,
+            style: {
+              ...(prevParent.style ?? {}),
+              layout: 'free' as const,
+              // 2026-09-17：容器自己的盒子也要一起冻。子节点变绝对定位后不再撑高父容器，
+              // 而模板/AI 产物的容器多是 auto 高度 → 只冻结子节点会把容器塌成"只剩 padding"
+              // 的一条（E2E 实测 demo 根节点 276 → 64），背景/圆角消失、子节点浮在容器外。
+              ...(g.containerSize
+                ? { width: Math.round(g.containerSize.width), height: Math.round(g.containerSize.height) }
+                : {}),
+            },
           }
-          if (!this._allowedWhileLocked(prev, next)) {
+          if (!this._allowedWhileLocked(prevParent, nextParent)) {
             this._rejectBlocked('版面已确认：仅允许修改样式效果（布局/文本/结构已锁定）')
             return
           }
-          targets.push({ target, next })
+          writes.push({ target: parent, next: nextParent })
+          nodeIds.push(g.parentId)
+
+          for (const u of g.updates) {
+            const target = findYNode(root, u.id)
+            if (!target) continue
+            const prev = yToPlain(target)
+            const next: DesignNode = {
+              ...prev,
+              x: Math.round(u.x),
+              y: Math.round(u.y),
+              style: { ...(prev.style ?? {}), width: u.width, height: u.height },
+            }
+            if (!this._allowedWhileLocked(prev, next)) {
+              this._rejectBlocked('版面已确认：仅允许修改样式效果（布局/文本/结构已锁定）')
+              return
+            }
+            writes.push({ target, next })
+            nodeIds.push(u.id)
+          }
         }
 
-        this._applyUpdate(parent, nextParent)
-        for (const t of targets) this._applyUpdate(t.target, t.next)
-        this.pendingUndoMeta = { kind: 'structural', writes: [], nodeIds: [parentId, ...updates.map((u) => u.id)] }
+        for (const w of writes) this._applyUpdate(w.target, w.next)
+        this.pendingUndoMeta = { kind: 'structural', writes: [], nodeIds }
         ok = true
       },
       LOCAL_ORIGIN,

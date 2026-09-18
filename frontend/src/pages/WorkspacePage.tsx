@@ -8,7 +8,7 @@ import BeautifyPanel from '@/components/beautify/BeautifyPanel'
 import CodeViewer from '@/components/export/CodeViewer'
 import AIChatPanel from '@/components/chat/AIChatPanel'
 import { NodeRenderer } from '@/canvas/NodeRenderer'
-import { freezeToFreeLayout, waitForLayoutStable, type FreezeMeasurement } from '@/canvas/freeze'
+import { collectFreezeTargets, freezeToFreeLayout, waitForLayoutStable } from '@/canvas/freeze'
 import type { DesignCanvasHandle } from '@/canvas/DesignCanvas'
 import { EFFECT_SPECS } from '@/design/beautify'
 import { loadBaseSnapshot, saveBaseSnapshot, type BaseSnapshot } from '@/lib/baseSnapshot'
@@ -858,113 +858,121 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
   /** P1-13（缺陷 6 替代方案）：flex/网格布局 → 自由画布（子节点铺网格坐标，可拖拽） */
   const convertingFreeRef = useRef(false)
 
+  /** 冻结结果：`ok=false` 时由调用方决定提示（手动）或静默（AI 落地后自动）。 */
+  type FreezeOutcome =
+    | { ok: true; nodes: number; containers: number; hidden: number }
+    | { ok: false; reason: 'no-canvas' | 'nothing' | 'unstable' | 'rejected'; detail?: string }
+
+  /**
+   * 冻结**整棵树**（2026-09-18 由"只冻根节点一层"扩到逐层）：一次 Ctrl+Z 可完整还原。
+   *
+   * 语义（P1-13）：保留当前视觉现状，只把节点变成可拖拽——**不是重新排布**。
+   * 先等版面稳定（字体/图片/两帧 rAF）→ 逐层测量（测量全部发生在写入之前）→ 单事务提交。
+   * 「🔓 转自由画布」与"AI 生成后自动冻结"共用这一条路径，两者行为因此永远一致。
+   */
+  const freezeWholeTree = async (): Promise<FreezeOutcome> => {
+    const canvas = canvasRef.current
+    if (!canvas) return { ok: false, reason: 'no-canvas' }
+    // 2026-09-17：先等版面稳定再测量——"测早了 → 冻结写进的小尺寸把版面压错位"是验收反馈头号嫌疑。
+    // 查询限定在本页子树（T42 的教训：全局 querySelector 会命中别的画布/预览层）。
+    const stable = await waitForLayoutStable(
+      pageRef.current?.querySelector<HTMLElement>('[data-testid="canvas-sheet"]') ?? null,
+    )
+    if (!stable.settled) {
+      const who = stable.pendingImages
+        ? `${stable.pendingImages} 张图片还没加载完`
+        : stable.fontsPending
+          ? '字体还没就绪'
+          : '版面还在变化'
+      return { ok: false, reason: 'unstable', detail: who }
+    }
+    const current = store.getDesign()
+    const groups: Array<{
+      parentId: string
+      updates: Array<{ id: string; x: number; y: number; width: number; height: number }>
+      containerSize?: { width: number; height: number }
+    }> = []
+    let nodes = 0
+    let hidden = 0
+    // 逐层测量：某一层完全量不到（整层隐藏等）就跳过它，不拖累其它层——但一层都没量到则整批取消
+    for (const parent of collectFreezeTargets(current)) {
+      const childIds = (parent.children ?? []).filter((c) => !c.hidden).map((c) => c.id)
+      const { measurements, missing, container } = canvas.measureFreeze(parent.id, childIds)
+      if (!measurements.length) continue
+      const updates = freezeToFreeLayout(parent.children ?? [], measurements)
+        .filter((c) => typeof c.x === 'number' && typeof c.y === 'number')
+        .map((c) => ({
+          id: c.id,
+          x: c.x as number,
+          y: c.y as number,
+          width: Number(c.style?.width ?? 0),
+          height: Number(c.style?.height ?? 0),
+        }))
+      if (!updates.length) continue
+      groups.push({ parentId: parent.id, updates, containerSize: container })
+      nodes += updates.length
+      hidden += missing.length
+    }
+    if (!groups.length) return { ok: false, reason: 'nothing' }
+    // 先快照（可"还原布局"），再单事务提交（一次 Ctrl+Z 完整还原）
+    store.pushSnapshot()
+    setUndoCount((c) => c + 1)
+    const result = store.convertToFreeLayoutBatch(groups)
+    if (!result.ok) {
+      // store 仍拒绝（锁定/越权/节点在测量期间被删）：把快照与计数退回，不留"按了没反应"的撤销步
+      store.popSnapshot()
+      setUndoCount((c) => Math.max(0, c - 1))
+      return { ok: false, reason: 'rejected' }
+    }
+    return { ok: true, nodes, containers: groups.length, hidden }
+  }
+
   /**
    * AI 产物落地后**自动冻结一次**（2026-09-17）：让"生成即可拖"，不用再点「🔓 转自由画布」。
    *
-   * 只在这些前提下做：偏好开着、根节点还不是 free、有可见子节点、**测量无缺失**
-   * （测不全就什么都不动，交给手动按钮）——并且走 `store.convertToFreeLayout()` 的**单事务**写入。
-   * 锁定阶段（版面已确认）由 store 的既有守卫拒绝，自动冻结不会偷偷改版面。
+   * 前提：偏好开着（默认开）+ 不是锁定/只读 + 根节点还不是 free。
+   * 失败一律**静默保留 flex**（等图片显示出来用户仍可手动点按钮），不拿"可能偏小的尺寸"落库。
    */
   const autoFreezeAfterAi = async () => {
     if (!readAutoFreeze()) return
     const current = store.getDesign()
     // 与「转自由画布」按钮同一套守卫：锁定/只读下 store 必然拒绝，先推快照只会留下空撤销步
     if (!canAutoFreeze({ locked: store.isBeautifyLocked, readOnly: store.isReadOnly, layout: current.style?.layout })) return
-    const canvas = canvasRef.current
-    if (!canvas || !current.children?.length) return
-    const stable = await waitForLayoutStable(
-      pageRef.current?.querySelector<HTMLElement>('[data-testid="canvas-sheet"]') ?? null,
-    )
-    // 等不到就**不动**：拿偏小的尺寸自动冻结 = 把"偶发错乱"变成默认行为。
-    // 保留 flex 交给用户，或等图片显示出来后手动点「转自由画布」。
-    if (!stable.settled) return
-    const childIds = (store.getDesign().children ?? []).filter((c) => !c.hidden).map((c) => c.id)
-    const { measurements, missing, container } = canvas.measureFreeze(store.getDesign().id, childIds)
-    if (!measurements.length || missing.length) return
-    const updates = freezeToFreeLayout(store.getDesign().children ?? [], measurements)
-      .filter((c) => typeof c.x === 'number' && typeof c.y === 'number')
-      .map((c) => ({ id: c.id, x: c.x as number, y: c.y as number, width: Number(c.style?.width ?? 0), height: Number(c.style?.height ?? 0) }))
-    store.pushSnapshot()
-    setUndoCount((c) => c + 1)
-    // 容器自己的尺寸一起冻（否则子节点绝对定位后容器塌成只剩 padding 的一条）
-    const result = store.convertToFreeLayout(store.getDesign().id, updates, container)
-    if (!result.ok) {
-      // store 仍拒绝（节点在测量期间被删等）：把快照与计数退回，不留"按了没反应"的撤销步
-      store.popSnapshot()
-      setUndoCount((c) => Math.max(0, c - 1))
-    }
+    if (!current.children?.length) return
+    await freezeWholeTree()
   }
 
   const handleConvertToFree = async () => {
     if (!design.children?.length) return
     if (convertingFreeRef.current) return // 等待测量期间重复点击：忽略（避免二次冻结覆盖）
-    // 语义（P1-13）：保留当前视觉现状，只把子节点变成可拖拽——**不是重新排布**
     if (store.isBeautifyLocked) {
       setErrorMsg('版面已确认：请先解除版面锁定再转自由画布')
       return
     }
-    const canvas = canvasRef.current
-    if (!canvas) {
-      setErrorMsg('画布未就绪，请重试')
-      return
-    }
-    const childIds = design.children.filter((c) => !c.hidden).map((c) => c.id)
     convertingFreeRef.current = true
-    let measurements: FreezeMeasurement[]
-    let missing: string[]
-    let container: { width: number; height: number } | undefined
     try {
-      // 2026-09-17：先等版面稳定（字体/图片/两帧 rAF，带超时）再测量——
-      // "测早了 → 冻结写进的小尺寸把版面压错位"是验收反馈里排第一的嫌疑。
-      // 查询限定在本页子树（T42 的教训：全局 querySelector 会命中别的画布/预览层）。
-      const stable = await waitForLayoutStable(
-        pageRef.current?.querySelector<HTMLElement>('[data-testid="canvas-sheet"]') ?? null,
-      )
-      if (!stable.settled) {
-        // 超时（图片还在下载 / 字体还没就绪）→ 宁可取消，也别把偏小的尺寸冻结进 style
-        const who = stable.pendingImages
-          ? `${stable.pendingImages} 张图片还没加载完`
-          : stable.fontsPending
-            ? '字体还没就绪'
-            : '版面还在变化'
-        setErrorMsg(`已取消转换：${who}，此时测量会偏小并导致排版错乱。等画面稳定后重试即可。`)
+      const outcome = await freezeWholeTree()
+      if (!outcome.ok) {
+        if (outcome.reason === 'unstable') {
+          setErrorMsg(`已取消转换：${outcome.detail}，此时测量会偏小并导致排版错乱。等画面稳定后重试即可。`)
+        } else if (outcome.reason === 'nothing') {
+          setErrorMsg('未能测量到任何节点，已取消转换')
+        } else if (outcome.reason === 'rejected') {
+          setErrorMsg('版面已锁定或存在越权改动，转换已取消')
+        } else {
+          setErrorMsg('画布未就绪，请重试')
+        }
         return
       }
-      ;({ measurements, missing, container } = canvas.measureFreeze(design.id, childIds))
+      setErrorMsg(
+        outcome.hidden
+          ? `已冻结 ${outcome.nodes} 个节点的位置与尺寸（含 ${outcome.containers} 个容器），现在可自由拖拽；${outcome.hidden} 个隐藏节点未冻结`
+          : `已冻结 ${outcome.nodes} 个节点的位置与尺寸（含 ${outcome.containers} 个容器），现在可自由拖拽`,
+      )
+      setSelectedIds(new Set())
     } finally {
       convertingFreeRef.current = false
     }
-    if (measurements.length === 0) {
-      setErrorMsg('未能测量到任何节点，已取消转换')
-      return
-    }
-    const updated = freezeToFreeLayout(design.children, measurements)
-    const updates = updated
-      .filter((c) => typeof c.x === 'number' && typeof c.y === 'number')
-      .map((c) => ({
-        id: c.id,
-        x: c.x as number,
-        y: c.y as number,
-        width: Number(c.style?.width ?? 0),
-        height: Number(c.style?.height ?? 0),
-      }))
-    // 先快照（可"还原布局"），再单事务提交（一次 Ctrl+Z 完整还原）
-    store.pushSnapshot()
-    setUndoCount((c) => c + 1)
-    // 容器自己的尺寸一起冻（否则子节点绝对定位后容器塌成只剩 padding 的一条）
-    const result = store.convertToFreeLayout(design.id, updates, container)
-    if (!result.ok) {
-      store.popSnapshot()
-      setUndoCount((c) => Math.max(0, c - 1))
-      setErrorMsg('版面已锁定或存在越权改动，转换已取消')
-      return
-    }
-    setErrorMsg(
-      missing.length
-        ? `已冻结 ${updates.length} 个节点的位置与尺寸，现在可自由拖拽；${missing.length} 个隐藏节点未冻结`
-        : `已冻结 ${updates.length} 个节点的位置与尺寸，现在可自由拖拽`,
-    )
-    setSelectedIds(new Set())
   }
 
   /** P0-1 操作级撤销/重做（缺陷 13）：用户编辑步骤，Ctrl+Z / Ctrl+Shift+Z */

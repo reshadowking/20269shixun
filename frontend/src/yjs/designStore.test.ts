@@ -537,6 +537,83 @@ describe('P1-13 convertToFreeLayout', () => {
   })
 })
 
+/**
+ * 2026-09-18：转自由画布从"根节点一层"扩到"整棵树"。
+ *
+ * 动机（用户原话）："ai 生成的默认就是可以编辑的……不要多余一步去转自由画布"。
+ * 只冻第一层时，卡片/价格行这类嵌套容器仍是 flex —— 拖动只会重排，看起来就是"拖不动"。
+ * 多层必须**同一个事务**：否则 Ctrl+Z 要按好几次，中途停下会留下"外层 free + 内层 flex"的半成品。
+ */
+describe('convertToFreeLayoutBatch（整棵树一次冻结）', () => {
+  const rootGroup = {
+    parentId: 'root',
+    updates: [
+      { id: 'a', x: 24, y: 24, width: 300, height: 24 },
+      { id: 'b', x: 24, y: 60, width: 300, height: 120 },
+    ],
+    containerSize: { width: 348, height: 204 },
+  }
+  const nestedGroup = {
+    parentId: 'b',
+    updates: [
+      { id: 'b1', x: 8, y: 8, width: 120, height: 32 },
+      { id: 'b2', x: 140, y: 8, width: 80, height: 24 },
+    ],
+    containerSize: { width: 300, height: 120 },
+  }
+
+  it('外层与内层在同一事务里冻结，一次 Ctrl+Z 全部还原', () => {
+    const store = new DesignStore(undefined, sample())
+    const before = JSON.stringify(store.getDesign())
+
+    const result = store.convertToFreeLayoutBatch([rootGroup, nestedGroup])
+    expect(result.ok).toBe(true)
+
+    const design = store.getDesign()
+    const b = design.children!.find((c) => c.id === 'b')!
+    expect(design.style?.layout).toBe('free')
+    expect(design.style?.height).toBe(204)
+    expect(b.style?.layout).toBe('free')
+    expect([b.x, b.y, b.style?.width, b.style?.height]).toEqual([24, 60, 300, 120])
+    expect(b.children!.find((c) => c.id === 'b1')!.x).toBe(8)
+    expect(b.children!.find((c) => c.id === 'b2')!.style?.width).toBe(80)
+
+    // 关键：一次撤销回到原样，不会停在"外层 free + 内层 flex"
+    expect(store.undo()).toBe(true)
+    expect(JSON.stringify(store.getDesign())).toBe(before)
+    store.destroy()
+  })
+
+  it('任一容器不存在 → 整批不落（原子，不留半成品）', () => {
+    const store = new DesignStore(undefined, sample())
+    const before = JSON.stringify(store.getDesign())
+    const result = store.convertToFreeLayoutBatch([
+      rootGroup,
+      { parentId: 'ghost', updates: [], containerSize: { width: 10, height: 10 } },
+    ])
+    expect(result.ok).toBe(false)
+    expect(JSON.stringify(store.getDesign())).toBe(before)
+    store.destroy()
+  })
+
+  it('版面露锁定：整批拒绝（多容器绕不过同一套守卫）', () => {
+    const store = new DesignStore(undefined, sample())
+    store.setBeautifyLock(true)
+    const before = JSON.stringify(store.getDesign())
+    expect(store.convertToFreeLayoutBatch([rootGroup, nestedGroup])).toEqual({ ok: false, reason: 'locked' })
+    expect(JSON.stringify(store.getDesign())).toBe(before)
+    store.destroy()
+  })
+
+  it('空数组：不报错，但也没有任何改动', () => {
+    const store = new DesignStore(undefined, sample())
+    const before = JSON.stringify(store.getDesign())
+    expect(store.convertToFreeLayoutBatch([]).ok).toBe(true)
+    expect(JSON.stringify(store.getDesign())).toBe(before)
+    store.destroy()
+  })
+})
+
 describe('批量美化一步撤销（T4 批3：pushSnapshot + resetDesign 语义）', () => {
   it('批量替换整树后一次 popSnapshot 完整回退（不残留半应用）', () => {
     const store = new DesignStore(undefined, sample())
