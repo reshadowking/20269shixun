@@ -21,6 +21,11 @@ class Settings(BaseSettings):
     llm_temperature_parse: float = 0.2
     llm_temperature_fill: float = 0.6  # 0.3 太死板（相同提示词结果雷同），0.6 平衡多样与稳定
     llm_history_max_chars: int = 1200  # T24：会话历史进提示词的字符预算（超出丢最旧一轮）
+    # 2026-09-18：会话历史**保留几轮**（一轮 = 一条 user + 一条 assistant）。
+    # 实测：典型一轮（"把按钮颜色改成红色" + 机器摘要"已按指令修改画布"）≈ 23 字符，
+    # 2 轮 ≈ 46 字符，远低于 1200 的字符预算 —— 也就是说**轮数上限先卡住**，预算根本没被用满。
+    # 放宽到 4 轮（≈2 个来回）让"上一轮说过什么"能进上下文；真正的成本闸门仍是字符预算。
+    llm_history_max_turns: int = 4
     # T20：生成网关——专用池大小 / 排队等待 / 整链路时间预算 / 单次调用最低预算
     llm_max_concurrency: int = 4
     llm_queue_timeout_seconds: float = 5.0

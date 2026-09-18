@@ -70,8 +70,14 @@ def _trim(turns: list[dict]) -> list[dict]:
     return list(reversed(kept))
 
 
-def recent_turns(db: DbSession, session_key: str | None, owner: str, max_turns: int = 2) -> list[dict]:
-    """返回 [{"role": "user"|"assistant", "content": str}, …]（最多 max_turns 轮，最旧在前）。"""
+def recent_turns(db: DbSession, session_key: str | None, owner: str, max_turns: int | None = None) -> list[dict]:
+    """返回 [{"role": "user"|"assistant", "content": str}, …]（最多 max_turns 轮，最旧在前）。
+
+    `max_turns` 缺省取配置 `llm_history_max_turns`（2026-09-18：默认 2 → 4）。
+    这么改的依据是**实测的成本结构**：典型一轮 ≈ 23 字符、字符预算 1200，
+    所以真正卡住上下文的是轮数上限而不是预算——放宽轮数后由预算兜底（超了照样丢最旧的）。
+    硬上限 10 轮，防止有人把配置写成 999 把提示词撑爆。
+    """
     if not session_key:
         return []
     owner_id = sessions_service.owner_id_of(db, owner)
@@ -81,7 +87,8 @@ def recent_turns(db: DbSession, session_key: str | None, owner: str, max_turns: 
     if session is None:
         return []
 
-    limit = max(1, min(max_turns, 5)) * 2
+    turns_wanted = max_turns if max_turns is not None else int(get_settings().llm_history_max_turns)
+    limit = max(1, min(turns_wanted, 10)) * 2
     messages = sessions_service.list_messages(db, session, limit=limit)
     calls = sorted(sessions_service.list_tool_calls(db, session, limit=50), key=lambda c: c.id)
 

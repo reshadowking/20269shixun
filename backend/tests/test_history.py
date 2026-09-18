@@ -197,3 +197,54 @@ class TestEditNotSummarized:
         assert result.fallback is False, result.error
         assert len(recorder) == 1, "编辑模式不应产生摘要调用"
         assert json.loads(recorder[0]["user"])["user_request"] == long_prompt
+
+
+class TestHistoryDepth:
+    """2026-09-18：轮数上限从写死的 2 改成配置项（默认 4），并保留 10 轮硬上限。
+
+    依据是实测的成本结构：典型一轮（"把按钮颜色改成红色" + 机器摘要）≈ 23 字符，
+    而字符预算是 1200 —— 真正卡住上下文的是轮数，不是预算。放宽轮数后由预算兜底。
+    """
+
+    def _seed(self, key: str, turns: int) -> None:
+        db = SessionLocal()
+        try:
+            owner = sessions_service.owner_id_of(db, "demo")
+            session, _ = sessions_service.get_or_create_session(db, owner, key)
+            for i in range(turns):
+                sessions_service.append_messages(db, session, [{"role": "user", "text": f"第{i}轮指令"}])
+                sessions_service.record_tool_call(db, session, "incremental-edit", True)
+                sessions_service.append_messages(db, session, [{"role": "assistant", "text": "回执原文"}])
+        finally:
+            db.close()
+
+    def _turns(self, key: str) -> list[dict]:
+        db = SessionLocal()
+        try:
+            return recent_turns(db, key, "demo")
+        finally:
+            db.close()
+
+    def test_default_follows_settings(self, client, auth_headers, monkeypatch):
+        monkeypatch.setattr(get_settings(), "llm_history_max_turns", 3)
+        key = "s-hist-depth3"
+        self._seed(key, 6)
+        turns = self._turns(key)
+        assert len(turns) == 6  # 3 轮 × (user + assistant)
+        assert turns[0]["content"] == "第3轮指令"  # 只保留最近 3 轮
+        assert turns[-1]["content"] == "已按指令修改画布"
+
+    def test_explicit_argument_still_wins(self, client, auth_headers):
+        key = "s-hist-depth1"
+        self._seed(key, 4)
+        db = SessionLocal()
+        try:
+            assert len(recent_turns(db, key, "demo", max_turns=1)) == 2
+        finally:
+            db.close()
+
+    def test_hard_ceiling_is_ten_turns(self, client, auth_headers, monkeypatch):
+        monkeypatch.setattr(get_settings(), "llm_history_max_turns", 999)
+        key = "s-hist-depth999"
+        self._seed(key, 15)
+        assert len(self._turns(key)) == 20  # 上限 10 轮 × 2
