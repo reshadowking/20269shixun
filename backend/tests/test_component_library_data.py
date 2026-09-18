@@ -77,3 +77,45 @@ class TestLibraryDefaultsAreValid:
                 if key in COLOR_KEYS and isinstance(value, str) and not tokens.is_allowed_color("default", value):
                     bad.append((comp["type"], key, value))
         assert bad == [], f"组件库默认色不是令牌也不是允许的 hex：{bad}"
+
+
+class TestTemplatesFitTheContract:
+    """8 个模板是 mock 的直接产物、也是 real 模式的骨架：props 键写错不会报错，
+    只会让组件回退到默认值渲染（等于内容丢失），所以必须在数据层挡住。"""
+
+    def _walk(self, node, tpl, allowed, bad):
+        if node.get("type") == "component":
+            ct = node.get("componentType")
+            if ct not in allowed:
+                bad.append((tpl, ct, "未注册组件"))
+            else:
+                unknown = sorted(set((node.get("props") or {}).keys()) - allowed[ct])
+                if unknown:
+                    bad.append((tpl, ct, unknown))
+        for child in node.get("children") or []:
+            self._walk(child, tpl, allowed, bad)
+
+    def test_template_props_keys_are_declared(self):
+        from app.services.templates import TEMPLATES
+
+        allowed = {c["type"]: set((c.get("props") or {}).keys()) for c in LIBRARY["components"]}
+        bad: list = []
+        for name, tree in TEMPLATES.items():
+            self._walk(tree, name, allowed, bad)
+        assert bad == [], f"模板 props 越界（组件会静默回退默认值）：{bad}"
+
+    def test_template_component_types_are_all_registered(self):
+        from app.services.templates import TEMPLATES
+
+        registered = {c["type"] for c in LIBRARY["components"]}
+        used = set()
+
+        def collect(node):
+            if node.get("type") == "component":
+                used.add(node.get("componentType"))
+            for child in node.get("children") or []:
+                collect(child)
+
+        for tree in TEMPLATES.values():
+            collect(tree)
+        assert used <= registered, f"模板用了未注册的组件：{sorted(used - registered)}"
