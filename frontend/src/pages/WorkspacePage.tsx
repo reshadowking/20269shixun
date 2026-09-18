@@ -39,6 +39,7 @@ import { clearSnapshots, deleteSnapshot, loadSnapshots, saveSnapshot, type Sessi
 import { sessionApi, type SessionMeta } from '@/lib/sessionApi'
 import { deriveSessionKey, isSessionKey, randomSessionKey, SESSION_PARAM } from '@/lib/sessionKey'
 import { findSessionKeyForDesign } from '@/lib/sessionApi'
+import { applyTheme, getTheme } from '@/lib/theme'
 import { migrateLegacySessions } from '@/lib/migrateLegacySessions'
 import { auditGeometry, type AuditIssue } from '@/canvas/geometryAudit'
 import { placeUnpositionedChildren } from '@/design/freePlacement'
@@ -487,11 +488,14 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
     return () => window.clearTimeout(timer)
   }, [design, loaded])
 
-  // 深色模式：只切换工作台 UI（shadcn dark class），不改变设计稿画布（v2.2 §5.1/§12）
-  const [dark, setDark] = useState(() => localStorage.getItem('design-dark') === '1')
+  // 深色模式：只切换工作台 UI（shadcn dark class），不改变设计稿画布（v2.2 §5.1/§12）。
+  // 2026-09-18：改用全局主题（lib/theme.ts）的**唯一一份存储**。此前工作台自己写 `design-dark`、
+  // AppShell 写 `design-tool-theme`，两边都会去动 `<html class="dark">` —— 在首页开深色再进工作台，
+  // 工作台按自己那份（默认浅色）把 dark class 摘掉，回到首页按钮还显示"浅色模式"但页面已经变亮，
+  // 用户看到的就是"深色模式时有时无/切页就丢"。
+  const [dark, setDark] = useState(() => getTheme() === 'dark')
   useEffect(() => {
-    document.documentElement.classList.toggle('dark', dark)
-    localStorage.setItem('design-dark', dark ? '1' : '0')
+    applyTheme(dark ? 'dark' : 'light')
   }, [dark])
 
   // AI 生成中：画布锁定（v2.2 §8.8）

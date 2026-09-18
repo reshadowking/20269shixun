@@ -6,6 +6,8 @@
  * `<html class="dark">` + localStorage 持久化，首屏渲染前应用，避免闪白。
  */
 const THEME_KEY = 'design-tool-theme'
+/** 工作台早期自己存的一份（T36 之前的 `design-dark`）：只读一次用于迁移，不再写 */
+const LEGACY_WORKSPACE_KEY = 'design-dark'
 
 import { readStorage, writeStorage } from './storage'
 
@@ -13,7 +15,12 @@ export type AppTheme = 'light' | 'dark'
 
 function stored(): AppTheme | null {
   const value = readStorage(THEME_KEY)
-  return value === 'light' || value === 'dark' ? value : null
+  if (value === 'light' || value === 'dark') return value
+  // 迁移：老版本在工作台里用 `design-dark` 存过自己的深浅色，不读它等于把用户的选择丢掉
+  const legacy = readStorage(LEGACY_WORKSPACE_KEY)
+  if (legacy === '1') return 'dark'
+  if (legacy === '0') return 'light'
+  return null
 }
 
 /** 当前主题：优先用户显式选择，其次跟随系统。 */
