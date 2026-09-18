@@ -80,7 +80,11 @@ button, card, input, select, table, chart, stat-block, navbar, sidebar, avatar, 
     目标是整棵树的输出 token 越少越好。
 12. 需求里出现分页、弹窗等组件白名单外的元素：禁止自创 componentType
     （如 pagination/dialog，会导致整稿被拒）；用最接近的合法组件表达——
-    分页→一排 button、弹窗→frame + 按钮。""" + INSTRUCTION_BOUNDARY
+    分页→一排 button、弹窗→frame + 按钮。
+13. 图片地址（**有没有可选图片都生效**）：image 组件的 props.src **只能**逐字取自
+    本提示词里给出的图片 url；**没有给任何图片时就不要写 src**（画布会显示占位图）。
+    禁止编造外链或占位图服务地址（picsum/unsplash/placehold/example.com 之类），
+    否则导出产物里是一堆打不开的图，而且离线打开时全裂。""" + INSTRUCTION_BOUNDARY
 
 # 用户指定色提取：prompt 中的 hex（品牌色不被合规检查器拉回，v2.2 §4.5）
 HEX_RE = re.compile(r"#[0-9a-fA-F]{3,8}\b")
@@ -535,7 +539,10 @@ button, card, input, select, table, chart, stat-block, navbar, sidebar, avatar, 
    输出越长越容易在尾部出错，整棵树输出 token 越少越好。
 10. 需求里出现分页、弹窗等组件白名单外的元素：禁止自创 componentType
     （如 pagination/dialog，会导致整稿被拒）；用最接近的合法组件表达——
-    分页→一排 button、弹窗→frame + 按钮。""" + INSTRUCTION_BOUNDARY
+    分页→一排 button、弹窗→frame + 按钮。
+11. 图片地址（**有没有可选图片都生效**）：image 组件的 props.src **只能**逐字取自
+    本提示词里给出的图片 url；**没有给任何图片时就不要写 src**（画布会显示占位图）。
+    禁止编造外链或占位图服务地址（picsum/unsplash/placehold/example.com 之类）。""" + INSTRUCTION_BOUNDARY
 
 
 def extract_user_colors(prompt: str) -> list[str]:

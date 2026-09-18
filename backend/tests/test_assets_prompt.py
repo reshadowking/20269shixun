@@ -47,3 +47,26 @@ class TestAssetsPromptSection:
         section = assets_prompt_section([{"id": 1, "name": "没地址"}, *ASSETS])
         assert "没地址" not in section
         assert "/api/images/12" in section
+
+
+class TestNoInventedImageUrls:
+    """2026-09-18：资产库为空时，提示词里也必须有"不许编图片外链"这条。
+
+    此前这条规则**只在"可用图片"段里**，而那一整段在 `assets` 为空时根本不注入
+    （见 assets_prompt_section：没有资产就 return ""）。于是"用户没传图"的最常见情形下，
+    模型可以自由编 `https://picsum.photos/...` 之类的外链——导出产物里就是一堆打不开的图，
+    离线打开全裂；而 FILL_SYSTEM 第 5 条还在要求商品卡片"必须包含商品图"。
+    """
+
+    def test_rule_is_in_both_generation_prompts_without_assets(self):
+        for name, text in (
+            ("fill", fill_system_text()),
+            ("free", free_system_text()),
+        ):
+            assert "禁止编造外链或占位图服务地址" in text, name
+            assert "没有给任何图片时就不要写 src" in text, name
+            # 前提确认：这一路确实**没有**注入"可用图片"段（否则这条用例就测不到点子上）
+            assert "## 可用图片" not in text, name
+
+    def test_rule_survives_when_assets_present(self):
+        assert "禁止编造外链" in fill_system_text(ASSETS)
