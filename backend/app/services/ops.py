@@ -19,6 +19,10 @@ OP_TYPES = {
     "move": ("id", "parent", "index"),
 }
 MAX_OPS = 20
+# 2026-09-18：位置字段。渲染器读的是**节点级** x/y（自由画布用），不是 style.x/style.left；
+# 模型表达"往右挪一点"时最自然的写法就是 set_style key=x / key=left，此前会写进 style 里
+# ——渲染器根本不看，于是"改了但画布没动"，还照样记一次 changed（假动作 + 假撤销步）。
+POSITION_KEYS = {"x": "x", "left": "x", "y": "y", "top": "y"}
 # T28：单条 insert 的子树规模上限——防止"用一条 insert 插入整页"变相整树重写（长而脆的 JSON）
 MAX_INSERT_NODES = 20
 MAX_INSERT_DEPTH = 4
@@ -144,7 +148,14 @@ def apply_ops(tree: dict[str, Any], ops: Any) -> tuple[dict[str, Any], list[str]
                 return tree, [], set(), f"{node.get('componentType')} 没有字段 {op['key']}"
             node.setdefault("props", {})[op["key"]] = op["value"]
         elif kind == "set_style":
-            node.setdefault("style", {})[op["key"]] = op["value"]
+            key = op["key"]
+            value = op["value"]
+            # 位置类 key 落到**节点级** x/y（渲染器只认这两个）；值不是数字就退回流样式（不崩、不静默）
+            field = POSITION_KEYS.get(key) if isinstance(key, str) else None
+            if field and isinstance(value, (int, float)) and not isinstance(value, bool):
+                node[field] = value
+            else:
+                node.setdefault("style", {})[key] = value
         elif kind == "remove":
             if siblings is None:
                 return tree, [], set(), "根节点不可删除"

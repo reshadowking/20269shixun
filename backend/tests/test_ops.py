@@ -144,6 +144,58 @@ class TestApplyOps:
         assert result.design == CURRENT
 
 
+class TestSetStylePositionKeys:
+    """2026-09-18：set_style 的 x/y/left/top 要写到**节点级** x/y，不能塞进 style。
+
+    渲染器只读节点级 x/y（自由画布）；写进 style.x / style.left 等于**静默无操作**，
+    而且照样记一次 changed（假动作 + 假撤销步）——用户看到"AI 说挪好了，画布没动"。
+    """
+
+    def _free_tree(self):
+        return {
+            "id": "root",
+            "type": "frame",
+            "style": {"layout": "free", "width": 400, "height": 300},
+            "children": [{"id": "card", "type": "frame", "x": 20, "y": 20, "style": {"layout": "column"}}],
+        }
+
+    def test_x_and_left_write_node_level_x(self):
+        out, changed, _removed, err = apply_ops(self._free_tree(), [{"op": "set_style", "id": "card", "key": "x", "value": 200}])
+        assert err == ""
+        card = out["children"][0]
+        assert card["x"] == 200
+        assert "x" not in (card.get("style") or {})
+        assert changed
+
+    def test_y_and_top_write_node_level_y(self):
+        out, _changed, _removed, err = apply_ops(self._free_tree(), [{"op": "set_style", "id": "card", "key": "top", "value": 120}])
+        assert err == ""
+        card = out["children"][0]
+        assert card["y"] == 120
+        assert "top" not in (card.get("style") or {})
+
+    def test_non_numeric_position_value_falls_back_to_style(self):
+        """值不是数字（如 "20px"）时不去改节点坐标，也不报错——退回流样式。"""
+        out, _changed, _removed, err = apply_ops(self._free_tree(), [{"op": "set_style", "id": "card", "key": "x", "value": "20px"}])
+        assert err == ""
+        card = out["children"][0]
+        assert card["x"] == 20  # 原坐标不动
+        assert card["style"]["x"] == "20px"
+
+    def test_other_style_keys_unchanged(self):
+        out, _changed, _removed, err = apply_ops(self._free_tree(), [{"op": "set_style", "id": "card", "key": "background", "value": "primary"}])
+        assert err == ""
+        assert out["children"][0]["style"]["background"] == "primary"
+        assert "background" not in out["children"][0]  # 不许窜到节点级
+
+    def test_prompt_declares_position_keys(self):
+        from app.services.generate import ops_prompt_section
+
+        text = ops_prompt_section()
+        assert "key=x / key=y" in text
+        assert "left/top" in text
+
+
 class TestOpsEndToEnd:
     def test_invalid_json_error_message_is_actionable(self):
         """T28：两次都解析失败时，错误文案要指出'不是合法 JSON'而不是误导性的'限流或超时'。"""
@@ -162,6 +214,23 @@ class TestOpsEndToEnd:
         assert result.design["children"][1]["style"]["color"] == "danger"
         assert result.design["children"][0] == CURRENT["children"][0]  # 其余逐字段不变
         assert result.ops_applied == ["buy"]
+
+    def test_move_via_set_style_reaches_the_node(self):
+        """端到端："往右挪一点" → set_style key=x → 落点是节点级 x（模型最自然的写法要能用）。"""
+        free = {
+            "id": "root",
+            "type": "frame",
+            "style": {"layout": "free", "width": 400, "height": 300},
+            "children": [{"id": "card", "type": "frame", "x": 20, "y": 20, "style": {"layout": "column", "width": 100}}],
+        }
+        result = generate_design(
+            "把卡片往右挪一点",
+            LLMClient(mock_responder=_responder([{"op": "set_style", "id": "card", "key": "x", "value": 160}])),
+            current_design=free,
+        )
+        assert result.fallback is False, result.error
+        assert result.design["children"][0]["x"] == 160
+        assert "x" not in (result.design["children"][0].get("style") or {})
 
     def test_remove_requires_explicit_op(self):
         removed = generate_design(

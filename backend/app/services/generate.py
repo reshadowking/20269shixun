@@ -603,6 +603,10 @@ def ops_prompt_section() -> str:
         "约束：节点 id 必须逐字取自 current_design；props 字段名必须来自组件库契约；"
         '删除节点只能用 remove 显式声明；无改动时返回空数组 {"ops":[]}。'
     )
+    lines.append(
+        "移动节点（自由画布）：用 set_style + key=x / key=y（画布单位，相对父容器左上角），"
+        "不要用 left/top 之类的 CSS 定位键——x/y 是节点字段，left/top 渲染器不读。"
+    )
     return "\n".join(lines)
 
 
