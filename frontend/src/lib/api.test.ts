@@ -5,7 +5,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError, api, formatApiDetail, getToken, handleUnauthorized, setAuth } from './api'
-import { sessionApi } from './sessionApi'
+import { findSessionKeyForDesign, sessionApi } from './sessionApi'
 
 function jsonResponse(status: number, body: unknown) {
   return { ok: status >= 200 && status < 300, status, json: async () => body }
@@ -80,6 +80,47 @@ describe('sessionApi.ensure 在途去重（P0-2）', () => {
     vi.stubGlobal('fetch', fetchMock)
     await Promise.all([sessionApi.ensure('s-a'), sessionApi.ensure('s-b')])
     expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('findSessionKeyForDesign（缺陷 5：重开项目要找回原对话）', () => {
+  const meta = (sessionId: string) => ({
+    session_id: sessionId,
+    title: 't',
+    design_id: 42,
+    created_at: null,
+    updated_at: null,
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+    localStorage.clear()
+  })
+
+  it('按 design_id 过滤地查会话列表（不能只查最近 20 条碰运气）', async () => {
+    const fetchMock = vi.fn(async (_url: string) => jsonResponse(200, { sessions: [meta('s-rand1234')], total: 1 }))
+    vi.stubGlobal('fetch', fetchMock)
+    await findSessionKeyForDesign(42)
+    const url = String(fetchMock.mock.calls[0][0])
+    expect(url).toContain('/api/sessions?')
+    expect(url).toContain('design_id=42')
+    expect(url).toContain('limit=1')
+  })
+
+  it('查到绑定的会话 → 返回它（就是当初聊天用的随机会话 key）', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(200, { sessions: [meta('s-rand1234')], total: 1 })))
+    expect(await findSessionKeyForDesign(42)).toBe('s-rand1234')
+  })
+
+  it('该设计还没绑定任何会话 → null（调用方退化为 s-design-{id}）', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(200, { sessions: [], total: 0 })))
+    expect(await findSessionKeyForDesign(42)).toBeNull()
+  })
+
+  it('查询失败（离线/5xx）不抛错、不阻断工作台 → null', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(503, { detail: '服务不可用' })))
+    expect(await findSessionKeyForDesign(42)).toBeNull()
   })
 })
 

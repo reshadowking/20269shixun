@@ -38,6 +38,7 @@ import { deriveCollabRoom, needsSignedRoom, usesGateway } from '@/lib/collabRoom
 import { clearSnapshots, deleteSnapshot, loadSnapshots, saveSnapshot, type SessionSnapshot } from '@/lib/sessionSnapshots'
 import { sessionApi, type SessionMeta } from '@/lib/sessionApi'
 import { deriveSessionKey, isSessionKey, randomSessionKey, SESSION_PARAM } from '@/lib/sessionKey'
+import { findSessionKeyForDesign } from '@/lib/sessionApi'
 import { migrateLegacySessions } from '@/lib/migrateLegacySessions'
 import { auditGeometry, type AuditIssue } from '@/canvas/geometryAudit'
 import { useDesignStore } from '@/yjs/useDesignStore'
@@ -52,6 +53,10 @@ interface OptimizeReport {
 /**
  * 工作台入口（缺陷 4）：解析会话身份并写回 URL，再按会话 key 挂载内部工作台。
  * 切换会话 = navigate 换 ?session= → key 变化 → 整个工作台干净重挂（会话状态天然不串）。
+ *
+ * 缺陷 5（对话随项目留存）：`?design={id}` 且 URL 未显式给会话时，先问服务端"这张稿件当初用的是
+ * 哪条会话"再挂载——保存前聊天用的是随机会话 key（绑定记在 chat_sessions.design_id 上），
+ * 不查就只会打开 `s-design-{id}` 这条空会话，表现为"重新打开项目，对话被清空"。
  */
 export default function WorkspacePage() {
   const [searchParams, setSearchParams] = useSearchParams()
@@ -60,16 +65,46 @@ export default function WorkspacePage() {
   const sessionRef = useRef<string | null>(null)
   if (sessionRef.current === null) {
     // 懒初始化：StrictMode 双渲染下随机值只生成一次，会话身份稳定
-    sessionRef.current = deriveSessionKey(sessionParam, designParam, randomSessionKey())
+    sessionRef.current = randomSessionKey()
   }
-  const sessionKey = isSessionKey(sessionParam) ? (sessionParam as string) : sessionRef.current
+  const explicitSession = isSessionKey(sessionParam)
+  const designId = designParam && /^\d+$/.test(designParam) ? Number(designParam) : null
+  /** 服务端登记的"本设计原本的会话"；查不到/查询失败保持 null → 退化 s-design-{id} */
+  const [boundKey, setBoundKey] = useState<string | null>(null)
+  /** 解析是否完成：未完成前不挂载（否则会先亮出空会话，再重挂一次） */
+  const [lookupDone, setLookupDone] = useState(() => explicitSession || designId === null)
   useEffect(() => {
+    if (explicitSession || designId === null) {
+      setLookupDone(true)
+      return
+    }
+    let cancelled = false
+    setLookupDone(false)
+    void findSessionKeyForDesign(designId).then((key) => {
+      if (cancelled) return
+      setBoundKey(key)
+      setLookupDone(true)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [designId, explicitSession])
+  const sessionKey = deriveSessionKey(sessionParam, designParam, sessionRef.current, boundKey)
+  useEffect(() => {
+    if (!lookupDone) return
     if (searchParams.get(SESSION_PARAM) === sessionKey) return
     const next = new URLSearchParams(searchParams)
     next.set(SESSION_PARAM, sessionKey)
     setSearchParams(next, { replace: true })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionKey])
+  }, [sessionKey, lookupDone])
+  if (!lookupDone) {
+    return (
+      <div className="flex h-screen items-center justify-center" data-testid="workspace-session-resolving">
+        <p className="text-sm text-muted-foreground">正在恢复本项目的对话…</p>
+      </div>
+    )
+  }
   return <WorkspaceInner key={sessionKey} sessionKey={sessionKey} />
 }
 

@@ -1,7 +1,8 @@
 /**
  * 会话身份派生（缺陷 4）：一个画布 = 一个会话。
  *
- * 优先级：URL 显式 ?session= > 已保存设计 ?design={id} 派生 s-design-{id} > 新建随机 s-xxxxxxxx。
+ * 优先级：URL 显式 ?session= > 已保存设计 ?design={id}（服务端登记的会话 > s-design-{id}）
+ *        > 新建随机 s-xxxxxxxx。
  * 进入工作台时会把 session 写回 URL（replace），因此刷新/分享/回退都指向同一会话。
  */
 export const SESSION_PARAM = 'session'
@@ -39,9 +40,15 @@ export function deriveSessionKey(
   sessionParam: string | null | undefined,
   designParam: string | null | undefined,
   randomKey: string,
+  /**
+   * 服务端登记的"该设计原本的会话"（见 `sessionApi.findSessionKeyForDesign`）。
+   * 保存前的画布用的是随机会话，只有这个绑定能指向真正聊过的那条会话；
+   * 缺省 / 非法值一律退化为 `s-design-{id}`（改造前行为）。
+   */
+  boundKey?: string | null,
 ): string {
   if (isSessionKey(sessionParam)) return sessionParam as string
-  if (designParam) return designSessionKey(designParam)
+  if (designParam) return isSessionKey(boundKey) ? (boundKey as string) : designSessionKey(designParam)
   return randomKey
 }
 

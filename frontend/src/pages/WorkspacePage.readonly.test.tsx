@@ -95,7 +95,9 @@ describe('T46a-3e：只读访客（viewer）', () => {
     expect(screen.getByTestId('convert-free')).toBeDisabled()
 
     // 仍可选中有看（选中不是写操作）→ 属性面板只读
-    fireEvent.pointerDown(screen.getByTestId('node-t1'))
+    // ?design= 打开时先解析"本项目的会话"才会挂载工作台，画布节点是随稿件异步到的：
+    // 必须等节点本身，不能只等顶栏按钮（否则是抢跑，随 await 次数变化偶发红）
+    fireEvent.pointerDown(await screen.findByTestId('node-t1'))
     expect(screen.getByTestId('selection-count').textContent).toContain('已选 1 个节点')
     // 属性面板是默认打开的面板（再点 activity-props 反而是收起）
     expect(await screen.findByTestId('prop-readonly-note')).toBeInTheDocument()
@@ -124,7 +126,7 @@ describe('T46a-3e：只读访客（viewer）', () => {
     expect(screen.queryByTestId('readonly-badge')).not.toBeInTheDocument()
     expect(screen.getByTestId('save-design')).toBeEnabled()
 
-    fireEvent.pointerDown(screen.getByTestId('node-t1'))
+    fireEvent.pointerDown(await screen.findByTestId('node-t1'))
     expect(await screen.findByTestId('prop-layout')).toBeInTheDocument()
     expect(screen.queryByTestId('prop-readonly-note')).not.toBeInTheDocument()
   })

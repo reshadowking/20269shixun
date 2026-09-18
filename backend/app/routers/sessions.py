@@ -98,17 +98,27 @@ def create_session(req: SessionCreate, _user: str = Depends(get_current_user), d
 def list_sessions(
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
+    design_id: int | None = Query(default=None),
     _user: str = Depends(get_current_user),
     db: DbSession = Depends(get_db),
 ):
-    """会话列表（只返回元信息，供侧边列表使用）。"""
+    """会话列表（只返回元信息，供侧边列表使用）。
+
+    ``design_id`` 给定时只返回**绑定该设计的会话**（按更新时间倒序）：工作台用 ``?design={id}``
+    打开一个已保存稿件时，据此找回"这张稿件当初聊天用的那条会话"——保存前聊天的会话是随机 key
+    （绑定关系记在 chat_sessions.design_id 上），直接按 ``s-design-{id}`` 派生会得到一个空会话，
+    表现为"重新打开项目，对话被清空"。
+    """
     owner = _owner_id(db, _user)
+    conds = [ChatSession.owner_id == owner]
+    if design_id is not None:
+        conds.append(ChatSession.design_id == design_id)
     total = db.execute(
-        select(func.count()).select_from(ChatSession).where(ChatSession.owner_id == owner)
+        select(func.count()).select_from(ChatSession).where(*conds)
     ).scalar_one()
     rows = db.execute(
         select(ChatSession)
-        .where(ChatSession.owner_id == owner)
+        .where(*conds)
         .order_by(ChatSession.updated_at.desc(), ChatSession.id.desc())
         .offset(offset)
         .limit(limit)

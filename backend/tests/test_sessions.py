@@ -277,6 +277,38 @@ class TestSessionDesignBinding:
         _create(client, auth_headers, key)
         assert client.patch(f"/api/sessions/{key}", json={"design_id": 999999}, headers=auth_headers).status_code == 404
 
+    def test_list_filtered_by_design_finds_the_original_conversation(self, client, auth_headers):
+        """重新打开已保存稿件必须能找回它当初的会话（否则表现为"对话被清空"）。
+
+        保存前聊天用的是随机 key，绑定关系只落在 chat_sessions.design_id 上；
+        按 design_id 过滤的列表接口是前端找回它的唯一入口（会话 key 无法从设计 id 反推）。
+        """
+        did = client.post(
+            "/api/designs", json={"name": "找回会话用", "design": {"id": "root", "type": "frame"}}, headers=auth_headers
+        ).json()["id"]
+        mine, other = _uniq("keep"), _uniq("keepother")
+        _create(client, auth_headers, mine)
+        _create(client, auth_headers, other)
+        _append(client, auth_headers, mine, [{"role": "user", "text": "这个项目里聊过的内容"}])
+        assert client.patch(f"/api/sessions/{mine}", json={"design_id": did}, headers=auth_headers).status_code == 200
+
+        r = client.get(f"/api/sessions?design_id={did}&limit=1", headers=auth_headers).json()
+        assert [s["session_id"] for s in r["sessions"]] == [mine]
+        assert r["total"] == 1  # 过滤与计数同源（不能报全量 total）
+        msgs = client.get(f"/api/sessions/{mine}/messages", headers=auth_headers).json()["messages"]
+        assert [m["text"] for m in msgs] == ["这个项目里聊过的内容"]
+
+        # 没绑定任何会话的设计 → 空结果（前端据此退化为 s-design-{id}）
+        empty = client.post(
+            "/api/designs", json={"name": "没人绑", "design": {"id": "root", "type": "frame"}}, headers=auth_headers
+        ).json()["id"]
+        r2 = client.get(f"/api/sessions?design_id={empty}", headers=auth_headers).json()
+        assert r2 == {"sessions": [], "total": 0}
+
+        # 不带过滤时原行为不变（两条都在）
+        ids = {s["session_id"] for s in client.get("/api/sessions?limit=100", headers=auth_headers).json()["sessions"]}
+        assert {mine, other} <= ids
+
 
 class TestCreateSessionConcurrency:
     """P0-1：会话创建必须并发安全（原实现先查后插，撞唯一约束直接 500）。"""
