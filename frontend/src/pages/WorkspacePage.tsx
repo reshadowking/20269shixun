@@ -41,6 +41,7 @@ import { deriveSessionKey, isSessionKey, randomSessionKey, SESSION_PARAM } from 
 import { findSessionKeyForDesign } from '@/lib/sessionApi'
 import { migrateLegacySessions } from '@/lib/migrateLegacySessions'
 import { auditGeometry, type AuditIssue } from '@/canvas/geometryAudit'
+import { placeUnpositionedChildren } from '@/design/freePlacement'
 import { useDesignStore } from '@/yjs/useDesignStore'
 
 interface OptimizeReport {
@@ -226,11 +227,14 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
       if (target) {
         // 2026-09-17（B+）：**房间为准** —— 有协作端点时这里不再直接写文档，
         // 而是等 provider 首个 sync：房间空才写、房间已有别人的内容则采用房间状态。
-        store.applyLoadedDesign(target)
+        // 2026-09-18：打开时补一次"孤儿节点"坐标（free 父级下没有 x/y 的子节点会压在一起，
+        // 实测已有按钮 (276,192) / 新按钮 (268,184) 完全重叠）。有坐标的节点原样不动，
+        // 所以这一步只在真的存在孤儿时才有改动——顺带自愈历史上已经存坏了的稿件。
+        store.applyLoadedDesign(placeUnpositionedChildren(target))
         setSavedMeta(meta)
       } else {
         // 没给任何参数（裸 /workspace、?asset=… 等）：沿用"演示稿起手"的既有行为
-        store.applyLoadedDesign(DEMO_DESIGNS[0])
+        store.applyLoadedDesign(placeUnpositionedChildren(DEMO_DESIGNS[0]))
       }
       setLoaded(true)
     }
@@ -1055,7 +1059,10 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
       // 2026-09-17：**差量落地**（原来是整树 clear+重建：并发下会吞掉队友在这期间对别的
       // 节点的改动，并让所有人画布整体重挂）。根 id 变了这类（空白稿 empty → root）由
       // diffDesign 返回 `replace`，自动退化为整体替换。
-      const diff = diffDesign(design, resp.design)
+      // 2026-09-18：落地前先补孤儿坐标——自动冻结之后父级都是 free，模型新增的节点不会带 x/y，
+      // 直接落地会压在已有节点上（见 freePlacement.ts）。补位发生在差量计算之前，
+      // 所以坐标跟着同一次 applyAiDiff 落库、撤销一步就能整体回退。
+      const diff = diffDesign(design, placeUnpositionedChildren(resp.design))
       // ③ 并发前置条件（2026-09-17）：AI 是**基于快照**生成的。落地前核对"队友有没有动过
       // 同一个字段 / 同一处结构"——此前只做到"事后提示已覆盖"，也就是仍然把队友的改动擦掉。
       // 现在：结构被破坏 → 整批取消（不推快照、不动画布，让用户重发）；只有属性字段撞车 →
@@ -1625,7 +1632,9 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
                     onGeneratingChange={setGenerating}
                     readOnly={readOnly}
                     onGenerate={(generated) => {
-                      store.resetDesign(generated)
+                      // 生成落地同样补一次孤儿坐标（模板骨架是 flex，一般用不上；
+                      // 但"在 free 画布上重新生成"时会用到，见 freePlacement.ts）
+                      store.resetDesign(placeUnpositionedChildren(generated))
                       setSelectedIds(new Set())
                       // 生成即可拖：落地后自动冻结一次（偏好可关，见设置面板）
                       void autoFreezeAfterAi()
@@ -1646,7 +1655,7 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
                       // D3：采用探索方案——先快照（可撤销回加载前），再整树替换（不入操作级撤销栈）
                       store.pushSnapshot()
                       setUndoCount((c) => c + 1)
-                      store.resetDesign(explored)
+                      store.resetDesign(placeUnpositionedChildren(explored))
                       setSelectedIds(new Set())
                     }}
                   />
