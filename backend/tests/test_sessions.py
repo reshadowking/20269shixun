@@ -172,6 +172,31 @@ class TestMessagesAndIsolation:
         assert msgs[-1]["text"] == "m209"  # 保留最新
         assert msgs[0]["text"] == "m10"  # 最旧的 10 条被裁掉
 
+    def test_tool_call_ledger_has_the_same_cap(self, client, auth_headers):
+        """工具调用账本也要有上限（2026-09-18）。
+
+        此前 messages 有 200 条上限、tool_calls **没有**：每次生成/修改/效果/探索都记一条，
+        长期会话在这张表上无上限增长（读取侧一直只有 limit=50，留最近 200 条对功能零影响）。
+        """
+        from app.services.sessions import MAX_TOOL_CALLS
+
+        key = _uniq("toolcap")
+        _create(client, auth_headers, key)
+        for i in range(MAX_TOOL_CALLS + 5):
+            resp = client.post(
+                f"/api/sessions/{key}/tool-calls",
+                json={"session_id": key, "kind": f"generate:{i}", "ok": True, "source": "app"},
+                headers=auth_headers,
+            )
+            assert resp.status_code == 200, resp.text
+
+        rows = client.get(f"/api/sessions/{key}/tool-calls?limit=500", headers=auth_headers).json()["tool_calls"]
+        assert len(rows) == MAX_TOOL_CALLS
+        # 保留最新：最早那几条被裁掉
+        kinds = [r["kind"] for r in rows]
+        assert "generate:0" not in kinds
+        assert f"generate:{MAX_TOOL_CALLS + 4}" in kinds
+
     def test_title_autofill_from_first_user_message(self, client, auth_headers):
         key = _uniq("title")
         _create(client, auth_headers, key)
