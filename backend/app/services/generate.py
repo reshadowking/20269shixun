@@ -573,7 +573,10 @@ INCREMENTAL_SYSTEM = """你是 AI 设计修改器。基于给定的 DesignNode �
    （如 pagination/dialog，会导致整稿被拒）；用最接近的合法组件表达——
    分页→一排 button、弹窗→frame + 按钮。
 9. 若用户要求与界面设计无关（例如写诗、算术、闲聊），保持 current_design 原样不变，不要为了
-   "完成指令"去改动任何节点。""" + INSTRUCTION_BOUNDARY
+   "完成指令"去改动任何节点。
+10. 图片地址（**有没有可选图片都生效**）：image 组件的 props.src **只能**逐字取自本提示词里
+   给出的图片 url；用户要求换图但没有给任何图片时，保持原 src 不变并说明"没有可用图片"，
+   禁止编造外链或占位图服务地址（picsum/unsplash/placehold/example.com 之类）。""" + INSTRUCTION_BOUNDARY
 
 # T4 批2：锁定阶段的额外约束段（仅 locked=True 时追加到增量提示词末尾）
 LOCKED_STAGE_SECTION = """

@@ -70,3 +70,13 @@ class TestNoInventedImageUrls:
 
     def test_rule_survives_when_assets_present(self):
         assert "禁止编造外链" in fill_system_text(ASSETS)
+
+    def test_incremental_prompt_has_the_same_rule(self):
+        """修改链路同样要挡住"换图"编外链——用户说"换张图"而没给图时，模型最想编 URL。"""
+        text = incremental_system(False)
+        assert "禁止编造外链或占位图服务地址" in text
+        assert "保持原 src 不变" in text
+        assert "## 可用图片" not in text  # 前提：这里没有资产段，规则必须来自基础约束
+
+    def test_edit_rule_survives_when_assets_present(self):
+        assert "禁止编造外链" in incremental_system(False, ASSETS)
