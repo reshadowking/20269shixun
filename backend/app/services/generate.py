@@ -15,6 +15,7 @@ from typing import Any
 from opentelemetry import trace
 
 from ..config import get_settings
+from ..design import tokens as design_tokens
 from ..design.validator import SchemaError, validate_design
 from . import ai_breaker
 from .ai_gateway import GenerationDeadline
@@ -637,6 +638,7 @@ def incremental_system(locked: bool = False, assets: list[dict[str, Any]] | None
         + component_contract_section()
         + form_page_section()
         + assets_prompt_section(assets)
+        + token_prompt_section()
         + (ops_prompt_section() if get_settings().prompt_ops_enabled else legacy_tree_prompt_section())
         + HISTORY_USAGE_SECTION
     )
@@ -645,14 +647,40 @@ def incremental_system(locked: bool = False, assets: list[dict[str, Any]] | None
     return text
 
 
+def token_prompt_section() -> str:
+    """把令牌**色值**注入提示词（2026-09-18）。
+
+    背景：三段 system 一直只告诉模型"颜色优先用令牌名"，却从没给它名字对应的颜色——
+    模型不知道 primary 是深蓝、secondary 是紫、success 是绿，写"红色调"时可能把主色套在
+    primary 上，也只能靠猜来选强调色。值取自唯一规范源（`shared/design-system.yaml` 的
+    生成物 `app/design/tokens.py`），不在提示词里手抄 hex；改令牌 → 提示词自动跟着变。
+
+    只注入画布真正使用的那套主题（`styleToCss.ts` 固定用 default），避免给模型两套值。
+    """
+    colors = design_tokens.COLORS.get("default", {})
+    if not colors:
+        return ""
+    lines = [
+        "\n\n## 设计令牌的实际颜色（颜色字段只能写左边的名字；括号里是它渲染出来的色值）",
+    ]
+    for name, value in colors.items():
+        lines.append(f"- {name}（{value}）")
+    lines.append(
+        "说明：用户明确给了品牌 hex 时按 FILL_SYSTEM 的规则原样使用该 hex；"
+        "其余颜色一律用上面的令牌名，不要自创 hex，也不要写颜色描述词（如\"浅灰\"）。"
+    )
+    return "\n".join(lines)
+
+
 def fill_system_text(assets: list[dict[str, Any]] | None = None) -> str:
-    """FILL_SYSTEM + 运行期注入段（图标 T9 + 组件字段契约 T18 + 表单页/资产 + 对话上下文规则 T24）。"""
+    """FILL_SYSTEM + 运行期注入段（图标 T9 + 组件字段契约 T18 + 表单页/资产 + 令牌色值 + 对话上下文规则 T24）。"""
     return (
         FILL_SYSTEM
         + icon_prompt_section()
         + component_contract_section()
         + form_page_section()
         + assets_prompt_section(assets)
+        + token_prompt_section()
         + HISTORY_USAGE_SECTION
     )
 
@@ -665,6 +693,7 @@ def free_system_text(assets: list[dict[str, Any]] | None = None) -> str:
         + component_contract_section()
         + form_page_section()
         + assets_prompt_section(assets)
+        + token_prompt_section()
         + HISTORY_USAGE_SECTION
     )
 
