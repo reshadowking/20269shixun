@@ -95,6 +95,22 @@ describe('ApiConfigPage · 多套命名配置', () => {
     expect(screen.getByTestId('profile-name')).toHaveValue('DeepSeek 官方')
   })
 
+  /**
+   * 2026-09-18：档案列表加载失败**不许**清成空列表 + 静默——
+   * 用户会以为"我的接口配置全没了"，然后重新填一遍 Key（真实配置其实还在服务端）。
+   */
+  it('档案列表加载失败：给出可读提示，而不是显示成"没有档案"', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (String(url).includes('/api/llm-config/profiles')) {
+        return { ok: false, status: 503, json: async () => ({ detail: '服务暂时不可用' }) }
+      }
+      return json(CONFIG)
+    }))
+    renderPage()
+    await waitFor(() => expect(screen.getByTestId('profile-msg')).toHaveTextContent('档案列表加载失败'))
+    expect(screen.getByTestId('profile-msg')).toHaveTextContent('服务暂时不可用')
+  })
+
   it('切到另一份档案：表单载入它的地址/模型，Key 不回填（脱敏值不能被当成真实 Key）', async () => {
     renderPage()
     await waitFor(() => expect(screen.getByTestId('profile-select')).toHaveValue('p-a'))

@@ -30,17 +30,23 @@ export default function HistoryPanel({ savedId, onRestore, onVersionSaved }: His
   const [versions, setVersions] = useState<VersionItem[]>([])
   const [note, setNote] = useState('')
   const [msg, setMsg] = useState('')
+  /** 版本列表**加载失败**：与"确实没有版本"必须区分开（否则看起来像版本被删了） */
+  const [loadError, setLoadError] = useState('')
 
   const refresh = useCallback(async () => {
     if (savedId === undefined) {
       setVersions([])
+      setLoadError('')
       return
     }
     try {
       const r = await api<{ versions: VersionItem[] }>(`/api/designs/${savedId}/versions`)
       setVersions(r.versions)
-    } catch {
-      setVersions([])
+      setLoadError('')
+    } catch (err) {
+      // 2026-09-18：加载失败**不许**渲染成"暂无历史版本"——用户会以为版本被删了。
+      // 保留上一次拿到的列表（如果有），并把失败原因说出来。
+      setLoadError(err instanceof Error ? err.message : String(err))
     }
   }, [savedId])
 
@@ -107,7 +113,12 @@ export default function HistoryPanel({ savedId, onRestore, onVersionSaved }: His
       </div>
       {msg && <p className="text-[11px] text-emerald-600" data-testid="history-msg">{msg}</p>}
 
-      {versions.length === 0 ? (
+      {loadError && (
+        <p className="text-[11px] text-amber-600" data-testid="history-load-error">
+          版本列表加载失败：{loadError}（下面显示的可能不是最新）
+        </p>
+      )}
+      {versions.length === 0 && !loadError ? (
         <p className="text-xs text-muted-foreground">暂无历史版本。保存设计时会自动记录。</p>
       ) : (
         <div className="flex flex-col gap-2" data-testid="history-list">

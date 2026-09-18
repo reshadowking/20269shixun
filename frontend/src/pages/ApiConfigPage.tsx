@@ -52,6 +52,15 @@ const MODE_OPTIONS = [
   { value: 'mock', label: 'Mock 模式（预置模板，零成本）' },
 ]
 
+/**
+ * 档案列表响应的形状兜底（2026-09-18）：接口一旦没带 `profiles`（形状变更、代理返回错误体…），
+ * 旧代码会把 `undefined` 塞进 state，渲染时 `profiles.map` 直接**整页白屏**。
+ * 宁可显示空列表——空列表顶多是"看不到配置"，白屏是啥都干不了。
+ */
+function profileRows(data: ProfileList | undefined | null): ProfileRow[] {
+  return Array.isArray(data?.profiles) ? data.profiles : []
+}
+
 export default function ApiConfigPage({ showMembers = false }: { showMembers?: boolean } = {}) {
   const [cfg, setCfg] = useState<LLMConfig | null>(null)
   const [provider, setProvider] = useState('deepseek')
@@ -72,6 +81,8 @@ export default function ApiConfigPage({ showMembers = false }: { showMembers?: b
   const [activeProfile, setActiveProfile] = useState('')
   const [profileName, setProfileName] = useState('')
   const [profileMsg, setProfileMsg] = useState('')
+  /** 档案列表加载失败的提示前缀：与"确实没有档案"区分，也便于成功后精准收掉这条消息 */
+  const LOAD_ERROR_PREFIX = '档案列表加载失败'
 
   // 加载当前生效配置（Key 脱敏）
   useEffect(() => {
@@ -92,11 +103,17 @@ export default function ApiConfigPage({ showMembers = false }: { showMembers?: b
   const refreshProfiles = async () => {
     try {
       const data = await api<ProfileList>('/api/llm-config/profiles')
-      setProfiles(data.profiles)
+      const rows = profileRows(data)
+      setProfiles(rows)
       setActiveProfile(data.active)
-      setProfileName(data.profiles.find((p) => p.id === data.active)?.name ?? '')
-    } catch {
-      setProfiles([])
+      setProfileName(rows.find((p) => p.id === data.active)?.name ?? '')
+      // 加载成功后，把上次的"加载失败"提示收掉（但不要碰"已保存档案 ✓"这类操作反馈）
+      setProfileMsg((m) => (m.startsWith(LOAD_ERROR_PREFIX) ? '' : m))
+    } catch (err) {
+      // 2026-09-18：失败**不许**清成空列表——用户会以为自己的接口配置没了。
+      // 保留上一次拿到的档案，并把原因说出来（与"确实没有档案"区分开）。
+      const detail = err instanceof Error ? err.message : String(err)
+      setProfileMsg(`${LOAD_ERROR_PREFIX}：${detail}（下面显示的可能不是最新）`)
     }
   }
   useEffect(() => {
@@ -143,7 +160,7 @@ export default function ApiConfigPage({ showMembers = false }: { showMembers?: b
       if (activeProfile) body.id = activeProfile
       if (keyEdited && apiKey.trim()) body.llm_api_key = apiKey.trim()
       const data = await api<ProfileList>('/api/llm-config/profiles', { method: 'POST', body: JSON.stringify(body) })
-      setProfiles(data.profiles)
+      setProfiles(profileRows(data))
       setActiveProfile(data.active)
       setProfileMsg('已保存并设为当前生效（无需重启）。')
     } catch (err) {
@@ -154,7 +171,7 @@ export default function ApiConfigPage({ showMembers = false }: { showMembers?: b
   const handleActivateProfile = async (id: string) => {
     try {
       const data = await api<ProfileList>(`/api/llm-config/profiles/${id}/activate`, { method: 'POST' })
-      setProfiles(data.profiles)
+      setProfiles(profileRows(data))
       setActiveProfile(data.active)
       setProfileMsg('已切换生效档案。')
       await refreshProfiles()
@@ -167,7 +184,7 @@ export default function ApiConfigPage({ showMembers = false }: { showMembers?: b
     if (!window.confirm('删除这份接口配置？')) return
     try {
       const data = await api<ProfileList>(`/api/llm-config/profiles/${id}`, { method: 'DELETE' })
-      setProfiles(data.profiles)
+      setProfiles(profileRows(data))
       setActiveProfile(data.active)
       setProfileMsg('已删除。')
     } catch (err) {

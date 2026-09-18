@@ -63,6 +63,22 @@ describe('HistoryPanel', () => {
     expect(list).toHaveTextContent('2 节点')
   })
 
+  /**
+   * 2026-09-18：加载失败**不许**渲染成"暂无历史版本"。
+   * 两者看起来一样，但含义完全相反——前者是"你的版本都还在，只是没读到"，
+   * 后者会让用户以为版本被删了（同类问题在首页/我的项目上修过一次）。
+   */
+  it('版本列表加载失败：显示失败原因，而不是"暂无历史版本"', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: false, status: 500, json: async () => ({ detail: '服务不可用' }) })),
+    )
+    renderPanel()
+    await waitFor(() => expect(screen.getByTestId('history-load-error')).toBeInTheDocument())
+    expect(screen.getByTestId('history-load-error')).toHaveTextContent('版本列表加载失败')
+    expect(screen.queryByText(/暂无历史版本/)).not.toBeInTheDocument()
+  })
+
   it('恢复：确认后只调用 onRestore（本地应用），自己不写服务器', async () => {
     const fetchMock = mockFetch()
     vi.stubGlobal('fetch', fetchMock)
