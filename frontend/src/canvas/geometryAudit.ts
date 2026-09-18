@@ -64,6 +64,8 @@ function parseColor(value: string | null | undefined): Rgb | null {
   const fn = v.match(/^rgba?\(([^)]+)\)$/)
   if (fn) {
     const parts = fn[1].split(',').map((s) => parseFloat(s))
+    // 完全不透明度为 0 的颜色等于"没画底色"：当成背景会算出离谱的对比度（#000 兜底）
+    if (parts.length >= 4 && parts[3] === 0) return null
     if (parts.length >= 3 && parts.slice(0, 3).every((n) => Number.isFinite(n))) return [parts[0], parts[1], parts[2]]
   }
   return null
@@ -153,9 +155,12 @@ export function auditGeometry(root: HTMLElement, options: AuditOptions = {}, con
       })
     }
 
-    // ④ 对比度：前景 vs 最近的背景
+    // ④ 对比度：前景 vs 最近的背景。
+    //    2026-09-18 修：必须**从节点自己**开始找背景 —— 头像/按钮/标签这类节点把底色画在
+    //    自己身上（`background: primary` + `color: #FFFFFF`），从父级找会算成"白字配页面灰"
+    //    的 1.09:1 假问题（实测 login-logo 误报），或把 danger 文字配错底色（3.89 vs 真值 4.31）。
     const fg = parseColor(el.style.color)
-    const bg = fg ? backgroundOf(el.parentElement) : null
+    const bg = fg ? backgroundOf(el) : null
     if (fg && bg) {
       const ratio = contrastRatio(fg, bg)
       if (ratio < opts.contrastRatio) {

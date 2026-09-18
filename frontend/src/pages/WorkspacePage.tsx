@@ -1389,7 +1389,11 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
                           }[issue.kind]
                         }
                       </span>
-                      {issue.detail}
+                      {/* 只报"对比度 2.97:1"用户不知道说的是哪个节点，必须点名（2026-09-18） */}
+                      <span className="text-muted-foreground" data-testid={`audit-node-${index}`}>
+                        {issue.nodeId}
+                      </span>
+                      <span className="ml-1">{issue.detail}</span>
                     </button>
                   </li>
                 ))}

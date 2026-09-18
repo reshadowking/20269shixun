@@ -8,12 +8,16 @@ themes:
     colors:
       primary: '#0052D9'
       secondary: '#7C4DFF'
-      danger: '#E5352B'
+      # 2026-09-18：原 #E5352B 作为**文字色**在白底上只有 4.31:1、页面灰底 3.95:1（低于 WCAG AA 4.5:1），
+      # 而模板/AI 产物大量用它写价格与警示文案（8 模板体检逐个报出）。改成 #D32029：白底 5.24 / 灰底 4.81 / 浅红底 4.73。
+      danger: '#D32029'
       success: '#00A870'
       background: '#F5F5F5'
       text-primary: '#1D2129'
       text-secondary: '#4E5969'
-      text-light: '#86909C'
+      # 2026-09-18：原 #86909C 作为正文/说明文字在白底 3.24:1、页面灰底 2.97:1、浅红底 2.93:1，实测全部不达标；
+      # 改成 #5F6B7A（白底 5.43 / 灰底 4.98 / 浅红底 4.90）。仍是同一色系，只是更实。
+      text-light: '#5F6B7A'
       border: '#E5E8EF'
     typography:
       heading: { font: 'Inter', weight: 600, size: 24 }

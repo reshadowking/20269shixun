@@ -141,6 +141,42 @@ describe('auditGeometry', () => {
     expect(issues.some((i) => i.kind === 'low-contrast' && i.nodeId === 'label')).toBe(true)
   })
 
+  /**
+   * 2026-09-18：节点**自己**画了底色时，对比度必须按它自己的底色算。
+   *
+   * 实测背景：8 个模板逐个过体检时，登录页头像报"白字对灰底 1.09:1"——
+   * 头像其实把 primary 底色画在自己身上（白字压深蓝，7.0:1 完全正常），
+   * 旧实现从父级找背景，于是把页面的 #F5F5F5 当成了文字底色。
+   */
+  it('节点自带底色：按自己的底色算（白字压深蓝不许报 low-contrast）', () => {
+    const page = node('page', { left: 0, top: 0, width: 400, height: 200 }, { backgroundColor: '#F5F5F5' })
+    const avatar = node('avatar', { left: 10, top: 10, width: 44, height: 44 }, { backgroundColor: '#0052D9', color: '#FFFFFF' })
+    setText(avatar, 'P')
+    setText(page, 'P')
+    page.appendChild(avatar)
+    const issues = auditGeometry(canvas(page))
+    expect(issues.filter((i) => i.kind === 'low-contrast')).toEqual([])
+  })
+
+  it('节点自带浅底色 + 深色字：按自己的底色算（不会被父级深底误判）', () => {
+    const page = node('page', { left: 0, top: 0, width: 400, height: 200 }, { backgroundColor: '#000000' })
+    const chip = node('chip', { left: 10, top: 10, width: 120, height: 32 }, { backgroundColor: '#FFFFFF', color: '#4E5969' })
+    setText(chip, '标签文字')
+    setText(page, '标签文字')
+    page.appendChild(chip)
+    expect(auditGeometry(canvas(page)).filter((i) => i.kind === 'low-contrast')).toEqual([])
+  })
+
+  it('完全透明的底色不算底色：继续向上找（rgba(0,0,0,0) 不能被当成纯黑）', () => {
+    const card = node('card', { left: 0, top: 0, width: 200, height: 100 }, { backgroundColor: '#FFFFFF' })
+    const label = node('label', { left: 10, top: 10, width: 100, height: 20 }, { backgroundColor: 'rgba(0, 0, 0, 0)', color: '#CCCCCC' })
+    setText(label, '浅色说明')
+    setText(card, '浅色说明')
+    card.appendChild(label)
+    const issues = auditGeometry(canvas(card))
+    expect(issues.some((i) => i.kind === 'low-contrast' && i.nodeId === 'label')).toBe(true)
+  })
+
   it('健康画布：不产生任何问题（不误报）', () => {
     const card = node('card', { left: 0, top: 0, width: 200, height: 100 }, { backgroundColor: '#FFFFFF' })
     const title = node('title', { left: 10, top: 10, width: 100, height: 20 }, { color: '#1D2129' })
