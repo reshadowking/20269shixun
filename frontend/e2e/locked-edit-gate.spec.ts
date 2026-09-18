@@ -108,3 +108,40 @@ test('缺口 §4.6：锁定态「给所有卡片加阴影」（裸加句式）�
   await expect(page.getByText(/AI 设计助手，只负责/)).toHaveCount(0) // 未被守卫拒答
   await expect(page.getByTestId('node-coupon-title')).toHaveAttribute('style', /box-shadow/, { timeout: 15_000 })
 })
+
+/**
+ * 2026-09-18 补：**锁定 → 解除** 的往返（用户实测报过"点了确认版面之后变成解除绑定，
+ * 再按几次都没变化"）。锁的权威在服务端（`design_locks` 表，闸门据此判定），
+ * 所以"解锁按钮到底生效没有"必须用**服务端行为**来验，而不是看按钮文字变了没有：
+ * 解锁后同一条被拒过的指令要能落地；刷新页面后仍应是解锁态（不是本地 state 假象）。
+ */
+test('版面锁定可解除：解锁后同样的指令能落地，刷新后仍是解锁态（服务端权威）', async ({ page }) => {
+  test.setTimeout(150_000)
+  const session = `s-${RUN}-unlock`
+  await openWorkspace(page, session)
+  await confirmLayout(page)
+
+  // ① 锁定态：改文案被闸门拒绝（给下面的"解锁后能落地"做对照）
+  await chat(page, '把主标题改成 E2E 文案')
+  await expect(page.getByText(/版面锁拒绝/)).toBeVisible({ timeout: 20_000 })
+  await expect(page.getByTestId('node-coupon-sub')).toHaveText(ORIGINAL_SUB_TEXT)
+
+  // ② 解除锁定：面板回到"确认版面"态
+  await page.getByTestId('activity-beautify').click()
+  await page.getByTestId('beautify-unlock').click()
+  await expect(page.getByTestId('beautify-confirm')).toBeVisible({ timeout: 15_000 })
+  await expect(page.getByTestId('beautify-confirmed')).toHaveCount(0)
+
+  // ③ 同一条指令现在必须能落地 —— 说明服务端闸门真的开了（不是只改了按钮文字）
+  await page.getByTestId('activity-ai').click()
+  await chat(page, '把主标题改成 E2E 文案')
+  await expect(page.getByText(/已应用修改 ✓/)).toBeVisible({ timeout: 20_000 })
+  await expect(page.getByTestId('node-coupon-sub')).toHaveText(MOCK_EDIT_TEXT, { timeout: 15_000 })
+
+  // ④ 刷新后仍是解锁态（锁状态读自服务端 design_locks，不是内存里的 layoutLocked）
+  await page.reload()
+  await expect(page.getByTestId('workspace-page')).toBeVisible({ timeout: 15_000 })
+  await page.getByTestId('activity-beautify').click()
+  await expect(page.getByTestId('beautify-confirm')).toBeVisible({ timeout: 15_000 })
+  await expect(page.getByTestId('beautify-confirmed')).toHaveCount(0)
+})

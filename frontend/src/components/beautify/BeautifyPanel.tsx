@@ -117,10 +117,16 @@ export default function BeautifyPanel({
       )}
       {/* ① 版面确认（基础版快照） */}
       <div className="flex flex-col gap-2 rounded-md border bg-background p-3" data-testid="beautify-status">
-        {baseSnapshot ? (
+        {/*
+          2026-09-18 修：分支条件原本是 `baseSnapshot`，于是**解锁后快照还在、面板永远停在"已锁定"**
+          ——用户实测反馈"点了确认版面之后变成解除绑定，再按几次都没变化"就是这个：
+          服务端其实已经解锁，但面板显示的还是"版面已锁定 / 解除版面锁定"，点多少次都不变。
+          现在按**真实的锁状态** `locked` 分支；快照只是"对比原始版面"的基线，解锁后继续保留。
+        */}
+        {locked ? (
           <>
             <div className="text-sm font-medium" data-testid="beautify-confirmed">
-              基础版已保留（{fmtTime(baseSnapshot.at)}）
+              {baseSnapshot ? `基础版已保留（${fmtTime(baseSnapshot.at)}）` : '版面已锁定'}
             </div>
             <div className="text-xs text-muted-foreground" data-testid="lock-state">
               版面已锁定：布局 / 模块顺序 / 文本 / 尺寸的改动会被写入层拒绝，只放行样式效果。
@@ -142,6 +148,11 @@ export default function BeautifyPanel({
             <div className="text-xs text-muted-foreground">
               确认后自动保留「基础版快照」（无动效 / 渐变 / 装饰），后续美化不会改动它。
             </div>
+            {baseSnapshot && (
+              <div className="text-xs text-muted-foreground" data-testid="beautify-base-kept">
+                上次基础版仍保留（{fmtTime(baseSnapshot.at)}）：随时可用「对比原始版面」回看。
+              </div>
+            )}
             <Button size="sm" className="h-7 text-xs" data-testid="beautify-confirm" disabled={readOnly} onClick={onConfirmLayout}>
               确认版面，进入美化
             </Button>
