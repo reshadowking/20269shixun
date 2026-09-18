@@ -96,6 +96,34 @@ class TestMessageAssembly:
         assert payload["history"] == history
         assert payload["user_request"] == "把按钮改红"
 
+    def test_trailing_duplicate_of_current_prompt_is_dropped(self, monkeypatch):
+        """本次指令不能同时出现在 history 里（2026-09-18）。
+
+        前端是"先把用户消息写进会话、再发 /api/generate"（还夹着一次取资产的 await），
+        后端读会话时可能已经看到这条新消息 → history 末尾就是**本次请求原文**，
+        与 user_request 重复：既白占字符预算，又会把真正的上一轮挤出去
+        （预算只保留最新的若干轮）。generate_design 入口统一去掉这个尾巴。
+        """
+        recorder: list = []
+        _real_mode(monkeypatch, recorder)
+        history = [
+            {"role": "user", "content": "把标题改小"},
+            {"role": "assistant", "content": "已按指令修改画布"},
+            {"role": "user", "content": "把按钮改红"},  # ← 竞态产物：就是本次 user_request
+        ]
+        result = generate_design("把按钮改红", LLMClient(), current_design=CURRENT, history=history)
+        assert result.fallback is False, result.error
+        assert recorder[0]["history"] == history[:2]
+        assert json.loads(recorder[0]["user"])["history"] == history[:2]
+
+    def test_trailing_user_turn_with_different_text_is_kept(self, monkeypatch):
+        """只有"与本次请求逐字相同"的尾巴才丢——不同的上一轮必须保留。"""
+        recorder: list = []
+        _real_mode(monkeypatch, recorder)
+        history = [{"role": "user", "content": "把标题改小"}, {"role": "assistant", "content": "已按指令修改画布"}]
+        generate_design("把按钮改红", LLMClient(), current_design=CURRENT, history=history)
+        assert recorder[0]["history"] == history
+
 
 class TestRecentTurns:
     """recent_turns：只读本人会话；assistant 轮给机器摘要而不是回执原文。"""

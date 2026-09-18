@@ -828,6 +828,27 @@ def mock_edited_design(prompt: str, tree: dict[str, Any]) -> dict[str, Any]:
     return new_tree
 
 
+def _drop_current_prompt_tail(history: list[dict] | None, prompt: str) -> list[dict]:
+    """去掉 history 末尾"就是本次请求原文"的那条 user（2026-09-18）。
+
+    来源：前端是**先把用户消息写进会话、再发** `/api/generate`（中间还夹着一次取资产的
+    await），后端读会话时可能已经看到这条新消息 → history 尾巴 = 本次 user_request，
+    与请求体里的 user_request 重复。重复不只是浪费：字符预算（`llm_history_max_chars`）
+    只保留最新的若干轮，多出来的这一条会把真正的上一轮挤出去，等于"越聊越记不住"。
+
+    只丢**逐字相同**的尾巴（两侧去空白后比较）。不同文案的上一轮一律保留——
+    哪怕它是"同一句要求说了两遍"，也只是少给模型重复一遍，本轮语义不受影响。
+    已知边界：前端用「直接生成」这类快捷指令时会把指令词从 prompt 里剥掉，
+    此时尾巴与 prompt 不再逐字相同，这条去重不生效（只是多占一点预算，无害）。
+    """
+    if not history:
+        return []
+    last = history[-1]
+    if last.get("role") == "user" and str(last.get("content", "")).strip() == prompt.strip():
+        return list(history[:-1])
+    return list(history)
+
+
 def generate_design(
     prompt: str,
     client: LLMClient | None = None,
@@ -854,6 +875,8 @@ def generate_design(
     """
     settings = get_settings()
     client = client or LLMClient()
+    # 2026-09-18：history 末尾若就是"本次请求原文"，去掉它（见 _drop_current_prompt_tail）。
+    history = _drop_current_prompt_tail(history, prompt)
     times: dict[str, float] = {}
     fallback = False
     error = ""
