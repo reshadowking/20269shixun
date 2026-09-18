@@ -205,8 +205,10 @@ COMPONENT_FEW_SHOT = (
 def component_contract_section() -> str:
     """运行期从 shared/component-library.json 现算的"组件字段契约"段（照 icon_prompt_section 模式）。
 
-    只注入 props 的字段名/结构/枚举——**不注入 default_style**（其中的 `background: "card"`
-    这类值不是令牌，注进去会把错误写法教给模型；口径修正见 T19）。
+    只注入 props 的字段名/结构/枚举——**不注入 default_style**：里面是具体数值/hex
+    （如 navbar 的 `background: "#1D2129"`），注进去会把"写死色值"的写法教给模型，
+    而口径要求优先用令牌名（见 token_prompt_section；数据本身的合法性由
+    tests/test_component_library_data.py 守）。
     """
     lines = ["\n\n## 可用组件与字段（只能用这里声明的字段名；数组/对象必须给出结构）"]
     for spec in COMPONENT_LIBRARY["components"]:
