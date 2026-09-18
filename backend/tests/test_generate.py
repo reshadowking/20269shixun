@@ -131,6 +131,59 @@ class TestCompliance:
         assert extract_user_colors("没有颜色") == []
         assert extract_user_colors("#aaa 和 #FF6B35 和 #aaa") == ["#aaa", "#FF6B35"]  # 去重保序
 
+    def test_color_words_become_user_colors(self):
+        """2026-09-18：只给"色系词"也要能被识别为用户指定色。
+
+        此前只提取 hex，于是"做一个橙色调的电商页"返回空列表 → 模型正常产出的橙色
+        `#FF7A00` 被合规检查"拉回最近令牌"→ danger（红）：**用户要橙，出稿是红**。
+        """
+        from app.services.generate import extract_user_colors
+
+        assert extract_user_colors("做一个橙色调的电商页") == ["#FF7A00"]
+        assert extract_user_colors("紫色科技风") == ["#7C4DFF"]
+        assert extract_user_colors("blue dashboard") == ["#0052D9"]
+        # hex 优先且保序（第一个元素是"越界色拉回的目标"）
+        assert extract_user_colors("用 #FF6B35 做主色，橙色点缀") == ["#FF6B35", "#FF7A00"]
+        # 黑白灰不进列表：白/黑本就在允许 hex 里、灰走中性通道，
+        # 塞进去会让 extra[0] 变成黑白，越界色就会被拉成黑白
+        assert extract_user_colors("黑白极简风") == []
+        assert extract_user_colors("灰色背景") == []
+
+    def test_color_word_request_survives_compliance(self):
+        """端到端：用户说"橙色调"，模型给的橙色必须原样保留（改前会被拉成 danger 红）。"""
+        from app.services.generate import extract_user_colors
+
+        allowed = extract_user_colors("做一个橙色调的电商页，圆角风格")
+        design = {
+            "id": "root",
+            "type": "frame",
+            "style": {"layout": "column"},
+            "children": [
+                {"id": "btn", "type": "component", "componentType": "button", "style": {"background": "#FF7A00"}}
+            ],
+        }
+        fixed, fixes, _ = enforce_compliance(design, allowed_extra=allowed)
+        assert fixes == []
+        assert fixed["children"][0]["style"]["background"] == "#FF7A00"
+
+    def test_color_word_section_injected_in_prompts(self):
+        """色系对照表要在生成/自由/修改三条提示词里都有（内容由单一来源现算）。"""
+        from app.services.generate import (
+            color_word_section,
+            fill_system_text,
+            free_system_text,
+            incremental_system,
+        )
+
+        section = color_word_section()
+        for name, text in (
+            ("fill", fill_system_text()),
+            ("free", free_system_text()),
+            ("incremental", incremental_system(False)),
+        ):
+            assert section in text, name
+        assert "橙 #FF7A00" in section  # 表内容来自 COLOR_WORD_HINTS，不手抄
+
     def test_brand_family_blue_shades_kept(self):
         """用户品牌色的同色相变体（Tailwind 蓝色系深浅）不拉回。"""
         for shade in ["#3B82F6", "#1D4ED8", "#1E3A8A", "#DBEAFE", "#EFF6FF"]:

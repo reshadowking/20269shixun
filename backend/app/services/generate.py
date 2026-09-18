@@ -89,6 +89,32 @@ button, card, input, select, table, chart, stat-block, navbar, sidebar, avatar, 
 # 用户指定色提取：prompt 中的 hex（品牌色不被合规检查器拉回，v2.2 §4.5）
 HEX_RE = re.compile(r"#[0-9a-fA-F]{3,8}\b")
 
+# 色系词 → 该色系的代表 hex（2026-09-18）。两处用途，单一来源：
+# ① `extract_user_colors()`：用户说"橙色调"时把 #FF7A00 放进 allowed_extra，
+#    模型产出的同色相颜色就不会被合规检查拉成别的色系（此前会被拉成 danger 红）；
+# ② 提示词里给模型一张"色系 → 参考色"对照，让"橙/紫/青"这类词有稳定落点。
+COLOR_WORD_HINTS: list[tuple[tuple[str, ...], str]] = [
+    (("橙", "橘", "orange"), "#FF7A00"),
+    (("红", "red"), "#D32029"),
+    (("黄", "yellow"), "#F5A623"),
+    (("绿", "green"), "#00A870"),
+    (("青", "cyan", "teal"), "#13C2C2"),
+    (("蓝", "blue"), "#0052D9"),
+    (("紫", "purple", "violet"), "#7C4DFF"),
+    (("粉", "pink"), "#FF6B9A"),
+    (("棕", "咖啡", "brown"), "#8B5A2B"),
+]
+
+
+def color_word_section() -> str:
+    """色系词参考表（注入生成提示词；内容由 COLOR_WORD_HINTS 现算，禁止手抄）。"""
+    pairs = "、".join(f"{keys[0]} {hexv}" for keys, hexv in COLOR_WORD_HINTS)
+    return (
+        "\n\n## 色系参考（用户只说颜色词时的落点）\n"
+        f"用户说\"橙色/紫色/青色…\"这类词时，按该色系取近似色值，不要套成默认蓝：{pairs}。\n"
+        "用户给了 hex 时以 hex 为准（见硬约束里的品牌色规则）。"
+    )
+
 # 18 种组件类型（与 FILL_SYSTEM/FREE_SYSTEM 白名单一致）
 COMPONENT_TYPE_NAMES = {
     "button", "card", "input", "select", "table", "chart", "stat-block",
@@ -546,7 +572,21 @@ button, card, input, select, table, chart, stat-block, navbar, sidebar, avatar, 
 
 
 def extract_user_colors(prompt: str) -> list[str]:
-    return list(dict.fromkeys(HEX_RE.findall(prompt)))
+    """用户明确指定的颜色（给合规检查器当 `allowed_extra`）：**hex 优先**，其次是"色系词"。
+
+    为什么要加词（2026-09-18 实测）：prompt 说"做一个橙色调的电商页"时，此前只按 hex 提取
+    → 返回空列表；模型按提示词正常产出的橙色 `#FF7A00` 于是被合规检查"拉回最近令牌"
+    → `danger`（红）——**用户要橙，出稿是红**。现在色系词也进 allowed_extra：
+    同色相的模型输出被保留（`_is_brand_family` 容差内），越界的颜色则拉回用户要的那个色系，
+    而不是随机落到某个令牌上。
+
+    只收**有彩色**词：白/黑本来就在允许 hex 白名单里，灰走"低饱和中性"通道，
+    把它们塞进 allowed_extra 反而会让 `extra[0]`（越界色的拉回目标）变成黑白。
+    """
+    hexes = list(dict.fromkeys(HEX_RE.findall(prompt)))
+    lowered = prompt.lower()
+    words = [hexv for keys, hexv in COLOR_WORD_HINTS if any(k in lowered for k in keys)]
+    return list(dict.fromkeys([*hexes, *words]))
 
 
 # ---- 长提示词摘要（超长需求先压缩，减小参数填充输入，防超时/输出截断）----
@@ -653,6 +693,7 @@ def incremental_system(locked: bool = False, assets: list[dict[str, Any]] | None
         + form_page_section()
         + assets_prompt_section(assets)
         + token_prompt_section()
+        + color_word_section()
         + (ops_prompt_section() if get_settings().prompt_ops_enabled else legacy_tree_prompt_section())
         + HISTORY_USAGE_SECTION
     )
@@ -695,6 +736,7 @@ def fill_system_text(assets: list[dict[str, Any]] | None = None) -> str:
         + form_page_section()
         + assets_prompt_section(assets)
         + token_prompt_section()
+        + color_word_section()
         + HISTORY_USAGE_SECTION
     )
 
@@ -708,6 +750,7 @@ def free_system_text(assets: list[dict[str, Any]] | None = None) -> str:
         + form_page_section()
         + assets_prompt_section(assets)
         + token_prompt_section()
+        + color_word_section()
         + HISTORY_USAGE_SECTION
     )
 
