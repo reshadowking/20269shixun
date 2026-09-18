@@ -14,8 +14,9 @@ from sqlalchemy.exc import IntegrityError
 
 from ..db import get_db
 from ..design.validator import validate_design_safe
-from ..models import Design, User, Version
+from ..models import ChatSession, Design, User, Version
 from ..security import get_current_user
+from ..services.sessions import DEFAULT_TITLE as SESSION_DEFAULT_TITLE
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["designs"])
@@ -52,6 +53,30 @@ def _owner_id(db, username: str) -> int:
         # "清凭证 + 跳登录"逻辑，把一次数据异常放大成整站掉线（见排查报告 P1-2）
         raise HTTPException(status_code=403, detail="账号不存在，请重新登录")
     return user.id
+
+
+def _bind_session(db, owner_id: int, session_key: str, design: Design) -> None:
+    """把"这张稿件当初用的是哪条会话"写进**同一个事务**（2026-09-18）。
+
+    此前是前端在保存成功后再发一次 `PATCH /api/sessions/{key}`，而且 `.catch(() => {})`
+    静默吞错——一次网络抖动就会让那条会话永远找不到，用户重开项目看到的就是"对话被清空"
+    （正是缺陷 5 的同一类症状，只是触发条件更隐蔽）。并进创建请求后：
+    设计、版本、会话绑定一次落库，要么都成、要么都不成。
+
+    会话行不存在时就地新建，**不调 `get_or_create_session`**——那个函数内部会 commit，
+    会把这个还没写版本的 design 一起提交，破坏 P0-5 的"版本撞号整体重试"。
+    并发下若撞 `uq_chat_sessions_owner_key`，外层已有 IntegrityError → 回滚重试一次，
+    重试时会走"已存在"分支照常绑定。
+
+    他人会话不会被绑：查询按 owner 过滤，查不到就是"给当前用户新建同名会话"（无害）。
+    """
+    session = db.execute(
+        select(ChatSession).where(ChatSession.owner_id == owner_id, ChatSession.session_key == session_key)
+    ).scalar_one_or_none()
+    if session is None:
+        session = ChatSession(session_key=session_key, owner_id=owner_id, title=SESSION_DEFAULT_TITLE)
+        db.add(session)
+    session.design_id = design.id
 
 
 def _own_design(db, design_id: int, username: str) -> Design:
@@ -117,6 +142,10 @@ def _save_version(db, design: Design, note: str = "") -> None:
 class DesignCreate(BaseModel):
     name: str = Field(default="未命名设计稿", max_length=200)
     design: dict
+    # 2026-09-18：保存时一并绑定"这张稿件用哪条会话聊天"（可选，向后兼容）。
+    # 为什么要并进创建请求：见 `_bind_session` 的说明——此前是保存成功后的**第二个请求**，
+    # 而且前端 `.catch(() => {})` 静默吞错，一次网络抖动就让"重开项目还在聊的那条会话"永远找不到。
+    session_key: str | None = Field(default=None, min_length=3, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
 
 
 class DesignUpdate(BaseModel):
@@ -243,6 +272,8 @@ def create_design(req: DesignCreate, _user: str = Depends(get_current_user), db=
 
     P0-5：并发写版本撞号（唯一约束）时整体重试一次——rollback 会连同 design 写入一起回滚，
     必须重跑整个创建流程而非只重写版本号。
+
+    2026-09-18：带上 `session_key` 时，**同一个事务**里把会话绑定到这张稿件（对话随项目留存的半边）。
     """
     _validate_design_payload(req.design)
     owner_id = _owner_id(db, _user)
@@ -259,6 +290,8 @@ def create_design(req: DesignCreate, _user: str = Depends(get_current_user), db=
         )
         db.add(design)
         db.flush()
+        if req.session_key:
+            _bind_session(db, owner_id, req.session_key, design)
         _save_version(db, design)
         try:
             db.commit()

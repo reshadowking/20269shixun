@@ -63,13 +63,6 @@ export const sessionApi = {
       body: JSON.stringify({ title }),
     })
   },
-  /** 绑定会话 → 已保存设计（首次保存为正式设计后调用） */
-  bindDesign(sessionKey: string, designId: number): Promise<SessionMeta> {
-    return api(`/api/sessions/${encodeURIComponent(sessionKey)}`, {
-      method: 'PATCH',
-      body: JSON.stringify({ design_id: designId }),
-    })
-  },
   remove(sessionKey: string): Promise<{ ok: boolean }> {
     return api(`/api/sessions/${encodeURIComponent(sessionKey)}`, { method: 'DELETE' })
   },

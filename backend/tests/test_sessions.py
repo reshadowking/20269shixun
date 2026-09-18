@@ -310,6 +310,82 @@ class TestSessionDesignBinding:
         assert {mine, other} <= ids
 
 
+class TestDesignCreateBindsSession:
+    """2026-09-18：保存设计时**同一次请求**就把会话绑好（对话随项目留存的半边）。
+
+    此前是保存成功后再发一次 PATCH，而且前端 `.catch(() => {})` 静默吞错——一次网络抖动
+    就让"这张稿件当初聊的会话"永远找不到，用户重开项目看到对话被清空。
+    """
+
+    def test_create_design_binds_session_atomically(self, client, auth_headers):
+        key = _uniq("bindcreate")
+        resp = client.post(
+            "/api/designs",
+            json={"name": "带会话保存", "design": {"id": "root", "type": "frame"}, "session_key": key},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200, resp.text
+        did = resp.json()["id"]
+
+        # 会话行不存在时一并建好，并指向这张稿件
+        detail = client.get(f"/api/sessions/{key}", headers=auth_headers)
+        assert detail.status_code == 200
+        assert detail.json()["design_id"] == did
+        # 反向查询可用（工作台重开项目靠的就是它）
+        lst = client.get(f"/api/sessions?design_id={did}", headers=auth_headers).json()
+        assert [s["session_id"] for s in lst["sessions"]] == [key]
+
+    def test_without_session_key_no_session_is_created(self, client, auth_headers):
+        """不传 session_key：行为与改造前逐字相同（外部脚本/测试造稿不受影响）。"""
+        did = client.post(
+            "/api/designs",
+            json={"name": "不带会话", "design": {"id": "root", "type": "frame"}},
+            headers=auth_headers,
+        ).json()["id"]
+        # 关键语义：这张稿件不该凭空多出一条会话绑定
+        lst = client.get(f"/api/sessions?design_id={did}", headers=auth_headers).json()
+        assert lst == {"sessions": [], "total": 0}
+
+    def test_invalid_design_does_not_create_session(self, client, auth_headers):
+        """Schema 校验失败 → 整批不落：会话也不该被建出来（同事务的意义）。"""
+        key = _uniq("rollback")
+        resp = client.post(
+            "/api/designs",
+            json={"name": "坏稿", "design": {"id": "root"}, "session_key": key},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 422
+        assert client.get(f"/api/sessions/{key}", headers=auth_headers).status_code == 404
+
+    def test_same_key_of_another_user_is_not_hijacked(self, client, auth_headers):
+        """别人的会话 key：查不到就给自己建一条同名会话，绝不改对方那条（owner 隔离）。"""
+        other = _second_user_headers(client)
+        shared_key = _uniq("shared")
+        _create(client, other, shared_key)
+        other_did = client.post(
+            "/api/designs", json={"name": "对方的稿", "design": {"id": "root", "type": "frame"}}, headers=other
+        ).json()["id"]
+        assert client.patch(f"/api/sessions/{shared_key}", json={"design_id": other_did}, headers=other).status_code == 200
+
+        mine = client.post(
+            "/api/designs",
+            json={"name": "我的稿", "design": {"id": "root", "type": "frame"}, "session_key": shared_key},
+            headers=auth_headers,
+        ).json()["id"]
+
+        assert client.get(f"/api/sessions/{shared_key}", headers=auth_headers).json()["design_id"] == mine
+        assert client.get(f"/api/sessions/{shared_key}", headers=other).json()["design_id"] == other_did
+
+    def test_bad_session_key_is_rejected(self, client, auth_headers):
+        """key 形状不合白名单 → 422（不让脏 key 进库）。"""
+        resp = client.post(
+            "/api/designs",
+            json={"name": "脏 key", "design": {"id": "root", "type": "frame"}, "session_key": "bad key!"},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 422
+
+
 class TestCreateSessionConcurrency:
     """P0-1：会话创建必须并发安全（原实现先查后插，撞唯一约束直接 500）。"""
 

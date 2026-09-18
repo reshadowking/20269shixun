@@ -441,7 +441,10 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
     try {
       const r = await api<{ id: number; name: string }>('/api/designs', {
         method: 'POST',
-        body: JSON.stringify({ name: name.trim(), design }),
+        // 2026-09-18：会话绑定跟保存**同一次请求**落库（后端同事务写入 chat_sessions.design_id）。
+        // 此前是保存成功后再发一次 PATCH 且 `.catch(() => {})` 静默吞错——一次网络抖动就会让
+        // "这张稿件当初聊的会话"永远找不到，用户重开项目看到的就是对话被清空。
+        body: JSON.stringify({ name: name.trim(), design, session_key: sessionKey }),
       })
       setSavedMeta({ id: r.id, name: r.name })
       // B3-1：新建保存为正式设计后迁移协作房间（保留 ydoc/撤销栈，不整页刷新）。
@@ -453,7 +456,6 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
       next.set('design', String(r.id))
       next.set(SESSION_PARAM, sessionKey)
       setSearchParams(next, { replace: true })
-      sessionApi.bindDesign(sessionKey, r.id).catch(() => {})
       lastSavedJsonRef.current = JSON.stringify(design)
       setUnsaved(false)
       setSaveDialogOpen(false)
