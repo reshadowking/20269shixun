@@ -32,8 +32,17 @@ def _nearest_spacing(value: int) -> int:
 
 
 def _unify_group(group: list[dict], key: str, report: dict, kind: str) -> None:
-    """组内同类型兄弟节点的某布局属性统一为众数（值缺失的成员也一并写入，保证一致）。"""
+    """组内同类型兄弟节点的某布局属性统一为众数（值缺失的成员也一并写入，保证一致）。
+
+    2026-09-17：先做"值形状"体检——`set()`/`Counter()` 遇到 dict/list 会抛
+    `TypeError: unhashable type`，而这个端点（`POST /api/optimize-layout`）**不校验入参 Schema**，
+    实测 `{"width": {"bad": 1}}` 直接把接口打成 500。
+    Schema 里 padding/align/width/height 只可能是 number/string，出现其它形状就说明这棵树
+    不是本规则能安全推断的——**整组跳过**（宁可少优化，也不要 500 或瞎改）。
+    """
     values = [c.get("style", {}).get(key) for c in group]
+    if any(v is not None and not isinstance(v, (int, float, str)) for v in values):
+        return
     if len([v for v in values if v is not None]) == 0:
         return
     if len(set(values)) == 1 and all(v is not None for v in values):

@@ -7,8 +7,9 @@ import { optionPositioning, compareOptions } from '@/design/exploreSummary'
 import type { DesignNode } from '@/design/types'
 import { api } from '@/lib/api'
 import { GUARD_HINT, isDesignRequest } from '@/lib/designGuard'
-import { diffDesign } from '@/design/diff'
-import { isEditIntent } from '@/lib/editIntent'
+import { isFullPageRequest, isNewDesignIntent } from '@/lib/editIntent'
+import ChangeListCard from '@/components/chat/ChangeListCard'
+import { buildChangeList, describeDegraded, summarizeChanges, type ChangeItem } from '@/design/changeList'
 import {
   loadExploreArchive,
   saveExploreArchive,
@@ -33,6 +34,14 @@ import {
  * 缺陷 1：探索的两份方案带预览与关键差异；选定后留档（另一方案仍可查、刷新可还原）。
  */
 
+/** T51 批2：反馈归因字段（那次生成用的什么；没调模型时全为 null） */
+interface LlmMeta {
+  model: string | null
+  prompt_version: string | null
+  api_format: string | null
+  profile_id: string | null
+}
+
 interface ChatMessage {
   role: 'user' | 'assistant'
   text: string
@@ -40,6 +49,37 @@ interface ChatMessage {
   sessionId?: string
   /** 仅本地占位（欢迎语），不落库 */
   ephemeral?: boolean
+  /**
+   * T49：这条消息产生的变更清单（**创建时构建一次并冻结**）。
+   * 撤回只改 `reverted`，绝不重建列表——否则 change-revert-${i} 的索引会错行。
+   * 与合规报告一样不落库（会话只存 role/text），刷新后不显示。
+   */
+  changes?: ChangeItem[]
+  /** 已撤回的变更条目 id（置灰显示，列表不跳动） */
+  reverted?: string[]
+  /**
+   * T51 批2：这次生成用的模型元数据——反馈落库的归因字段。
+   * 与 changes 一样挂在消息上（不落库，刷新即失），但语义一致：反馈评的就是这条消息。
+   */
+  llm?: LlmMeta
+}
+
+/**
+ * 取用户资产库里可用的图片（2026-09-17，供生成时注入提示词）。
+ *
+ * 只取前 12 张（提示词体积）且**失败即静默降级**为"没有资产"——取图失败绝不能挡住生成。
+ * 导出时这些 url 会被内联成 base64（ADR-008），所以产物里不会 404。
+ */
+async function loadAssetsForPrompt(): Promise<Array<{ id: number; name: string; url: string }>> {
+  try {
+    const resp = await api<{ images?: Array<{ id: number; filename?: string; url?: string }> }>('/api/images')
+    return (resp.images ?? [])
+      .filter((img) => typeof img.url === 'string' && img.url)
+      .slice(0, 12)
+      .map((img) => ({ id: img.id, name: img.filename ?? `图片 ${img.id}`, url: String(img.url) }))
+  } catch {
+    return []
+  }
 }
 
 /** B2-2/D1：单条合规拉回明细（与后端 ComplianceFix 对齐） */
@@ -107,6 +147,20 @@ interface GenerateResponse {
   violations_detail?: ComplianceFixItem[]
   /** T8 收尾：本轮降级明细（["icon@节点id"]）——用于向用户明示"近似组件表达" */
   degraded?: string[]
+  /**
+   * T52 收尾批：能力缺口统计摘要（{"degraded":n,"unknown_prop":n,"ops_rejected":n}；null=无缺口，含 mock）。
+   * 只含计数、不含 detail 原文（原文在 DB + 专用日志）。展示只渲染 unknown_prop/ops_rejected——
+   * degraded 另有专属明细行；ops_rejected 是"去重 op 类型数（上限 5）"，文案用"类"不用"次"。
+   */
+  gaps_summary?: Record<string, number> | null
+  /**
+   * T51 批2：反馈归因字段（取本次最后一次模型调用；**没调模型 → null**，
+   * 覆盖熔断开路 / mock / 填充前失败——汇总脚本把 null 单列"无模型调用"）
+   */
+  llm_model?: string | null
+  llm_prompt_version?: string | null
+  api_format?: string | null
+  profile_id?: string | null
 }
 
 /** D3：从设计树抽取少量可见文本作方案摘要（最多 4 段，截断 40 字） */
@@ -177,6 +231,8 @@ interface AIChatPanelProps {
   /** T4 批2：当前是否处于版面锁定阶段（WorkspacePage 从服务端读回的锁状态）。
    * 仅随增量编辑请求告知后端以调整提示词措辞——不是安全开关，闸门仍由服务端判定。 */
   locked?: boolean
+  /** T46a-3e：只读访客——可以看会话/方案，但不能生成、不能应用（写入口统一禁用） */
+  readOnly?: boolean
   /** P0-1 撤销：回到上一版（快照） */
   onUndo?: () => void
   canUndo?: boolean
@@ -186,9 +242,15 @@ interface AIChatPanelProps {
   onComplianceRestore?: (fix: ComplianceFixItem) => void
   /** D3：使用某个探索方案（上层 pushSnapshot + resetDesign，可撤销回原稿） */
   onUseExploreDesign?: (design: DesignNode) => void
+  /** T49：变更清单卡片悬停 → 高亮画布节点（传空数组表示取消高亮） */
+  onHighlightNodes?: (ids: string[]) => void
+  /** T49：撤回单条变更（上层把 item.revert 差量喂给 applyAiDiff；只含一个分量 → 一个撤销步） */
+  onRevertChange?: (item: ChangeItem) => void
 }
 
-export default function AIChatPanel({ onGenerate, onGeneratingChange, design, onIncrementalEdit, onUndo, canUndo, sessionKey, onComplianceRestore, onUseExploreDesign, locked }: AIChatPanelProps) {
+export default function AIChatPanel({ onGenerate, onGeneratingChange, design, onIncrementalEdit, onUndo, canUndo, sessionKey, onComplianceRestore, onUseExploreDesign, onHighlightNodes, onRevertChange, locked, readOnly = false }: AIChatPanelProps) {
+  /** 只读访客：所有"会写画布"的按钮一律禁用（生成 / 应用方案 / 还原修正） */
+  const ro = readOnly
   const [input, setInput] = useState('')
   /** 会话作用域：本项目会话数据的唯一读写入口（盖章写入 + 过滤读取，跨会话访问抛错） */
   const scope = useMemo(() => createSessionScope(sessionKey), [sessionKey])
@@ -347,12 +409,18 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
     const isEdit = editDesign !== undefined
     try {
       const body: Record<string, unknown> = { prompt }
+      // T24：带上会话 id——后端据此取最近 2 轮历史（含上一轮指令原文）
+      body.session_key = sessionKey
       if (isEdit) {
         body.design = editDesign
         // T4 批2：告知后端当前处于版面锁定阶段（仅影响提示词措辞）。安全判定不在
         // 客户端——闸门按服务端 design_locks 查表，谎报 locked 只会得到被拒结果。
         body.locked = locked === true
       }
+      // 2026-09-17：把用户资产库的图片带给模型（"用我上传的图"才做得到）。
+      // 每次生成前现取（一张图可能刚上传），失败就当没有资产——绝不因为取图失败而挡住生成。
+      const assets = await loadAssetsForPrompt()
+      if (assets.length) body.assets = assets
       const resp = await api<GenerateResponse>('/api/generate', {
         method: 'POST',
         body: JSON.stringify(body),
@@ -361,11 +429,15 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
       if (resp.fallback) {
         if (isEdit) {
           // 增量修改失败：画布保持原样（后端兜底返回原树），提示重试
+          // T24：结构/落地类失败时给出"怎么重做"的出口（否则用户只会反复重试同一句）
+          const rebuildHint = /未保留原有结构|无法落地/.test(resp.error ?? '')
+            ? '\n如果是想整体重做，请以「重新设计…」开头。'
+            : ''
           setMessages((m) => [
             ...m,
             {
               role: 'assistant',
-              text: `⚠️ 修改失败（画布保持原样）\n原因：${resp.error ?? '未知'}。\n可点击下方「↻ 重试上次需求」重新尝试。`,
+              text: `⚠️ 修改失败（画布保持原样）\n原因：${resp.error ?? '未知'}。\n可点击下方「↻ 重试上次需求」重新尝试。${rebuildHint}`,
             },
           ])
           return
@@ -383,10 +455,33 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
       }
       // D1：成功响应携带合规明细时展示逐项报告（生成与增量均适用）
       setComplianceReport(resp.violations_detail && resp.violations_detail.length > 0 ? resp.violations_detail : null)
+      // T49：把"前后两棵树"翻成**可逐条撤回的变更清单**（一条 = 节点 × 变更类型）
+      const items = isEdit && editDesign ? buildChangeList(editDesign, resp.design) : []
+      const changes = summarizeChanges(items)
+      // 闸门/高亮/持久化只认**生效**的变更：渲染层不支持的字段不冒充"已改动"
+      const effectiveIds = [...new Set(items.filter((i) => i.hasEffective).map((i) => i.id))]
+      const echo = prompt.length > 20 ? `${prompt.slice(0, 20)}…` : prompt
+      // T51 批2：反馈归因字段（那次生成用的什么；没调模型时全为 null，汇总单列"无模型调用"）
+      const llmMeta: LlmMeta = {
+        model: resp.llm_model ?? null,
+        prompt_version: resp.llm_prompt_version ?? null,
+        api_format: resp.api_format ?? null,
+        profile_id: resp.profile_id ?? null,
+      }
+      // ① 零改动：如实说明，不冒充"已应用修改 ✓"，也不产生一次无意义的撤销步
+      if (isEdit && editDesign && items.length === 0) {
+        setMessages((m) => [
+          ...m,
+          {
+            role: 'assistant',
+            text: `按你说的「${echo}」，这次没有需要改动的地方：没有识别出可执行的界面改动。\n如果这是无关问题，我只处理 UI / 界面设计相关需求；如果想整体重做，请以「重新设计…」开头。`,
+          },
+        ])
+        return
+      }
       if (isEdit && editDesign && onIncrementalEdit) {
-        const changed = diffDesign(editDesign, resp.design)
         // T4 批1：上层把 AI 结果送服务端闸门（锁状态由服务端判定）后再落地
-        const outcome = await onIncrementalEdit(resp.design, changed)
+        const outcome = await onIncrementalEdit(resp.design, effectiveIds)
         if (outcome && outcome.ok === false) {
           setMessages((m) => [
             ...m,
@@ -398,17 +493,26 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
           return
         }
         const droppedNote = outcome?.dropped?.length ? '\n部分效果为非预置值，已忽略。' : ''
-        // T8 收尾（缺口清单 §4.8）：降级不再静默——明示"近似组件表达"
+        // T8 收尾（缺口清单 §4.8）：降级不再静默——明示"近似组件表达"，并**逐条列出**是哪些能力
+        // （这是完善组件库/效果库的原料：模型想要但链路表达不了的能力清单）
         const degradedNote = resp.degraded?.length
-          ? `\n⚠️ 有 ${resp.degraded.length} 项能力暂不支持，已用近似组件表达。`
+          ? `\n⚠️ 有 ${resp.degraded.length} 项能力暂不支持，已用近似组件表达：${describeDegraded(resp.degraded).join('；')}`
           : ''
-        setMessages((m) => [
-          ...m,
-          {
-            role: 'assistant',
-            text: `已应用修改 ✓（仅改动 ${changed.length > 0 ? changed.length : '指定'} 处，其余保持不变）${droppedNote}${degradedNote}\n被修改的节点已高亮提示；输入「撤销」可回到修改前。`,
-          },
-        ])
+        // T52 收尾批：缺口摘要（只渲染 unknown_prop/ops_rejected——降级已有上面的专属明细行）
+        const gapPartsEdit: string[] = []
+        if (resp.gaps_summary?.unknown_prop) gapPartsEdit.push(`契约外字段 ${resp.gaps_summary.unknown_prop}`)
+        if (resp.gaps_summary?.ops_rejected) gapPartsEdit.push(`${resp.gaps_summary.ops_rejected} 类操作被拒`)
+        const gapNoteEdit = gapPartsEdit.length ? `\n⚠ 本次生成存在能力缺口（已记录）：${gapPartsEdit.join('、')}` : ''
+        // ② 全无效：数据写进去了但渲染层都不支持 —— 明说"画布不会有变化"，别让用户对着没动静的画面怀疑功能
+        const text =
+          changes.effective === 0
+            ? `按你说的「${echo}」，已写入 ${changes.total} 条改动，但均未生效（渲染层不支持这些键），画布不会有变化。${droppedNote}${degradedNote}${gapNoteEdit}`
+            : `按你说的「${echo}」，已应用修改 ✓（生效 ${changes.effective} 条，其余保持不变）` +
+              (changes.ineffectiveFields > 0
+                ? `\n其中 ${changes.ineffectiveFields} 个字段渲染层不支持（已在下面标出，可逐条撤回）`
+                : '') +
+              `${droppedNote}${degradedNote}${gapNoteEdit}\n被修改的节点已高亮提示；输入「撤销」可回到修改前。`
+        setMessages((m) => [...m, { role: 'assistant', text, changes: items, llm: llmMeta }])
         return
       }
       onGenerate(resp.design)
@@ -423,11 +527,18 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
       const degradedNote = resp.degraded?.length
         ? `\n⚠️ 有 ${resp.degraded.length} 项能力暂不支持，已用近似组件表达。`
         : ''
+      // T52 收尾批：缺口摘要（同编辑路径——只渲染 unknown_prop/ops_rejected，degraded 有专属行）
+      const gapPartsGen: string[] = []
+      if (resp.gaps_summary?.unknown_prop) gapPartsGen.push(`契约外字段 ${resp.gaps_summary.unknown_prop}`)
+      if (resp.gaps_summary?.ops_rejected) gapPartsGen.push(`${resp.gaps_summary.ops_rejected} 类操作被拒`)
+      const gapNoteGen = gapPartsGen.length ? `\n⚠ 本次生成存在能力缺口（已记录）：${gapPartsGen.join('、')}` : ''
+      // T19：合规文案降调——把检查器"自动对齐了几处颜色"说清楚，而不是甩一个"规范兼容率 23.6%"
+      const alignmentNote = resp.violations > 0 ? `✓ 已按设计规范自动对齐 ${resp.violations} 处颜色` : '✓'
       setMessages((m) => [
         ...m,
         {
           role: 'assistant',
-          text: `已生成设计稿（模板：${resp.template === 'free' ? '自由生成' : resp.template}）✓ 规范兼容率 ${resp.compliance}%${sourceNote}${freeNote}${degradedNote}\n可在右侧属性面板继续编辑，或输入新需求重新生成。`,
+          text: `已生成设计稿（模板：${resp.template === 'free' ? '自由生成' : resp.template}）${alignmentNote}${sourceNote}${freeNote}${degradedNote}${gapNoteGen}\n可在右侧属性面板继续编辑，或输入新需求重新生成。`,
         },
       ])
     } catch (err) {
@@ -454,7 +565,7 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
       ...m,
       {
         role: 'assistant',
-        text: `已使用预置模板（规范兼容率 ${fallbackResult.compliance}%，未调用模型）。可在右侧属性面板继续编辑，或「↻ 重试上次需求」再生成一次。`,
+        text: `已使用预置模板（未调用模型）。可在右侧属性面板继续编辑，或「↻ 重试上次需求」再生成一次。`,
       },
     ])
     setFallbackResult(null)
@@ -470,11 +581,34 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
     })
   }
 
+  /**
+   * T51 批2：提交反馈（变更清单卡片底部 👍/👎）。
+   * 返回 true = 已落库；false = 失败。**失败绝不静默**：卡片保留选择并提示可重试，
+   * 否则用户以为记下了、其实没落库——反馈数据就脏了，后面所有汇总都不可信。
+   */
+  const sendFeedback = async (llm: LlmMeta | null, rating: number, category: string): Promise<boolean> => {
+    try {
+      await api('/api/feedback', {
+        method: 'POST',
+        body: JSON.stringify({ rating, category, session_key: sessionKey, ...(llm ?? {}) }),
+      })
+      return true
+    } catch {
+      return false
+    }
+  }
+
   /** D3：探索 2 份方案（基于最近一次需求；无需求时提示先描述） */
   const handleExplore = async () => {
     const prompt = (lastPrompt || input).trim()
     if (!prompt) {
       setMessages((m) => [...m, { role: 'assistant', text: '请先在上方描述你的设计需求（或先生成一次），再使用「探索 2 个方案」。' }])
+      return
+    }
+    // 角色边界（2026-09-17）：与 handleSend 同一套口径——非设计请求不该发出这**两条**模型链路。
+    // 后端 /api/generate/explore 也有同一守卫（权威），这里只是把"发出去再报 422"变成即时友好提示。
+    if (!isDesignRequest(prompt)) {
+      setMessages((m) => [...m, { role: 'assistant', text: GUARD_HINT }])
       return
     }
     setExploring(true)
@@ -549,12 +683,24 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
     // 缺陷 9 + T10：角色边界分级——增量修改路径（有设计稿且命中编辑动词）不再调守卫：
     // "用户在有设计稿时提要求"本来就该直达模型（§4.9 实测「加高级功能」被误拦）。
     // 首轮生成保持原有强度——「今天天气怎么样」这类无编辑动词的话仍被拦下。
-    const incremental = Boolean(design) && isEditIntent(raw)
+    // T24：有设计稿时按"延续"处理——只有显式"设计/重新设计…"才走重新生成；
+    // 这样"太丑了""再来一版"这类对话式输入不再被角色守卫拦下（无稿时的守卫不变）。
+    const incremental = Boolean(design) && !isNewDesignIntent(raw)
     if (!incremental && !isDesignRequest(raw)) {
       setMessages((m) => [...m, { role: 'assistant', text: GUARD_HINT }])
       return
     }
     const prompt = stripCommandWords(raw)
+    // T28：长文 + 整页要素 → 先确认"重做还是继续改"，避免整页需求被当增量（超长 ops 输出必崩）
+    if (Boolean(design) && !isNewDesignIntent(raw) && isFullPageRequest(prompt)) {
+      const redesign = window.confirm(
+        '这段需求看起来是「重新做一个页面」：\n【确定】从头重新设计（推荐）\n【取消】在当前设计上继续修改',
+      )
+      if (redesign) {
+        await runGenerate(prompt)
+        return
+      }
+    }
     const quick = detectQuickCommands(raw)
     // P0-1：修改类指令且画布有设计 → 增量编辑（跳过追问，携带当前树）
     if (incremental) {
@@ -650,6 +796,21 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
             data-testid={`chat-msg-${msg.role}-${i}`}
           >
             {msg.text}
+            {msg.changes && msg.changes.length > 0 && (
+              <ChangeListCard
+                items={msg.changes}
+                revertedIds={msg.reverted}
+                onRevert={(item) => {
+                  // 只标记 + 交给上层落地；列表本身不重建（索引稳定）
+                  setMessages((m) =>
+                    m.map((x, xi) => (xi === i ? { ...x, reverted: [...(x.reverted ?? []), item.id] } : x)),
+                  )
+                  onRevertChange?.(item)
+                }}
+                onHighlight={onHighlightNodes}
+                onFeedback={({ rating, category }) => sendFeedback(msg.llm ?? null, rating, category)}
+              />
+            )}
           </div>
         ))}
         {generating && (
@@ -675,6 +836,7 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
                 key={opt}
                 className="rounded-full border border-border px-2.5 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
                 data-testid={`followup-option-${opt}`}
+                disabled={ro}
                 onClick={() => answerPending(opt)}
               >
                 {opt === '随便选一个' ? `🎲 ${opt}` : opt}
@@ -686,6 +848,7 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
             size="sm"
             className="w-full text-xs"
             data-testid="followup-skip"
+            disabled={ro}
             onClick={skipPending}
           >
             跳过追问，直接生成
@@ -738,7 +901,7 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
           size="sm"
           className="w-full text-xs"
           data-testid="explore-options"
-          disabled={generating || exploring}
+          disabled={generating || exploring || ro}
           onClick={handleExplore}
         >
           {exploring ? '探索中…（并行生成 2 份方案）' : '✨ 探索 2 个方案'}
@@ -785,6 +948,7 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
                 size="sm"
                 className="mt-1.5 h-6 w-full text-[11px]"
                 data-testid={`explore-use-${i}`}
+                disabled={ro}
                 onClick={() => applyExploreOption(i)}
               >
                 使用此方案
@@ -857,6 +1021,7 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
                       size="sm"
                       className="mt-1.5 h-6 w-full text-[11px]"
                       data-testid={`explore-other-use-${index}`}
+                      disabled={ro}
                       onClick={() => applyExploreOption(index)}
                     >
                       改用此方案
@@ -895,6 +1060,7 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
                       variant={i === archive.chosenIndex ? 'secondary' : 'default'}
                       className="mt-1.5 h-6 w-full text-[11px]"
                       data-testid={`explore-rechoose-use-${i}`}
+                      disabled={ro}
                       onClick={() => applyExploreOption(i)}
                     >
                       {i === archive.chosenIndex ? '当前方案（重新应用）' : '改用此方案'}
@@ -928,6 +1094,7 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
                 size="sm"
                 className="h-6 shrink-0 px-2 text-[11px]"
                 data-testid={`compliance-restore-${i}`}
+                disabled={ro}
                 onClick={() => handleRestoreFix(fix)}
               >
                 还原此项
@@ -951,7 +1118,7 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
             size="sm"
             className="w-full text-xs"
             data-testid="fallback-retry"
-            disabled={generating}
+            disabled={generating || ro}
             onClick={handleFallbackRetry}
           >
             ↻ 重试生成
@@ -961,17 +1128,24 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
             size="sm"
             className="w-full text-xs"
             data-testid="fallback-use-template"
+            disabled={ro}
             onClick={handleUseTemplate}
           >
             使用预置模板（兼容率 {fallbackResult.compliance}%）
           </Button>
         </div>
       )}
+      {ro && (
+        <p className="border-t bg-muted/50 px-3 py-2 text-[11px] text-muted-foreground" data-testid="chat-readonly-note">
+          只读访客：可以查看会话与方案，但不能生成或应用修改（需要 owner / editor 权限）。
+        </p>
+      )}
       <div className="border-t p-3">
         <Textarea
           data-testid="chat-input"
           className="min-h-16 resize-none text-sm"
-          placeholder="描述你想要的设计稿，例如：登录页、电商优惠券页、数据仪表板…"
+          placeholder={ro ? '只读访客：不可发起生成' : '描述你想要的设计稿，例如：登录页、电商优惠券页、数据仪表板…'}
+          disabled={ro}
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => {
@@ -984,7 +1158,7 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
         <Button
           className="mt-2 w-full"
           data-testid="chat-send"
-          disabled={generating || !input.trim()}
+          disabled={generating || ro || !input.trim()}
           onClick={() => handleSend()}
         >
           {generating ? '生成中…' : '生成设计稿'}
@@ -995,7 +1169,7 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
             size="sm"
             className="mt-1 w-full text-xs"
             data-testid="chat-retry"
-            disabled={generating}
+            disabled={generating || ro}
             onClick={() => handleSend(lastPrompt)}
           >
             ↻ 重试上次需求（{lastPrompt.slice(0, 12)}…）

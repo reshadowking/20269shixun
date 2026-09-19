@@ -1,11 +1,12 @@
 import { useState } from 'react'
-import { Navigate, useNavigate, useSearchParams } from 'react-router-dom'
+import { Link, Navigate, useNavigate, useSearchParams } from 'react-router-dom'
 
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { login, getToken } from '@/lib/api'
+import { safeInternalPath } from '@/lib/safeRedirect'
 
 export default function LoginPage() {
   const navigate = useNavigate()
@@ -17,8 +18,7 @@ export default function LoginPage() {
 
   if (getToken()) {
     // 已登录：回到来源页（redirect）或主页
-    const redirect = searchParams.get('redirect')
-    return <Navigate to={redirect && redirect.startsWith('/') ? redirect : '/'} replace />
+    return <Navigate to={safeInternalPath(searchParams.get('redirect'))} replace />
   }
 
   const onSubmit = async (e: React.FormEvent) => {
@@ -27,8 +27,7 @@ export default function LoginPage() {
     setLoading(true)
     try {
       await login(username, password)
-      const redirect = searchParams.get('redirect')
-      navigate(redirect && redirect.startsWith('/') ? redirect : '/')
+      navigate(safeInternalPath(searchParams.get('redirect')))
     } catch (err) {
       setError(err instanceof Error ? err.message : '登录失败')
     } finally {
@@ -86,6 +85,9 @@ export default function LoginPage() {
             <Button type="submit" disabled={loading} className="mt-1" data-testid="login-submit">
               {loading ? '登录中…' : '登 录'}
             </Button>
+            <p className="text-center text-[11px] text-muted-foreground">
+              没有账号？<Link className="text-primary hover:underline" data-testid="to-register" to="/register">注册一个</Link>
+            </p>
             <p className="text-center text-[11px] text-muted-foreground">演示账号：demo / demo123</p>
           </form>
         </CardContent>

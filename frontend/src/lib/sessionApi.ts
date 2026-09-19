@@ -48,8 +48,11 @@ export const sessionApi = {
     ensureInflight.set(sessionKey, pending)
     return pending
   },
-  list(limit = 20): Promise<{ sessions: SessionMeta[]; total: number }> {
-    return api(`/api/sessions?limit=${limit}&offset=0`)
+  /** 会话列表（只返回元信息）。给 designId 时只返回**绑定该设计**的会话（按更新时间倒序） */
+  list(limit = 20, designId?: number): Promise<{ sessions: SessionMeta[]; total: number }> {
+    const q = new URLSearchParams({ limit: String(limit), offset: '0' })
+    if (designId !== undefined) q.set('design_id', String(designId))
+    return api(`/api/sessions?${q.toString()}`)
   },
   get(sessionKey: string): Promise<SessionMeta & { agent_state: AgentState }> {
     return api(`/api/sessions/${encodeURIComponent(sessionKey)}`)
@@ -58,13 +61,6 @@ export const sessionApi = {
     return api(`/api/sessions/${encodeURIComponent(sessionKey)}`, {
       method: 'PATCH',
       body: JSON.stringify({ title }),
-    })
-  },
-  /** 绑定会话 → 已保存设计（首次保存为正式设计后调用） */
-  bindDesign(sessionKey: string, designId: number): Promise<SessionMeta> {
-    return api(`/api/sessions/${encodeURIComponent(sessionKey)}`, {
-      method: 'PATCH',
-      body: JSON.stringify({ design_id: designId }),
     })
   },
   remove(sessionKey: string): Promise<{ ok: boolean }> {
@@ -111,4 +107,20 @@ export const sessionApi = {
   context(sessionKey: string, maxTurns = 10): Promise<{ session_id: string; messages: Array<SessionMessage & { session_id: string }> }> {
     return api(`/api/sessions/${encodeURIComponent(sessionKey)}/context?max_turns=${maxTurns}`)
   },
+}
+
+/**
+ * 打开 `?design={id}` 时找回"这张稿件当初聊天用的那条会话"。
+ *
+ * 背景：保存前的画布用的是随机会话 key，绑定关系只落在 `chat_sessions.design_id` 上；
+ * 若直接按 `s-design-{id}` 派生，就会打开一条空会话——用户看到的是"重新打开项目，对话被清空"。
+ * 查不到 / 查询失败一律返回 null，由调用方退化为确定性的 `s-design-{id}`（与改造前行为一致）。
+ */
+export async function findSessionKeyForDesign(designId: number): Promise<string | null> {
+  try {
+    const r = await sessionApi.list(1, designId)
+    return r.sessions[0]?.session_id ?? null
+  } catch {
+    return null
+  }
 }

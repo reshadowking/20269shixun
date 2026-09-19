@@ -113,9 +113,10 @@ export const DEMO_DASHBOARD: DesignNode = {
       style: { layout: 'column', gap: 8, width: 160, background: '#1D2129', padding: 24 },
       children: [
         { id: 'dash-brand', type: 'text', props: { text: 'FinBoard' }, style: { color: '#FFFFFF', fontSize: 16, fontWeight: 700 } },
-        { id: 'dash-item-1', type: 'text', props: { text: '总览' }, style: { color: '#B8BEC9', fontSize: 13, background: 'primary' } },
-        { id: 'dash-item-2', type: 'text', props: { text: '交易记录' }, style: { color: '#B8BEC9', fontSize: 13 } },
-        { id: 'dash-item-3', type: 'text', props: { text: '资产分析' }, style: { color: '#B8BEC9', fontSize: 13 } },
+        // T52 批2：原 #B8BEC9（令牌表外灰）→ 'text-light'（辅助文字令牌），颜色契约测试防再犯
+        { id: 'dash-item-1', type: 'text', props: { text: '总览' }, style: { color: 'text-light', fontSize: 13, background: 'primary' } },
+        { id: 'dash-item-2', type: 'text', props: { text: '交易记录' }, style: { color: 'text-light', fontSize: 13 } },
+        { id: 'dash-item-3', type: 'text', props: { text: '资产分析' }, style: { color: 'text-light', fontSize: 13 } },
       ],
     },
     {
@@ -135,8 +136,11 @@ export const DEMO_DASHBOARD: DesignNode = {
           type: 'frame',
           style: { layout: 'row', gap: 16 },
           children: [
-            { id: 'dash-stat-1', type: 'rect', props: {}, style: { width: 150, height: 80, radius: 12, background: 'card', border: '1px solid #EEF0F4' } },
-            { id: 'dash-stat-2', type: 'rect', props: {}, style: { width: 150, height: 80, radius: 12, background: 'card', border: '1px solid #EEF0F4' } },
+            // T52 批2 修复：原 background:'card'（令牌表无此名）被旧 resolveColor 静默放行 →
+            // 非法 CSS，色块背景渲染不出只剩边框。现改白名单 hex（templates.py 同规），
+            // 并由 colorContract.test 防再犯；resolveColor 对未知裸词也已改为显式失败 + dev 警告。
+            { id: 'dash-stat-1', type: 'rect', props: {}, style: { width: 150, height: 80, radius: 12, background: '#FFFFFF', border: '1px solid #EEF0F4' } },
+            { id: 'dash-stat-2', type: 'rect', props: {}, style: { width: 150, height: 80, radius: 12, background: '#FFFFFF', border: '1px solid #EEF0F4' } },
           ],
         },
         {

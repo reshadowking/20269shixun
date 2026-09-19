@@ -70,10 +70,13 @@ class TestGeneratePipeline:
 
     def test_fill_invalid_schema_falls_back(self):
         """LLM 产物修复后仍不合法 → 回退模板，不把脏数据上画布。
-        （T8 后 type:"not-a-type" 可降级为 frame；改用仍不可修复的形态：根节点缺 id。）"""
+        （T8 后 type:"not-a-type" 可降级为 frame；T17 后"根节点缺 id"也已被抢救——
+        见 test_unwrap.py::TestUnwrapDesign::test_missing_root_id_rescued 与
+        TestUnwrapDesignPipeline::test_missing_root_id_adopted_end_to_end。
+        本用例改用仍然不可抢救的形态：整个对象不是设计节点。"""
         mock = MockResponder(
             intent={"template": "login", "theme": "default", "components": [], "copy_intent": "x", "style_intent": "y", "tone": "z"},
-            fill={"type": "frame", "content": "x"},  # 修复后仍非法（缺 id）
+            fill={"explanation": "x", "steps": []},  # 非设计节点：解包/修复后仍缺 id
         )
         result = generate_design("登录页", _client(mock))
         assert result.fallback is False
@@ -127,6 +130,59 @@ class TestCompliance:
         assert extract_user_colors("主色 #FF6B35 配白色") == ["#FF6B35"]
         assert extract_user_colors("没有颜色") == []
         assert extract_user_colors("#aaa 和 #FF6B35 和 #aaa") == ["#aaa", "#FF6B35"]  # 去重保序
+
+    def test_color_words_become_user_colors(self):
+        """2026-09-18：只给"色系词"也要能被识别为用户指定色。
+
+        此前只提取 hex，于是"做一个橙色调的电商页"返回空列表 → 模型正常产出的橙色
+        `#FF7A00` 被合规检查"拉回最近令牌"→ danger（红）：**用户要橙，出稿是红**。
+        """
+        from app.services.generate import extract_user_colors
+
+        assert extract_user_colors("做一个橙色调的电商页") == ["#FF7A00"]
+        assert extract_user_colors("紫色科技风") == ["#7C4DFF"]
+        assert extract_user_colors("blue dashboard") == ["#0052D9"]
+        # hex 优先且保序（第一个元素是"越界色拉回的目标"）
+        assert extract_user_colors("用 #FF6B35 做主色，橙色点缀") == ["#FF6B35", "#FF7A00"]
+        # 黑白灰不进列表：白/黑本就在允许 hex 里、灰走中性通道，
+        # 塞进去会让 extra[0] 变成黑白，越界色就会被拉成黑白
+        assert extract_user_colors("黑白极简风") == []
+        assert extract_user_colors("灰色背景") == []
+
+    def test_color_word_request_survives_compliance(self):
+        """端到端：用户说"橙色调"，模型给的橙色必须原样保留（改前会被拉成 danger 红）。"""
+        from app.services.generate import extract_user_colors
+
+        allowed = extract_user_colors("做一个橙色调的电商页，圆角风格")
+        design = {
+            "id": "root",
+            "type": "frame",
+            "style": {"layout": "column"},
+            "children": [
+                {"id": "btn", "type": "component", "componentType": "button", "style": {"background": "#FF7A00"}}
+            ],
+        }
+        fixed, fixes, _ = enforce_compliance(design, allowed_extra=allowed)
+        assert fixes == []
+        assert fixed["children"][0]["style"]["background"] == "#FF7A00"
+
+    def test_color_word_section_injected_in_prompts(self):
+        """色系对照表要在生成/自由/修改三条提示词里都有（内容由单一来源现算）。"""
+        from app.services.generate import (
+            color_word_section,
+            fill_system_text,
+            free_system_text,
+            incremental_system,
+        )
+
+        section = color_word_section()
+        for name, text in (
+            ("fill", fill_system_text()),
+            ("free", free_system_text()),
+            ("incremental", incremental_system(False)),
+        ):
+            assert section in text, name
+        assert "橙 #FF7A00" in section  # 表内容来自 COLOR_WORD_HINTS，不手抄
 
     def test_brand_family_blue_shades_kept(self):
         """用户品牌色的同色相变体（Tailwind 蓝色系深浅）不拉回。"""
@@ -297,7 +353,7 @@ class TestGenerateAPI:
 
         monkeypatch.setattr(llm_module.LLMClient, "is_mock", property(lambda self: False))
 
-        def boom(self, system, user, temperature):
+        def boom(self, system, user, temperature, history=None, deadline=None, **_kwargs):
             raise RuntimeError("模拟模型不可用")
 
         monkeypatch.setattr(llm_module.LLMClient, "_real_chat", boom)
@@ -433,3 +489,51 @@ class TestT9ComponentsNotDegraded:
         assert result.design["children"][1]["componentType"] == "tabs"
         assert result.design["children"][1]["props"]["active"] == 1
         assert result.degraded == []
+
+
+class TestUnwrapDesignPipeline:
+    """T17 端到端：包裹形态不再整稿回退。
+
+    必须置为真实模式才能观察到 fallback/error——mock 模式会把非编辑路径的 fallback 复位为 False
+    （见 generate.py 的 mock 收尾），这也是"演示模式掩盖真实失败"的已知特性。
+    """
+
+    @staticmethod
+    def _force_real(monkeypatch, payload: dict) -> None:
+        """零网络模拟真实模型：is_mock=False + _real_chat 直接返回预设 payload。"""
+        import json
+
+        from app.services import llm as llm_module
+
+        monkeypatch.setattr(llm_module.LLMClient, "is_mock", property(lambda self: False))
+        monkeypatch.setattr(
+            llm_module.LLMClient,
+            "_real_chat",
+            lambda self, system, user, temperature, history=None, deadline=None, **_kw: json.dumps(payload, ensure_ascii=False),
+        )
+
+    def test_wrapped_tree_adopted_end_to_end(self, monkeypatch):
+        tree = {
+            "id": "wrapped-root", "type": "frame", "style": {"layout": "column"},
+            "children": [{"id": "t", "type": "text", "props": {"text": "标题"}}],
+        }
+        self._force_real(monkeypatch, {"design": tree, "explanation": "here you go"})
+        result = generate_design("设计一个登录页", LLMClient())
+        assert result.fallback is False, result.error
+        assert result.design == tree
+
+    def test_non_design_payload_still_falls_back(self, monkeypatch):
+        """完全非设计形态仍回退（解包不得变成"乱造设计稿"）。"""
+        self._force_real(monkeypatch, {"explanation": "no", "steps": [{"id": "1", "type": "button"}]})
+        result = generate_design("设计一个登录页", LLMClient())
+        assert result.fallback is True
+        assert "Schema 校验" in result.error
+
+    def test_missing_root_id_adopted_end_to_end(self, monkeypatch):
+        """T17 行为变化：顶层是设计节点形状但缺 id → 补 id="root" 采用（此前会整稿回退模板）。"""
+        tree = {"type": "frame", "style": {"layout": "column"}, "children": []}
+        self._force_real(monkeypatch, tree)
+        result = generate_design("设计一个登录页", LLMClient())
+        assert result.fallback is False, result.error
+        assert result.design["id"] == "root"
+        assert result.design["type"] == "frame"

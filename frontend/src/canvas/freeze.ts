@@ -26,6 +26,89 @@ export interface FreezeMeasureResult {
   measurements: FreezeMeasurement[]
   /** 测不到的节点（如 hidden 未渲染），调用方需提示而非静默 */
   missing: string[]
+  /**
+   * 容器**自己**的 border box 尺寸（画布单位）。
+   *
+   * 2026-09-17 修：只冻结子节点是不够的 —— 子节点改成绝对定位后**不再撑高父容器**，
+   * 而模板/AI 产物的容器普遍没有显式 `height`（auto，靠内容撑），于是"转自由画布"会把
+   * 容器塌成只剩 padding 的一条（E2E 实测 demo 根节点 276 → 64），背景/圆角跟着消失、
+   * 子节点浮在容器外。调用方要把它一并写进容器的 style，才算"保留当前视觉现状"。
+   */
+  container?: { width: number; height: number }
+}
+
+/** `waitForLayoutStable` 的结果：settled=false 表示"等超时了，还有东西没落定"。 */
+export interface LayoutStableReport {
+  /**
+   * true = 字体与容器内所有 `<img>` 都已落定（两帧 rAF 也已完成）。
+   * **false 时调用方必须中止冻结**——此时测到的尺寸可能偏小，写进 style 就是"排版错乱"。
+   */
+  settled: boolean
+  /** 超时那一刻仍未落定的 `<img>` 数量（未 decode 完的图会把高度测小） */
+  pendingImages: number
+  /** 超时那一刻 web font 仍未就绪；环境没有 FontFaceSet（如 jsdom）时为 false */
+  fontsPending: boolean
+}
+
+/**
+ * 等版面稳定再测量（2026-09-17）。
+ *
+ * 背景：验收反馈"转自由画布有时排版错乱"。头号嫌疑是**测量时机太早**——
+ * 生成/打开后立刻测，此时 web font 还没加载完、`<img>` 还没解码，
+ * 测到的高度偏小；冻结把它写进 `style.height` 后，图片/文字按真实尺寸渲染 → 错位。
+ *
+ * 做法：等 `document.fonts.ready` + 容器内未完成的 `<img>` 落定（load 或 error）+ 两帧 rAF。
+ * **带超时兜底**（默认 1200ms）：任何一项卡住也不会让「转自由画布」永远转圈。
+ *
+ * ⚠️ 超时 ≠ 可以照旧测量（2026-09-17 二次修）：超时那一刻没落定的图片/字体，
+ * 测出来的高度就是偏小的，照旧冻结正是"偶发错乱"的第二条路径。
+ * 因此本函数返回 `settled`，调用方在 false 时应当**中止**（手动按钮→给可读提示；
+ * 自动冻结→静默跳过，保留 flex），而不是拿可能过期的尺寸落库。
+ * 纯函数式依赖注入（el / 全局对象都可传），便于单测。
+ */
+export async function waitForLayoutStable(el: HTMLElement | null, timeoutMs = 1200): Promise<LayoutStableReport> {
+  const fonts = (globalThis.document as Document | undefined)?.fonts
+  const timeout = new Promise<void>((resolve) => setTimeout(resolve, timeoutMs))
+  const fontsReady = (async () => {
+    if (fonts?.ready) await fonts.ready
+  })().catch(() => undefined)
+  const imagesReady = el
+    ? Promise.all(
+        Array.from(el.querySelectorAll('img'))
+          .filter((img) => !img.complete)
+          .map(
+            (img) =>
+              new Promise<void>((resolve) => {
+                img.addEventListener('load', () => resolve(), { once: true })
+                img.addEventListener('error', () => resolve(), { once: true })
+              }),
+          ),
+      )
+    : Promise.resolve()
+  const twoFrames = new Promise<void>((resolve) => {
+    const raf = globalThis.requestAnimationFrame
+    if (typeof raf !== 'function') {
+      resolve()
+      return
+    }
+    raf(() => raf(() => resolve()))
+  })
+  let timedOut = false
+  await Promise.race([
+    Promise.all([fontsReady, imagesReady, twoFrames]).then(() => undefined),
+    timeout.then(() => {
+      timedOut = true
+    }),
+  ])
+  // 用**当下**的真实状态回答"到底还有谁没落定"，而不是靠记账推测：
+  // 超时那一刻刚好加载完的图片不该被算成"没落定"（避免无谓地取消冻结）。
+  const pendingImages = el ? Array.from(el.querySelectorAll('img')).filter((img) => !img.complete).length : 0
+  const fontsPending = !!fonts && fonts.status !== 'loaded'
+  return {
+    settled: !timedOut || (pendingImages === 0 && !fontsPending),
+    pendingImages,
+    fontsPending,
+  }
 }
 
 /**
@@ -54,6 +137,10 @@ export function measureChildren(
 
   const measurements: FreezeMeasurement[] = []
   const missing: string[] = []
+  const containerSize = {
+    width: Math.ceil(parentRect.width / safeScale),
+    height: Math.round(parentRect.height / safeScale),
+  }
 
   for (const id of childIds) {
     const el = container.querySelector<HTMLElement>(`[data-node-id="${id}"]`)
@@ -76,7 +163,7 @@ export function measureChildren(
     })
   }
 
-  return { measurements, missing }
+  return { measurements, missing, container: containerSize }
 }
 
 /**
@@ -102,4 +189,30 @@ export function freezeToFreeLayout(
       style: { ...(child.style ?? {}), width: Math.ceil(m.width), height: Math.round(m.height) },
     }
   })
+}
+
+/**
+ * 收集**所有需要冻结的容器**（前序：父在前、子在后）。
+ *
+ * 为什么要整棵树：只冻结根节点的直接子节点时，嵌套容器（卡片里的价格行、导航里的链接组…）
+ * 仍然是 flex —— 用户拖动它们只会**重排顺序**，看起来就是"AI 生成的稿子大部分拖不动"。
+ *
+ * 规则：
+ * - 有可见子节点、且自身 `layout !== 'free'` 的容器 → 要冻；
+ * - 自身已经是 free 的容器跳过（幂等：重复冻结不该改坐标），但**继续往下走**——
+ *   外层是 free 不代表里层也能自由摆放；
+ * - 没有子节点的节点（text / button / image…）天然不需要冻结。
+ *
+ * 返回顺序即调用方的测量顺序；测量全部发生在写入之前（先量后写），
+ * 因此各层量到的都是"还是 flex 时"的真实几何。
+ */
+export function collectFreezeTargets(root: DesignNode): DesignNode[] {
+  const out: DesignNode[] = []
+  const walk = (node: DesignNode) => {
+    const visible = (node.children ?? []).filter((c) => !c.hidden)
+    if (visible.length > 0 && node.style?.layout !== 'free') out.push(node)
+    for (const child of node.children ?? []) walk(child)
+  }
+  walk(root)
+  return out
 }

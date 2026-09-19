@@ -51,6 +51,14 @@ interface DesignCanvasProps {
   onContextMenu?: (nodeId: string | null, x: number, y: number) => void
   /** P0-1 增量编辑：被修改节点高亮 */
   highlightIds?: Set<string>
+  /** T46a-3e：只读访客——不开始拖拽/缩放，也不写回组件内部交互 */
+  readOnly?: boolean
+  /**
+   * T46a-3e：只读访客**尝试拖动**时回调一次（父层弹可读提示）。
+   * 为什么要它：只读时拖拽压根不进入流程，若不提示，用户看到的是"拖了完全没反应"，
+   * 与"卡顿/坏了"无从区分。
+   */
+  onReadOnlyDragAttempt?: () => void
   /** 转自由画布（P1-13）：由画布自己持有 DOM 与缩放状态，向父组件暴露测量能力 */
   ref?: React.Ref<DesignCanvasHandle>
 }
@@ -60,12 +68,59 @@ export interface DesignCanvasHandle {
   measureFreeze(parentId: string, childIds: string[]): FreezeMeasureResult
 }
 
-export default function DesignCanvas({ design, store, selectedIds, onSelectionChange, onDropComponent, showGrid = true, onContextMenu, highlightIds, ref }: DesignCanvasProps) {
+/** 队友停止移动多久之后淡出光标（避免"幽灵光标"一直停在原地；再动就会回来） */
+const CURSOR_FADE_MS = 4000
+
+export default function DesignCanvas({ design, store, selectedIds, onSelectionChange, onDropComponent, showGrid = true, onContextMenu, highlightIds, readOnly = false, onReadOnlyDragAttempt, ref }: DesignCanvasProps) {
   const [view, setView] = useState<ViewTransform>(DEFAULT_VIEW)
+  /** 2026-09-16：队友光标（presence 的 cursor 字段；订阅 awareness 变化后重算） */
+  const [remoteCursors, setRemoteCursors] = useState(store.remoteCursors)
   const dragRef = useRef<DragState | null>(null)
   const resizeRef = useRef<ResizeState | null>(null)
   const panRef = useRef<{ x: number; y: number } | null>(null)
+  /** 只读拖拽提示：记录按下点，位移超过阈值才提示（避免单纯点选也弹） */
+  const readOnlyHintRef = useRef<{ x: number; y: number; fired: boolean } | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
+
+  /**
+   * 光标淡出：awareness 只在状态**变化**时推送，队友停手后不会再收到消息——
+   * 所以要在本地记"最后一次看到的位置/时间"，超过 CURSOR_FADE_MS 就不画（再动会立刻回来）。
+   *
+   * 记账必须发生在 **setState 之前**：否则本次渲染用的还是旧时间戳，"
+   * 队友又动了"要等下一个 tick 才显示出来（曾经踩过）。
+   * 每秒一次 tick 只驱动重算，不产生网络流量。
+   */
+  const cursorSeenRef = useRef(new Map<number, { pos: string; at: number }>())
+  const [, forceCursorTick] = useState(0)
+
+  // 队友光标：订阅 awareness 变化（subscribePresence 会立即回调一次，无需额外初始化）
+  useEffect(() => {
+    return store.subscribePresence(() => {
+      const cursors = store.remoteCursors
+      const now = Date.now()
+      const seen = cursorSeenRef.current
+      const alive = new Set<number>()
+      for (const c of cursors) {
+        alive.add(c.clientId)
+        const pos = `${c.x},${c.y}`
+        const prev = seen.get(c.clientId)
+        // 位置变了 → 刷新时间戳；没变 → 保留原时间戳（用于淡出计时）
+        if (!prev || prev.pos !== pos) seen.set(c.clientId, { pos, at: now })
+      }
+      for (const id of [...seen.keys()]) if (!alive.has(id)) seen.delete(id)
+      setRemoteCursors(cursors)
+    })
+  }, [store])
+
+  useEffect(() => {
+    const timer = window.setInterval(() => forceCursorTick((n) => n + 1), 1000)
+    return () => window.clearInterval(timer)
+  }, [])
+
+  const visibleCursors = remoteCursors.filter((c) => {
+    const seen = cursorSeenRef.current.get(c.clientId)
+    return !seen || Date.now() - seen.at < CURSOR_FADE_MS
+  })
 
   // 转自由画布：测量必须走画布自己的 DOM 与缩放（屏幕像素 ÷ view.scale）
   useImperativeHandle(
@@ -135,6 +190,56 @@ export default function DesignCanvas({ design, store, selectedIds, onSelectionCh
   // ---- 选中（统一在 pointerdown 处理，避免 click 二次切换）----
 
   // ---- 节点拖拽 ----
+  /** T46a-3e：只读访客仍可选中节点查看属性，但不开始拖拽（选中不是写操作） */
+  const handleNodeSelectOnly = useCallback(
+    (e: React.PointerEvent, id: string) => {
+      e.stopPropagation()
+      const armed = { x: e.clientX, y: e.clientY, fired: false }
+      readOnlyHintRef.current = armed
+      // 只读路径不 setPointerCapture，节点/容器两处的 move 都可能被时序吃掉（实测偶发漏报）。
+      // 这里挂一个窗口级一次性监听：任何超过 4px 的移动都会给出反馈，pointerup 自清。
+      const onMove = (ev: PointerEvent) => {
+        if (armed.fired) return
+        if (Math.abs(ev.clientX - armed.x) > 4 || Math.abs(ev.clientY - armed.y) > 4) {
+          armed.fired = true
+          onReadOnlyDragAttempt?.()
+        }
+      }
+      const cleanup = () => {
+        window.removeEventListener('pointermove', onMove)
+        window.removeEventListener('pointerup', cleanup)
+      }
+      window.addEventListener('pointermove', onMove)
+      window.addEventListener('pointerup', cleanup)
+      if (e.ctrlKey || e.metaKey) {
+        const next = new Set(selectedIds)
+        if (next.has(id)) next.delete(id)
+        else next.add(id)
+        onSelectionChange(next)
+        return
+      }
+      onSelectionChange(new Set([id]))
+    },
+    [onSelectionChange, onReadOnlyDragAttempt, selectedIds],
+  )
+
+  /**
+   * T46a-3e：只读访客尝试拖动节点 → 给一次可读反馈（一次手势只提示一次）。
+   * 节点自身与画布容器两处都调用：正常拖拽靠容器 setPointerCapture 保证 move 稳定到达容器，
+   * 只读路径不捕获指针，若只依赖容器这一路，节点上的拖动会“拖了没反应”。
+   */
+  const notifyReadOnlyDragMove = useCallback(
+    (e: React.PointerEvent) => {
+      const hint = readOnlyHintRef.current
+      if (!hint || hint.fired) return
+      if (Math.abs(e.clientX - hint.x) > 4 || Math.abs(e.clientY - hint.y) > 4) {
+        hint.fired = true
+        onReadOnlyDragAttempt?.()
+      }
+    },
+    [onReadOnlyDragAttempt],
+  )
+
   const handleNodePointerDown = useCallback(
     (e: React.PointerEvent, id: string) => {
       e.stopPropagation()
@@ -201,6 +306,8 @@ export default function DesignCanvas({ design, store, selectedIds, onSelectionCh
       const el = containerRef.current
       if (!el) return
       const rect = el.getBoundingClientRect()
+      // 2026-09-16：光标 presence——任何指针移动都广播世界坐标（节流在 store 内）
+      store.publishCursor(viewportToCanvas(e.clientX - rect.left, e.clientY - rect.top, view))
 
       // 缩放（resize 手柄）
       const resize = resizeRef.current
@@ -228,6 +335,9 @@ export default function DesignCanvas({ design, store, selectedIds, onSelectionCh
         }))
         return
       }
+
+      // 只读：拖动不生效，但给一次明确反馈（否则"拖了没反应"会被当成卡顿）
+      notifyReadOnlyDragMove(e)
 
       // 空白平移：先算 delta（闭包内快照），再 setView —— 避免 updater 延迟执行时读到已更新的 ref（白屏根因）
       if (panRef.current) {
@@ -286,6 +396,7 @@ export default function DesignCanvas({ design, store, selectedIds, onSelectionCh
     dragRef.current = null
     resizeRef.current = null
     panRef.current = null
+    readOnlyHintRef.current = null
   }, [])
 
   // ---- 空白：平移 + 取消选中（节点 / 工具条之外均可平移，含画布白纸内空白）----
@@ -367,6 +478,7 @@ export default function DesignCanvas({ design, store, selectedIds, onSelectionCh
       }}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
+      onPointerLeave={() => store.publishCursor(null)}
       onPointerDown={handleBackgroundPointerDown}
       onDragOver={handleDragOver}
       onDrop={handleDrop}
@@ -398,13 +510,38 @@ export default function DesignCanvas({ design, store, selectedIds, onSelectionCh
             node={design}
             selectedIds={selectedIds}
             highlightIds={highlightIds}
-            onDragStart={handleNodePointerDown}
-            onResizeStart={handleResizeStart}
-            onComponentPropsChange={(id, key, value) =>
-              store.updateNode(id, (n) => ({ ...n, props: { ...(n.props ?? {}), [key]: value } }))
+            onDragStart={readOnly ? handleNodeSelectOnly : handleNodePointerDown}
+            onDragMoveAttempt={readOnly ? notifyReadOnlyDragMove : undefined}
+            onResizeStart={readOnly ? undefined : handleResizeStart}
+            onComponentPropsChange={
+              readOnly
+                ? undefined
+                : (id, key, value) =>
+                    store.updateNode(id, (n) => ({ ...n, props: { ...(n.props ?? {}), [key]: value } }))
             }
           />
         </div>
+        {/* 2026-09-16：队友光标（世界坐标系内绘制，跟着画布平移/缩放一起动） */}
+        {visibleCursors.map((c) => (
+          <div
+            key={c.clientId}
+            className="pointer-events-none absolute z-50 transition-opacity duration-500"
+            style={{ left: c.x, top: c.y }}
+            data-testid={`cursor-${c.clientId}`}
+          >
+            <svg width="14" height="18" viewBox="0 0 14 18" aria-hidden>
+              <path d="M1 1 L1 15 L5 11 L7.5 16.5 L10 15.2 L7.6 10 L12.5 10 Z" fill={c.color} stroke="#fff" strokeWidth="1" />
+            </svg>
+            <span
+              className="ml-2 whitespace-nowrap rounded px-1.5 py-0.5 text-[10px] font-medium text-white shadow"
+              style={{ background: c.color }}
+            >
+              {c.name}
+              {/* "正在编辑哪段文案"：队友选中的元素描述 */}
+              {c.label && <span className="ml-1 opacity-90">· {c.label}</span>}
+            </span>
+          </div>
+        ))}
       </div>
 
       {/* 缩放工具条 */}

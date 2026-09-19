@@ -1,9 +1,7 @@
 import { useState } from 'react'
 import { ChevronDown, ChevronRight, Copy, Eye, EyeOff, Pencil, Plus, Trash2 } from 'lucide-react'
 
-import { genId } from '@/design/tree'
-
-import { componentRegistry } from '@/components/canvas/registry'
+import { componentRegistry, createPrimitiveNode } from '@/components/canvas/registry'
 import { cn } from '@/lib/utils'
 import type { DesignNode } from '@/design/types'
 import type { DesignStore } from '@/yjs/designStore'
@@ -59,14 +57,26 @@ export default function LayerTree({ design, selectedIds, onSelect, store }: Laye
     const target = findNodeById(design, targetId)
     const source = findNodeById(design, sourceId)
     if (!target || !source) return
-    const targetHasChildren = !!target.children?.length && target.type !== 'text'
-    const sourceParent = findParentOf(design, sourceId)
-    if (targetHasChildren) {
+    // 2026-09-17 修两处（都是"拖了没反应"，而行还是高亮的）：
+    // ① 目标行是**容器**（frame/group）→ 移入其末尾。旧实现要求"目标已经有 children"，
+    //    于是**空容器**进不去（被当成叶子）；
+    // ② 目标行是叶子 → 插到它**旁边**：同父 = 同级重排；跨父 = 移到目标所在父级的同一位置。
+    //    旧实现只在同父时处理，跨父拖到叶子什么都不做。
+    const isContainerTarget = target.type === 'frame' || target.type === 'group'
+    if (isContainerTarget) {
       store.moveNodeTo(sourceId, targetId, (target.children ?? []).length)
-    } else if (sourceParent && sourceParent.id === findParentOf(design, targetId)?.id) {
-      const siblings = sourceParent.children ?? []
-      const toIndex = siblings.findIndex((s) => s.id === targetId)
-      store.moveChild(sourceId, sourceParent.id, toIndex >= 0 ? toIndex : siblings.length)
+      return
+    }
+    const targetParent = findParentOf(design, targetId)
+    if (!targetParent) return
+    const siblings = targetParent.children ?? []
+    const targetIndex = siblings.findIndex((s) => s.id === targetId)
+    const index = targetIndex >= 0 ? targetIndex : siblings.length
+    const sourceParent = findParentOf(design, sourceId)
+    if (sourceParent && sourceParent.id === targetParent.id) {
+      store.moveChild(sourceId, targetParent.id, index)
+    } else {
+      store.moveNodeTo(sourceId, targetParent.id, index)
     }
   }
 
@@ -215,23 +225,29 @@ export default function LayerTree({ design, selectedIds, onSelect, store }: Laye
           >
             <Pencil className="h-3 w-3" /> 重命名
           </button>
-          {['frame', 'group'].includes(ctxMenuNodeType(ctxMenu.nodeId, design)) && (
-            <button
-              className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-accent"
-              data-testid="layer-ctx-insert"
-              onClick={() => {
-                store.insertChild(ctxMenu.nodeId, {
-                  id: genId('text'),
-                  type: 'text',
-                  props: { text: '新文本' },
-                  style: { fontSize: 14 },
-                })
-                setCtxMenu(null)
-              }}
-            >
-              <Plus className="h-3 w-3" /> 插入子级
-            </button>
-          )}
+          {/* 插入子级仅对容器展示。group 出现在判断里**有意保留**：旧稿存在 group 容器，
+              其下插入子级的能力不能随"新稿不再产生 group"（后端 repair 归一化）一起被当死代码清掉。
+              三个插入项与组件库面板「基础元素」共用 createPrimitiveNode，术语逐字一致。 */}
+          {['frame', 'group'].includes(ctxMenuNodeType(ctxMenu.nodeId, design)) &&
+            (
+              [
+                ['text', '插入文本'],
+                ['rect', '插入色块'],
+                ['frame', '插入容器'],
+              ] as const
+            ).map(([primitive, label]) => (
+              <button
+                key={primitive}
+                className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-accent"
+                data-testid={`layer-ctx-insert-${primitive}`}
+                onClick={() => {
+                  store.insertChild(ctxMenu.nodeId, createPrimitiveNode(primitive))
+                  setCtxMenu(null)
+                }}
+              >
+                <Plus className="h-3 w-3" /> {label}
+              </button>
+            ))}
           <div className="my-1 border-t" />
           <button
             className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-destructive hover:bg-accent"

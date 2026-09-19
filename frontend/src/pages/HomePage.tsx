@@ -8,6 +8,9 @@ import { Link, useNavigate } from 'react-router-dom'
 import { ChevronDown, ChevronUp, Clock, FilePlus2, FolderOpen, LayoutTemplate, LogOut, Trash2 } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
+import DesignThumbnail from '@/components/chat/DesignThumbnail'
+import WorkspaceBadges from '@/components/collab/WorkspaceBadges'
+import type { DesignNode } from '@/design/types'
 import { api, clearAuth, getUsername } from '@/lib/api'
 import { loadLatestDraft } from '@/lib/designSession'
 import { randomSessionKey } from '@/lib/sessionKey'
@@ -25,6 +28,14 @@ interface DesignMeta {
   node_count: number
   width: number
   height: number
+  /** 验收补（T46a）：所属工作区名与我在其中的角色 */
+  workspace_name?: string | null
+  my_role?: string | null
+  /** 谁共享给我的（我自己建的稿件为空） */
+  owner_name?: string | null
+  is_mine?: boolean
+  /** T36：with_preview=true 时后端附带的设计树（渲染缩略图用） */
+  design?: DesignNode
 }
 
 interface TemplateMeta {
@@ -53,7 +64,7 @@ export default function HomePage() {
     setMoreError('')
     try {
       const r = await api<{ designs: DesignMeta[]; total?: number }>(
-        `/api/designs?limit=${RECENT_DESIGN_LIMIT}&offset=0`,
+        `/api/designs?limit=${RECENT_DESIGN_LIMIT}&offset=0&with_preview=true`,
       )
       const list = r.designs ?? []
       setDesigns(list)
@@ -88,7 +99,7 @@ export default function HomePage() {
       let known = total
       while (acc.length < known) {
         const r = await api<{ designs: DesignMeta[]; total?: number }>(
-          `/api/designs?limit=${RECENT_FETCH_CHUNK}&offset=${acc.length}`,
+          `/api/designs?limit=${RECENT_FETCH_CHUNK}&offset=${acc.length}&with_preview=true`,
         )
         const page = r.designs ?? []
         if (page.length === 0) break
@@ -140,16 +151,11 @@ export default function HomePage() {
   return (
     <div className="min-h-screen bg-gradient-to-b from-muted/60 via-background to-background">
       <header className="sticky top-0 z-20 flex h-14 items-center justify-between border-b bg-background/85 px-6 backdrop-blur">
-        <div className="flex items-center gap-3">
-          <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-primary to-secondary text-sm font-bold text-primary-foreground shadow-sm">
-            A
-          </span>
-          <span className="text-base font-semibold tracking-tight">AI 原生设计工作台</span>
-          <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">v0.2</span>
-        </div>
+        {/* T36：品牌区已由全局侧边栏承担（避免双标题）；此栏保留用户/退出操作与 testid 不变 */}
+        <div className="text-sm text-muted-foreground">让 AI 从一句话开始，产出可编辑、可交付的设计稿</div>
         <div className="flex items-center gap-4 text-sm text-muted-foreground">
           <span data-testid="home-user" className="font-medium text-foreground/80">{username}</span>
-          <Link to="/api-config" className="transition hover:text-foreground">API 配置</Link>
+          <Link to="/settings" className="transition hover:text-foreground">设置</Link>
           <button
             className="flex items-center gap-1 transition hover:text-foreground"
             data-testid="home-logout"
@@ -164,11 +170,13 @@ export default function HomePage() {
       </header>
 
       <main className="mx-auto flex max-w-5xl flex-col gap-10 px-6 py-10">
-        {/* 首屏主张：一句话说明产品价值（纯视觉层，不承载交互） */}
-        <section className="rounded-2xl border bg-gradient-to-br from-primary/[0.07] via-background to-secondary/[0.07] px-6 py-5">
-          <h1 className="text-xl font-semibold tracking-tight">用一句话，生成可运行的 UI 设计稿</h1>
-          <p className="mt-1.5 max-w-2xl text-sm text-muted-foreground">
-            自然语言 → 高保真设计稿 → 可编辑画布 → React 工程代码。内置 8 套模板、合规检查、多人协作与一键导出。
+        {/* 首屏主张（T36：按样张 v2 提升为 Hero——渐变大标题 + 留白节奏，不承载交互） */}
+        <section className="pt-2">
+          <h1 className="bg-gradient-to-r from-foreground via-primary/80 to-secondary bg-clip-text text-[34px] font-semibold leading-tight tracking-tight text-transparent">
+            用一句话，生成可运行的界面
+          </h1>
+          <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
+            描述需求即可得到可编辑的高保真设计稿；支持协作、规范校验与一键导出 React 工程。
           </p>
         </section>
 
@@ -176,21 +184,22 @@ export default function HomePage() {
         {hasDraft && (
           <section>
             <button
-              className="flex w-full items-center gap-3 rounded-xl border bg-background p-5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-primary/50 hover:shadow-md"
+              className="flex w-full items-center gap-4 rounded-2xl border border-border bg-card p-5 text-left transition hover:-translate-y-0.5 hover:border-primary/40"
               data-testid="home-resume"
               onClick={() =>
                 openWorkspace(draftSession ? `?session=${draftSession}&from=draft` : '?from=draft')
               }
             >
-              <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-gradient-to-br from-primary/15 to-secondary/15 text-primary">
-                <Clock className="h-5 w-5" />
+              <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-primary/30 bg-primary/15 text-primary">
+                <Clock className="h-6 w-6" />
               </span>
               <span>
-                <span className="block text-sm font-medium">继续上次编辑</span>
+                <span className="block text-[15px] font-semibold">继续上次编辑</span>
                 <span className="text-xs text-muted-foreground">
                   {draftSession ? `回到会话 ${draftSession}` : '从上次的草稿继续，不会丢失'}
                 </span>
               </span>
+              <span className="ml-auto text-xs text-muted-foreground">按上次状态接着改 →</span>
             </button>
           </section>
         )}
@@ -204,31 +213,35 @@ export default function HomePage() {
             新建
             <span className="text-xs font-normal text-muted-foreground">空白起步，或一键体验完整功能</span>
           </h2>
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-2 gap-4">
             <button
-              className="group flex flex-col items-center gap-2 rounded-xl border border-dashed bg-background p-6 transition hover:-translate-y-0.5 hover:border-primary/60 hover:bg-primary/[0.03] hover:shadow-md"
+              className="group flex items-center gap-4 rounded-2xl border border-border bg-card p-5 text-left transition hover:-translate-y-0.5 hover:border-primary/40"
               data-testid="home-new-blank"
               onClick={() => {
                 // 空白画布（缺陷 4）：新建唯一 sessionId + 全新空会话（不继承任何历史）
                 openWorkspace(`?session=${randomSessionKey()}&from=blank`)
               }}
             >
-              <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-primary/15 to-secondary/15 text-primary transition group-hover:scale-105">
+              <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-primary/30 bg-primary/15 text-primary transition group-hover:scale-105">
                 <FilePlus2 className="h-6 w-6" />
               </span>
-              <span className="text-sm font-medium">空白画布</span>
-              <span className="text-xs text-muted-foreground">自由布局，从零开始</span>
+              <span>
+                <span className="block text-[15px] font-semibold">空白画布</span>
+                <span className="text-xs text-muted-foreground">自由布局，从零开始</span>
+              </span>
             </button>
             <button
-              className="group flex flex-col items-center gap-2 rounded-xl border border-dashed bg-background p-6 transition hover:-translate-y-0.5 hover:border-primary/60 hover:bg-primary/[0.03] hover:shadow-md"
+              className="group flex items-center gap-4 rounded-2xl border border-border bg-card p-5 text-left transition hover:-translate-y-0.5 hover:border-primary/40"
               data-testid="home-new-demo"
               onClick={() => openWorkspace(`?from=demo&demo=${DEMO_DESIGNS[0].id}`)}
             >
-              <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-muted text-muted-foreground transition group-hover:scale-105">
+              <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-muted text-muted-foreground transition group-hover:scale-105">
                 <FolderOpen className="h-6 w-6" />
               </span>
-              <span className="text-sm font-medium">示例优惠券页</span>
-              <span className="text-xs text-muted-foreground">快速体验完整功能</span>
+              <span>
+                <span className="block text-[15px] font-semibold">示例优惠券页</span>
+                <span className="text-xs text-muted-foreground">快速体验完整功能</span>
+              </span>
             </button>
           </div>
         </section>
@@ -246,11 +259,17 @@ export default function HomePage() {
             {templates.map((t) => (
               <button
                 key={t.key}
-                className="rounded-xl border bg-background px-3 py-4 text-center text-sm font-medium transition hover:-translate-y-0.5 hover:border-primary/50 hover:shadow-md"
+                className="overflow-hidden rounded-xl border border-border bg-card text-left transition hover:-translate-y-0.5 hover:border-primary/40"
                 data-testid={`home-template-${t.key}`}
                 onClick={() => openWorkspace(`?template=${t.key}`)}
               >
-                {t.name}
+                {/* T36：模板卡加迷你预览（纯装饰骨架，不依赖外部图片） */}
+                <span className="block h-[68px] bg-muted/40 p-3">
+                  <span className="mb-1.5 block h-1.5 w-2/5 rounded-full bg-foreground/15" />
+                  <span className="mb-1.5 block h-1.5 w-3/5 rounded-full bg-foreground/10" />
+                  <span className="block h-3 w-10 rounded-full bg-primary/70" />
+                </span>
+                <span className="block border-t border-border px-3 py-2 text-xs text-muted-foreground">{t.name}</span>
               </button>
             ))}
           </div>
@@ -286,28 +305,46 @@ export default function HomePage() {
                 {visibleDesigns.map((d) => (
                   <div
                     key={d.id}
-                    className="group relative overflow-hidden rounded-xl border bg-background p-4 shadow-sm transition hover:-translate-y-0.5 hover:border-primary/50 hover:shadow-md"
+                    className="group relative overflow-hidden rounded-xl border border-border bg-card transition hover:-translate-y-0.5 hover:border-primary/40"
                   >
-                    <span className="absolute inset-x-0 top-0 h-0.5 bg-gradient-to-r from-primary/60 to-secondary/60 opacity-0 transition group-hover:opacity-100" />
                     <button
                       className="w-full text-left"
                       data-testid={`home-design-${d.id}`}
                       onClick={() => openWorkspace(`?design=${d.id}`)}
                     >
-                      <div className="text-sm font-medium">{d.name}</div>
-                      <div className="mt-1 text-xs text-muted-foreground">
-                        {d.node_count} 个节点 · {d.width > 0 ? `${Math.round(d.width)}×${Math.round(d.height)}` : '自适应'}
+                      {/* T36：缩略预览（后端 with_preview 返回设计树；未返回时退化为等高占位，不空白塌陷） */}
+                      <div className="h-[122px] overflow-hidden bg-muted/40 px-3 py-3" data-testid={`home-design-thumb-${d.id}`}>
+                        {d.design ? (
+                          <DesignThumbnail design={d.design} />
+                        ) : (
+                          <div className="h-full w-full rounded-lg border border-dashed border-border" />
+                        )}
                       </div>
-                      <div className="mt-0.5 text-[11px] text-muted-foreground/70">{fmtTime(d.updated_at)}</div>
+                      <div className="border-t border-border px-3 py-2">
+                        <div className="truncate text-[13px] font-medium">{d.name}</div>
+                        <div className="mt-0.5 text-[11px] text-muted-foreground">
+                          {d.node_count} 个节点 · {fmtTime(d.updated_at)}
+                        </div>
+                        {/* 验收补：工作区 + 我的角色（别人共享给我的稿件在这里才认得出来） */}
+                        <WorkspaceBadges
+                          workspaceName={d.workspace_name}
+                          role={d.my_role}
+                          sharedBy={d.is_mine === false ? d.owner_name : null}
+                          testIdPrefix={`home-design-${d.id}`}
+                        />
+                      </div>
                     </button>
-                    <button
-                      className="absolute right-2 top-2 rounded p-1 text-muted-foreground opacity-0 hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100"
-                      data-testid={`home-design-delete-${d.id}`}
-                      title="删除"
-                      onClick={() => handleDelete(d.id)}
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
+                    {/* 只读访客不给删除入口（后端也会 403，不给假希望） */}
+                    {d.my_role !== 'viewer' && (
+                      <button
+                        className="absolute right-2 top-2 rounded p-1 text-muted-foreground opacity-0 hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100"
+                        data-testid={`home-design-delete-${d.id}`}
+                        title="删除"
+                        onClick={() => handleDelete(d.id)}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    )}
                   </div>
                 ))}
               </div>

@@ -23,13 +23,15 @@ export interface FollowupQuestion {
 
 const MODE_KEY = 'design-followup-mode'
 
+import { readStorage, writeStorage } from './storage'
+
 export function getFollowupMode(): FollowupMode {
-  const v = localStorage.getItem(MODE_KEY)
+  const v = readStorage(MODE_KEY)
   return v === 'concise' || v === 'detailed' || v === 'off' ? v : 'smart'
 }
 
 export function setFollowupMode(mode: FollowupMode) {
-  localStorage.setItem(MODE_KEY, mode)
+  writeStorage(MODE_KEY, mode)
 }
 
 /** Q3 快捷指令检测：返回本次的覆盖行为（优先级：跳过追问 > 详细 > 精简） */

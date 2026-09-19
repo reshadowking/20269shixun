@@ -8,7 +8,7 @@ import { componentRegistry } from '@/components/canvas/registry'
 import type { AssetMap } from '@/export/inlineAssets'
 import type { ExportElement } from '@/components/canvas/types'
 import type { DesignNode } from '@/design/types'
-import { escapeHtml } from '@/design/escape'
+import { escapeHtml, escapeJsxText } from '@/design/escape'
 import { styleToCss } from '@/design/styleToCss'
 
 /** style 转 React 内联样式对象字面量。
@@ -16,6 +16,17 @@ import { styleToCss } from '@/design/styleToCss'
  * 键/值引号由 JSON 规则转义，避免手工引号替换把值里的 ' 变成裸字符串边界（注入面）。 */
 function styleLiteral(style: DesignNode['style']): string {
   return JSON.stringify(styleToCss(style))
+}
+
+/**
+ * 把「已是 JSON 对象的字符串」拼成 React 的 style 表达式：`style={{"color":"#000"}}`。
+ *
+ * ⚠️ 一定要走这个函数，别手写 `style={{${x}}}`——`JSON.stringify` 的结果**自带一层花括号**，
+ * 手写会多出一层变成 `style={{{…}}}`，产物直接**编译不过**（TS1136/TS1005）。
+ * 2026-09-16 验收方用 tsc 实测抓到这个 P0，本文件当时 5 处模板都写错了。
+ */
+function reactStyleAttr(jsonStyle: string): string {
+  return jsonStyle === '{}' ? '' : ` style={${jsonStyle}}`
 }
 
 const VOID_TAGS = new Set(['img', 'input', 'hr', 'br'])
@@ -29,14 +40,14 @@ function resolveAttr(name: string, value: string, assets?: AssetMap): string {
 /** B1：React 序列化 ExportElement——根元素（componentType 有值）带 data-component；子元素递归不带 */
 function serializeReactElement(el: ExportElement, componentType?: string, assets?: AssetMap): string {
   const dc = componentType ? ` data-component="${componentType}"` : ''
-  const styleStr = Object.keys(el.style).length > 0 ? ` style={{${JSON.stringify(el.style)}}}` : ''
+  const styleStr = Object.keys(el.style).length > 0 ? ` style={${JSON.stringify(el.style)}}` : ''
   const attrsStr = Object.entries(el.attrs)
     .map(([k, v]) => ` ${k}="${escapeHtml(resolveAttr(k, v, assets))}"`)
     .join('')
   const inner = el.children
     ? el.children.map((c) => serializeReactElement(c, undefined, assets)).join('')
     : el.text !== undefined
-      ? escapeHtml(el.text)
+      ? escapeJsxText(el.text)
       : ''
   const open = `<${el.tag}${dc}${styleStr}${attrsStr}`
   if (VOID_TAGS.has(el.tag)) return `${open} />`
@@ -49,13 +60,13 @@ function componentTag(node: DesignNode, assets?: AssetMap): string {
   if (def?.buildExport) return serializeReactElement(def.buildExport(node), node.componentType!, assets)
   const props = node.props ?? {}
   const style = styleLiteral(node.style)
-  const text = escapeHtml(typeof props.text === 'string' ? props.text : '')
+  const text = escapeJsxText(typeof props.text === 'string' ? props.text : '')
   // B1-2 全量迁移：所有组件经 registry.buildExport 序列化，此处仅为未注册组件兜底（契约测试保证不会发生）
   const ctitle = typeof props.title === 'string' ? props.title : ''
   const ccontent = typeof props.content === 'string' ? props.content : ''
   const ctext = text ? `<p>${text}</p>` : ''
-  const inner = `${ctext}${ctitle ? `<h3>${escapeHtml(ctitle)}</h3>` : ''}${ccontent ? `<p>${escapeHtml(ccontent)}</p>` : ''}`
-  return `<div data-component="${node.componentType ?? 'card'}" style={{${style}}}>${inner}</div>`
+  const inner = `${ctext}${ctitle ? `<h3>${escapeJsxText(ctitle)}</h3>` : ''}${ccontent ? `<p>${escapeJsxText(ccontent)}</p>` : ''}`
+  return `<div data-component="${node.componentType ?? 'card'}"${reactStyleAttr(style)}>${inner}</div>`
 }
 
 /** 递归生成节点 JSX（frame/text/component） */
@@ -64,8 +75,8 @@ function nodeToJsx(node: DesignNode, depth: number, assets?: AssetMap): string {
   const style = styleLiteral(node.style)
 
   if (node.type === 'text') {
-    const text = escapeHtml(typeof node.props?.text === 'string' ? node.props.text : '')
-    return `${pad}<div style={{${style}}}>${text}</div>`
+    const text = escapeJsxText(typeof node.props?.text === 'string' ? node.props.text : '')
+    return `${pad}<div${reactStyleAttr(style)}>${text}</div>`
   }
   if (node.type === 'component') {
     const tag = componentTag(node, assets)
@@ -79,8 +90,8 @@ function nodeToJsx(node: DesignNode, depth: number, assets?: AssetMap): string {
     .filter((c) => !c.hidden)
     .map((c) => nodeToJsx(c, depth + 1, assets))
     .join('\n')
-  if (!children) return `${pad}<div style={{${style}}}></div>`
-  return `${pad}<div style={{${style}}}>\n${children}\n${pad}</div>`
+  if (!children) return `${pad}<div${reactStyleAttr(style)}></div>`
+  return `${pad}<div${reactStyleAttr(style)}>\n${children}\n${pad}</div>`
 }
 
 /**

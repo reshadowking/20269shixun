@@ -9,13 +9,14 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
 
 from ..db import get_db
 from ..design.validator import validate_design_safe
-from ..models import Design, User, Version
+from ..models import ChatSession, Design, User, Version
 from ..security import get_current_user
+from ..services.sessions import DEFAULT_TITLE as SESSION_DEFAULT_TITLE
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["designs"])
@@ -23,6 +24,14 @@ router = APIRouter(tags=["designs"])
 MAX_VERSIONS = 30
 # 入库前体积上限（P0-3 存储边界防线；schema 单字段已限 5000 字符/500 子节点，此为总量兜底）
 MAX_DESIGN_JSON_BYTES = 2_000_000
+
+# 列表排序白名单（不开放任意列排序：避免"按 owner_id 排"这类把内部字段暴露成接口语义）
+DESIGN_SORTS = {
+    "updated_desc": (Design.updated_at.desc(), Design.id.desc()),
+    "updated_asc": (Design.updated_at.asc(), Design.id.asc()),
+    "name_asc": (Design.name.asc(), Design.id.asc()),
+    "created_desc": (Design.created_at.desc(), Design.id.desc()),
+}
 
 
 def _validate_design_payload(design: dict) -> None:
@@ -46,10 +55,63 @@ def _owner_id(db, username: str) -> int:
     return user.id
 
 
+def _bind_session(db, owner_id: int, session_key: str, design: Design) -> None:
+    """把"这张稿件当初用的是哪条会话"写进**同一个事务**（2026-09-18）。
+
+    此前是前端在保存成功后再发一次 `PATCH /api/sessions/{key}`，而且 `.catch(() => {})`
+    静默吞错——一次网络抖动就会让那条会话永远找不到，用户重开项目看到的就是"对话被清空"
+    （正是缺陷 5 的同一类症状，只是触发条件更隐蔽）。并进创建请求后：
+    设计、版本、会话绑定一次落库，要么都成、要么都不成。
+
+    会话行不存在时就地新建，**不调 `get_or_create_session`**——那个函数内部会 commit，
+    会把这个还没写版本的 design 一起提交，破坏 P0-5 的"版本撞号整体重试"。
+    并发下若撞 `uq_chat_sessions_owner_key`，外层已有 IntegrityError → 回滚重试一次，
+    重试时会走"已存在"分支照常绑定。
+
+    他人会话不会被绑：查询按 owner 过滤，查不到就是"给当前用户新建同名会话"（无害）。
+    """
+    session = db.execute(
+        select(ChatSession).where(ChatSession.owner_id == owner_id, ChatSession.session_key == session_key)
+    ).scalar_one_or_none()
+    if session is None:
+        session = ChatSession(session_key=session_key, owner_id=owner_id, title=SESSION_DEFAULT_TITLE)
+        db.add(session)
+    session.design_id = design.id
+
+
 def _own_design(db, design_id: int, username: str) -> Design:
     design = db.get(Design, design_id)
-    if design is None or design.owner_id != _owner_id(db, username):
+    if design is None:
         raise HTTPException(status_code=404, detail="设计稿不存在或无权访问")
+    # T46a：可见性从"我是拥有者"改为"我是该稿所属工作区的成员"（无归属的老数据按创建人兜底）
+    from ..services.workspaces import role_of
+
+    me = _owner_id(db, username)
+    if design.workspace_id is None:
+        # 兼容期：稿件还没归属工作区时按"创建人"兜底——但创建人的**个人工作区成员**同样可见，
+        # 否则刚注册的第二个账号即便被邀请也读不到新稿（等启动迁移补上 workspace_id 后走上面那条分支）
+        from ..services.workspaces import personal_workspace_of
+
+        ws = personal_workspace_of(db, design.owner_id)
+        if design.owner_id != me and (ws is None or role_of(db, ws.id, me) is None):
+            raise HTTPException(status_code=404, detail="设计稿不存在或无权访问")
+        return design
+    if role_of(db, design.workspace_id, me) is None:
+        raise HTTPException(status_code=404, detail="设计稿不存在或无权访问")
+    return design
+
+
+def _writable_design(db, design_id: int, username: str) -> Design:
+    """写接口专用（保存 / 写版本 / 删除）：viewer 一律 403。
+
+    T46a-3e：协作网关只挡住了 Yjs 实时写入；**DB 保存是另一条写入口**——
+    只读访客若仍能 PUT，就等于"前端看着只读、接口其实能改"。这里按角色拦死。
+    """
+    from ..services.workspaces import WRITABLE_ROLES, role_for_design
+
+    design = _own_design(db, design_id, username)
+    if role_for_design(db, design, _owner_id(db, username)) not in WRITABLE_ROLES:
+        raise HTTPException(status_code=403, detail="只读访客：无权修改该设计稿（需要 owner/editor 权限）")
     return design
 
 
@@ -60,20 +122,30 @@ def _save_version(db, design: Design, note: str = "") -> None:
     ).scalar_one_or_none()
     version_no = (latest.version_no if latest else 0) + 1
     db.add(Version(design_id=design.id, version_no=version_no, design_json=design.design_json, note=note, operator=""))
-    # 清理超过上限的旧版本
-    old = db.execute(
-        select(Version)
-        .where(Version.design_id == design.id)
-        .order_by(Version.version_no.asc())
-        .offset(MAX_VERSIONS)
-    ).scalars().all()
-    for v in old:
-        db.delete(v)
+    # 清理超过上限的旧版本：保留**最新的** MAX_VERSIONS 版。
+    #
+    # 2026-09-17 实测修：原实现是 `order_by(version_no.asc()).offset(MAX_VERSIONS)` + delete，
+    # 而本项目的 `sessionmaker(autoflush=False)`（见 db.py）让这次 SELECT **看不到**刚 add 的
+    # 这一版 —— 于是升序跳过前 30 条后删掉的是"上一版"，刚写入的那版反而留下。
+    # 结果不是"保留最旧的 30 版"，而是历史出现**永久空洞**：
+    # 36 次保存后实测拿到 ['v34', 'v28', 'v27', …]（v29–v33 都被删了）。
+    # 现按版本号直接截断，不依赖 flush/可见性，也不需要新的异常路径：
+    cutoff = version_no - MAX_VERSIONS
+    if cutoff > 0:
+        old = db.execute(
+            select(Version).where(Version.design_id == design.id, Version.version_no <= cutoff)
+        ).scalars().all()
+        for v in old:
+            db.delete(v)
 
 
 class DesignCreate(BaseModel):
     name: str = Field(default="未命名设计稿", max_length=200)
     design: dict
+    # 2026-09-18：保存时一并绑定"这张稿件用哪条会话聊天"（可选，向后兼容）。
+    # 为什么要并进创建请求：见 `_bind_session` 的说明——此前是保存成功后的**第二个请求**，
+    # 而且前端 `.catch(() => {})` 静默吞错，一次网络抖动就让"重开项目还在聊的那条会话"永远找不到。
+    session_key: str | None = Field(default=None, min_length=3, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
 
 
 class DesignUpdate(BaseModel):
@@ -106,6 +178,8 @@ def _design_meta(design: Design) -> dict:
     return {
         "id": design.id,
         "name": design.name,
+        # T46a-4：让前端能显示/排除"当前工作区"（移动稿件时不能把自己移到自己）
+        "workspace_id": design.workspace_id,
         "updated_at": design.updated_at.isoformat() if design.updated_at else None,
         "created_at": design.created_at.isoformat() if design.created_at else None,
         "node_count": node_count,
@@ -118,28 +192,78 @@ def _design_meta(design: Design) -> dict:
 def list_designs(
     limit: int | None = Query(default=None, ge=1, le=200, description="返回条数上限；缺省返回全部"),
     offset: int = Query(default=0, ge=0, description="跳过的条数"),
+    with_preview: bool = Query(default=False, description="T36：为列表项附带设计树，用于缩略图预览"),
+    q: str | None = Query(default=None, max_length=64, description="按稿件名模糊搜索（不区分大小写）"),
+    sort: str = Query(default="updated_desc", description="排序：updated_desc/updated_asc/name_asc/created_desc"),
     _user: str = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    """当前用户的设计列表（不含 design_json 全文，轻量元数据）。
+    """**我能访问的**稿件列表（不含 design_json 全文，轻量元数据）。
 
     缺陷 2：新增可选 limit/offset 分页参数（缺省不传 = 返回全部，既有调用方行为不变）；
     响应新增 total（当前用户设计总数），既有字段不变。排序按 updated_at 倒序，id 倒序作稳定分页的次级键。
+    T36：`with_preview=true` 时额外返回 `design`（解析 design_json）——首页/我的项目用它渲染缩略图；
+    缺省 false，既有调用方的响应形状逐字不变。
+
+    2026-09-16（验收发现的缺口）：此前只按 `owner_id == 我` 过滤，于是"被移进我工作区的稿件"
+    权限上能看到、界面上却**发现不了**（我的项目显示 0 份），邀请流程在 UI 上等于断的。
+    现在改为"**我所在工作区的稿件** ∪ 我创建的稿件"，并逐行带上 `workspace_name` 与 `my_role`，
+    前端据此显示工作区徽标与角色（viewer 标只读）。
+
+    2026-09-16（列表搜索/排序）：新增 `q`（名称模糊搜索，**与访问作用域叠加**——搜不到别人的稿件）
+    与 `sort`（白名单，非法值 422 而不是静默忽略）；`total` 跟随 `q` 一起变，前端分页才不会错位。
     """
     owner = _owner_id(db, _user)
-    total = db.execute(
-        select(func.count()).select_from(Design).where(Design.owner_id == owner)
-    ).scalar_one()
-    stmt = (
-        select(Design)
-        .where(Design.owner_id == owner)
-        .order_by(Design.updated_at.desc(), Design.id.desc())
-        .offset(offset)
-    )
+    from ..models import Workspace, WorkspaceMember
+
+    memberships = {
+        row.workspace_id: row.role
+        for row in db.execute(
+            select(WorkspaceMember.workspace_id, WorkspaceMember.role).where(WorkspaceMember.user_id == owner)
+        )
+    }
+    # 老数据（workspace_id 为空）仍按"创建人"兜底；启动迁移会把它们归入个人工作区，这里只是双保险
+    conds = [Design.owner_id == owner]
+    if memberships:
+        conds.append(Design.workspace_id.in_(list(memberships)))
+    scope = or_(*conds)
+    if q and q.strip():
+        scope = and_(scope, func.lower(Design.name).like(f"%{q.strip().lower()}%"))
+
+    if sort not in DESIGN_SORTS:
+        raise HTTPException(status_code=422, detail=f"sort 必须是 {'/'.join(DESIGN_SORTS)} 之一")
+    order_by = DESIGN_SORTS[sort]
+
+    total = db.execute(select(func.count()).select_from(Design).where(scope)).scalar_one()
+    stmt = select(Design).where(scope).order_by(*order_by).offset(offset)
     if limit is not None:
         stmt = stmt.limit(limit)
     designs = db.execute(stmt).scalars().all()
-    return {"designs": [_design_meta(d) for d in designs], "total": total}
+    page_ws_ids = {d.workspace_id for d in designs if d.workspace_id is not None}
+    ws_names = (
+        dict(db.execute(select(Workspace.id, Workspace.name).where(Workspace.id.in_(page_ws_ids))).all())
+        if page_ws_ids
+        else {}
+    )
+    # 2026-09-16：卡片要能说清"谁共享给我的"——只标工作区名与角色还不够（协作者一多就分不清来源）
+    owner_ids = {d.owner_id for d in designs if d.owner_id}
+    owner_names = (
+        dict(db.execute(select(User.id, User.username).where(User.id.in_(owner_ids))).all()) if owner_ids else {}
+    )
+    rows = []
+    for d in designs:
+        meta = _design_meta(d)
+        meta["workspace_name"] = ws_names.get(d.workspace_id) if d.workspace_id else None
+        meta["my_role"] = memberships.get(d.workspace_id) if d.workspace_id else ("owner" if d.owner_id == owner else None)
+        meta["owner_name"] = owner_names.get(d.owner_id)
+        meta["is_mine"] = d.owner_id == owner
+        if with_preview:
+            try:
+                meta["design"] = json.loads(d.design_json or "{}")
+            except json.JSONDecodeError:
+                meta["design"] = {}
+        rows.append(meta)
+    return {"designs": rows, "total": total}
 
 
 @router.post("/api/designs")
@@ -148,17 +272,26 @@ def create_design(req: DesignCreate, _user: str = Depends(get_current_user), db=
 
     P0-5：并发写版本撞号（唯一约束）时整体重试一次——rollback 会连同 design 写入一起回滚，
     必须重跑整个创建流程而非只重写版本号。
+
+    2026-09-18：带上 `session_key` 时，**同一个事务**里把会话绑定到这张稿件（对话随项目留存的半边）。
     """
     _validate_design_payload(req.design)
     owner_id = _owner_id(db, _user)
+    # T46a-4：新稿件直接归属创建人的个人工作区（此前 workspace_id 为空，只靠"创建人兜底"判定可见性）
+    from ..services.workspaces import create_personal_workspace, personal_workspace_of
+
+    workspace = personal_workspace_of(db, owner_id) or create_personal_workspace(db, owner_id, _user)
     for attempt in (1, 2):
         design = Design(
             name=req.name,
             owner_id=owner_id,
+            workspace_id=workspace.id,
             design_json=json.dumps(req.design, ensure_ascii=False),
         )
         db.add(design)
         db.flush()
+        if req.session_key:
+            _bind_session(db, owner_id, req.session_key, design)
         _save_version(db, design)
         try:
             db.commit()
@@ -190,7 +323,7 @@ def update_design(design_id: int, req: DesignUpdate, _user: str = Depends(get_cu
     必须重跑"重查设计 → 应用变更 → 写版本"整个流程，避免在旧数据上重复写版本。
     """
     for attempt in (1, 2):
-        design = _own_design(db, design_id, _user)
+        design = _writable_design(db, design_id, _user)
         if req.name is not None:
             design.name = req.name
         if req.design is not None:
@@ -210,11 +343,42 @@ def update_design(design_id: int, req: DesignUpdate, _user: str = Depends(get_cu
 @router.delete("/api/designs/{design_id}")
 def delete_design(design_id: int, _user: str = Depends(get_current_user), db=Depends(get_db)):
     """删除设计（连带历史版本）。"""
-    design = _own_design(db, design_id, _user)
+    design = _writable_design(db, design_id, _user)
     db.execute(Version.__table__.delete().where(Version.design_id == design_id))
     db.delete(design)
     db.commit()
     return {"ok": True}
+
+
+class MoveRequest(BaseModel):
+    workspace_id: int = Field(ge=1)
+
+
+@router.post("/api/designs/{design_id}/move")
+def move_design(
+    design_id: int, req: MoveRequest, _user: str = Depends(get_current_user), db=Depends(get_db)
+):
+    """T46a-4：把稿件移到另一个工作区。
+
+    两条权限都要满足（缺一不可）：
+    - 对**原**位置有写权限（viewer 403）；
+    - 对**目标**工作区有写权限（非成员 404 不泄露存在性、成员但 viewer 403）。
+    """
+    from ..services.workspaces import WRITABLE_ROLES, role_for_design, role_of
+
+    design = _own_design(db, design_id, _user)
+    me = _owner_id(db, _user)
+    if role_for_design(db, design, me) not in WRITABLE_ROLES:
+        raise HTTPException(status_code=403, detail="只读访客：无权移动该设计稿（需要 owner/editor 权限）")
+    target_role = role_of(db, req.workspace_id, me)
+    if target_role is None:
+        raise HTTPException(status_code=404, detail="目标工作区不存在或无权访问")
+    if target_role not in WRITABLE_ROLES:
+        raise HTTPException(status_code=403, detail="只读成员：无权把稿件移入该工作区")
+    design.workspace_id = req.workspace_id
+    db.commit()
+    db.refresh(design)
+    return _design_meta(design)
 
 
 @router.get("/api/designs/{design_id}/versions")
@@ -244,7 +408,7 @@ def list_versions(design_id: int, _user: str = Depends(get_current_user), db=Dep
 def save_version(design_id: int, req: VersionNote, _user: str = Depends(get_current_user), db=Depends(get_db)):
     """手动保存当前设计为历史版本（带备注）。P0-5：并发撞号整体重试一次。"""
     for attempt in (1, 2):
-        design = _own_design(db, design_id, _user)
+        design = _writable_design(db, design_id, _user)
         _save_version(db, design, note=req.note)
         try:
             db.commit()

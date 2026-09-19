@@ -127,7 +127,9 @@ TEMPLATES: dict[str, dict[str, Any]] = {
              "props": {"chartType": "bar", "title": "近 7 日营收趋势",
                        "data": [{"day": "周一", "value": 45}, {"day": "周二", "value": 68}, {"day": "周三", "value": 52}, {"day": "周四", "value": 82}, {"day": "周五", "value": 60}, {"day": "周六", "value": 92}, {"day": "周日", "value": 74}],
                        "xKey": "day", "yKey": "value"},
-             "style": {"width": 680, "height": 220}},
+             # 2026-09-18：图表组件内部是「16 内边距 ×2 + 标题 20 + 下间距 16 + 图区 180」= 248，
+             # 原来给 220 会把标题压掉一截（8 模板几何体检实测：内容 234px 超过可视 220px）。
+             "style": {"width": 680, "height": 252}},
             {"id": "dash-table", "type": "component", "componentType": "table",
              "props": {"columns": [{"key": "name", "title": "渠道"}, {"key": "amount", "title": "成交额"}, {"key": "trend", "title": "环比"}],
                        "rows": [{"name": "直营门店", "amount": "¥420,000", "trend": "+6.2%"}, {"name": "线上商城", "amount": "¥368,500", "trend": "+15.8%"}, {"name": "分销渠道", "amount": "¥210,000", "trend": "-3.1%"}]},

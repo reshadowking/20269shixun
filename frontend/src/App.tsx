@@ -2,9 +2,15 @@ import { useEffect } from 'react'
 import { Navigate, Route, Routes } from 'react-router-dom'
 
 import ApiConfigPage from '@/pages/ApiConfigPage'
+import AssetsPage from '@/pages/AssetsPage'
 import HomePage from '@/pages/HomePage'
+import JoinPage from '@/pages/JoinPage'
 import LoginPage from '@/pages/LoginPage'
+import ProjectsPage from '@/pages/ProjectsPage'
+import RegisterPage from '@/pages/RegisterPage'
+import TemplatesPage from '@/pages/TemplatesPage'
 import WorkspacePage from '@/pages/WorkspacePage'
+import AppShell from '@/components/shell/AppShell'
 
 import { api, getToken } from '@/lib/api'
 
@@ -30,7 +36,61 @@ export default function App() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
-      <Route path="/" element={<RequireAuth><HomePage /></RequireAuth>} />
+      <Route path="/register" element={<RegisterPage />} />
+      {/* T46a-4：邀请链接落到这里，登录后自动加入（RequireAuth 会带上 redirect 回来） */}
+      <Route path="/join" element={<RequireAuth><JoinPage /></RequireAuth>} />
+      {/* T36：首页/模板库/资产库/我的项目/设置共用全局侧边栏；工作台不套（它自身三栏） */}
+      <Route
+        path="/"
+        element={
+          <RequireAuth>
+            <AppShell>
+              <HomePage />
+            </AppShell>
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/templates"
+        element={
+          <RequireAuth>
+            <AppShell>
+              <TemplatesPage />
+            </AppShell>
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/assets"
+        element={
+          <RequireAuth>
+            <AppShell>
+              <AssetsPage />
+            </AppShell>
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/projects"
+        element={
+          <RequireAuth>
+            <AppShell>
+              <ProjectsPage />
+            </AppShell>
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/settings"
+        element={
+          <RequireAuth>
+            <AppShell>
+              {/* T46a-4：设置页 = API 配置 + 追问模式 + 「成员与邀请」 */}
+              <ApiConfigPage showMembers />
+            </AppShell>
+          </RequireAuth>
+        }
+      />
       <Route path="/workspace" element={<RequireAuth><WorkspacePage /></RequireAuth>} />
       <Route path="/api-config" element={<RequireAuth><ApiConfigPage /></RequireAuth>} />
       <Route path="*" element={<Navigate to="/" replace />} />

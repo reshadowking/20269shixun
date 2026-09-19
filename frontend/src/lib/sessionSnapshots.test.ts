@@ -25,7 +25,8 @@ describe('sessionSnapshots（缺陷 4b）', () => {
 
   it('保存后可按会话读回（最新在前）', () => {
     saveSnapshot('s-a', tree('第一版'), '初稿')
-    const list = saveSnapshot('s-a', tree('第二版'), '改配色')
+    const { ok, list } = saveSnapshot('s-a', tree('第二版'), '改配色')
+    expect(ok).toBe(true)
     expect(list).toHaveLength(2)
     expect(list[0].label).toBe('改配色')
     expect(list[1].label).toBe('初稿')
@@ -58,7 +59,7 @@ describe('sessionSnapshots（缺陷 4b）', () => {
   })
 
   it('删除单条 / 清空会话快照', () => {
-    const list = saveSnapshot('s-a', tree('x'), '待删')
+    const { list } = saveSnapshot('s-a', tree('x'), '待删')
     const after = deleteSnapshot('s-a', list[0].id)
     expect(after).toHaveLength(0)
     saveSnapshot('s-a', tree('y'))
@@ -76,6 +77,12 @@ describe('sessionSnapshots（缺陷 4b）', () => {
       },
       removeItem: () => {},
     })
-    expect(() => saveSnapshot('s-a', tree('x'))).not.toThrow()
+    // 用对象挂载，避免 TS 把闭包里的赋值当作"从未发生"（收窄成 never）
+    const gate: { result?: { ok: boolean } } = {}
+    expect(() => {
+      gate.result = saveSnapshot('s-a', tree('x'))
+    }).not.toThrow()
+    // 2026-09-17：写失败要**显式上报**（调用方据此提示），不再静默
+    expect(gate.result?.ok).toBe(false)
   })
 })

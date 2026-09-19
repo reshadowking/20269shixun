@@ -12,10 +12,89 @@ import * as Y from 'yjs'
 import { WebsocketProvider } from 'y-websocket'
 
 import { LOCKED_EDITABLE_STYLE_KEYS } from '@/design/beautify'
+import { applyNodePatch, type DesignDiff } from '@/design/applyDiff'
+import { findNode as findPlainNode } from '@/design/tree'
 import type { DesignNode } from '@/design/types'
 
 const DESIGN_MAP = 'design'
 const ROOT_KEY = 'root'
+
+/** 光标节流：awareness 是逐帧可写的，但没必要（60ms ≈ 16fps 已经足够顺滑） */
+const CURSOR_THROTTLE_MS = 60
+
+/**
+ * 协作模式下的**兜底**等待（2026-09-17 B+）：连上但迟迟没 sync（网关挂了/断网/房间没响应）时，
+ * 最多等这么久就按本地副本渲染，并把 `degraded` 置 true 供页面提示"协作未连接"。
+ *
+ * 为什么需要兜底：修好"房间为准"之后，同步之前**不会**再往文档里写本地副本（正是这一步在
+ * 覆盖队友的未保存编辑）。若一直连不上而永不写，画布就会一直空着 —— 比原来的 bug 更糟。
+ * 3 秒是"本机/局域网正常连接（<100ms）"与"确实连不上"之间的折中；慢网可调大。
+ */
+export const SEED_FALLBACK_MS = 3000
+
+/**
+ * 撤销步骤的元数据（挂在 Yjs `stackItem.meta` 上）。
+ * 用途：撤销前判断"这一步还该不该照原样执行"——见 `undo()`。
+ */
+const UNDO_META = 'design-undo-meta'
+
+interface UndoMeta {
+  kind: 'property' | 'structural'
+  /** 我这一步写进去的值（用于判断"是否已被队友覆盖"） */
+  writes: Array<{ nodeId: string; key: string; value: unknown }>
+  /** 结构性步骤涉及的节点（用于判断"之后是否被队友改过"） */
+  nodeIds: string[]
+  at: number
+  /**
+   * 这一步的**单调序号**（不是时间戳！）。
+   * 踩过：同一毫秒内的"本地步 → 远端改"用 `Date.now()` 比较会漏判（`>` 不成立），
+   * 于是该弹的确认不弹。序号比较没有这个问题。
+   */
+  seq: number
+}
+
+/** 属性值比较：原始值直接比，对象/数组比序列化（props 里可能存对象） */
+function sameValue(a: unknown, b: unknown): boolean {
+  if (a === b) return true
+  try {
+    return JSON.stringify(a) === JSON.stringify(b)
+  } catch {
+    return false
+  }
+}
+
+/** 我这一步改了哪些字段（用于判断"是否还被队友覆盖"） */
+function diffWrites(nodeId: string, prev: DesignNode, next: DesignNode): UndoMeta['writes'] {
+  const out: UndoMeta['writes'] = []
+  if (prev.x !== next.x) out.push({ nodeId, key: 'x', value: next.x })
+  if (prev.y !== next.y) out.push({ nodeId, key: 'y', value: next.y })
+  if (prev.hidden !== next.hidden) out.push({ nodeId, key: 'hidden', value: next.hidden })
+  for (const [k, v] of Object.entries(next.props ?? {})) {
+    if ((prev.props ?? {})[k] !== v) out.push({ nodeId, key: `props.${k}`, value: v })
+  }
+  for (const [k, v] of Object.entries(next.style ?? {})) {
+    if ((prev.style ?? {})[k] !== v) out.push({ nodeId, key: `style.${k}`, value: v })
+  }
+  return out
+}
+
+export interface CursorPos {
+  x: number
+  y: number
+}
+
+export interface RemoteCursor extends CursorPos {
+  clientId: number
+  name: string
+  color: string
+  /** 队友当前选中的元素（如 `按钮「提交」`）——光标标签里带上，回答"在改哪儿" */
+  label?: string
+}
+
+/** 由 clientId 推导一个稳定颜色（同一队友每次进来颜色一致） */
+function cursorColor(clientId: number): string {
+  return `hsl(${(clientId * 47) % 360} 72% 45%)`
+}
 
 /** 本地用户操作的 origin（操作级 UndoManager 只跟踪它；AI 生成/协作远程/快照恢复不记录） */
 export const LOCAL_ORIGIN = 'local-user-op'
@@ -97,6 +176,40 @@ export class DesignStore {
   ydoc: Y.Doc
   private designMap: Y.Map<unknown>
   provider: WebsocketProvider | null = null
+  /** T46a-3d：网关拒绝连接（4403）时的回调——由上层显示"无权进入该协作房间"。 */
+  onForbidden?: () => void
+  /**
+   * 2026-09-16：撤销的两种"要人拍板"的情况，交给页面做 UI（store 不弹窗）。
+   * - `onUndoBlocked`：这一步写进去的值已被队友改掉 → **跳过并告知**（Yjs 的撤销在这种情况下会静默失效）；
+   * - `onUndoConfirm`：结构性步骤（新增/删除/换父级）涉及的节点之后被队友改过 →
+   *   撤销会连队友的改动一起撤掉，必须先确认（返回 false = 取消，栈保留）。
+   */
+  onUndoBlocked?: (reason: string) => void
+  onUndoConfirm?: (reason: string) => boolean
+
+  /** 当前步骤的元数据（在事务内写入，事务结束时由 stack-item-added 取走） */
+  private pendingUndoMeta: Omit<UndoMeta, 'at' | 'seq'> | null = null
+  /** 单调递增的操作序号：本地步骤与远端改动共用一条线，用来判断"谁在谁之后" */
+  private opSeq = 0
+  /** 节点最近一次"被远端改过"的序号（节点级，避免把不相关的节点算进来） */
+  private lastRemoteChangeSeq = new Map<string, number>()
+  /** 上一次的节点快照（用于 diff 出远端改了哪些节点） */
+  private nodeSnapshots = new Map<string, string>()
+
+  /**
+   * T46a-3c：把登录 JWT 作为 WS 查询参数带上（网关用它验签 + 查成员资格）。
+   *
+   * 用 `params` 而不是拼进 serverUrl——y-websocket 会自己拼 `/<room>`，拼在 serverUrl 上会拼错。
+   * 没有 token（未登录/未启用网关）时返回 undefined，**行为与改造前完全一致**。
+   */
+  private wsOptions(): { params: Record<string, string> } | undefined {
+    try {
+      const token = localStorage.getItem('design-tool-token') // 与 lib/api.ts 的 TOKEN_KEY 一致
+      return token ? { params: { token } } : undefined
+    } catch {
+      return undefined
+    }
+  }
   /** 快照缓存：文档无更新时返回同一引用（React useSyncExternalStore 要求 getSnapshot 引用稳定） */
   private cached: DesignNode | null = null
   /** AI 版本快照栈（E3-2/P0-1）：优化与增量编辑前保存，恢复时整体重置文档 */
@@ -109,12 +222,16 @@ export class DesignStore {
   undoManager: Y.UndoManager
   /** 缺陷 3：美化阶段版面锁定——只有效果白名单的 style 键允许改动（写入层强制，不靠 UI 禁用） */
   private beautifyLock = false
+  /** T46a-3e：只读访客（viewer）——所有写方法在数据层直接拒绝 */
+  private readOnly = false
   private blockedCbs = new Set<(reason: string) => void>()
   /** T2：连接端点。构造只记忆、不建立连接——provider 的生灭与 React effect 配对 */
   private wsEndpoint: string | undefined
   private roomName: string
   /** T2：最近一次广播的 presence 昵称，provider 重建（重挂/重连）后自动写回 */
   private presenceName: string | null = null
+  /** 2026-09-16：最近一次光标节流时间（见 publishCursor） */
+  private lastCursorAt = 0
 
   private handleAwareness = (): void => {
     this.presenceCbs.forEach((cb) => cb())
@@ -132,15 +249,24 @@ export class DesignStore {
     provider.on('status', this.handleStatus)
   }
 
-  constructor(wsUrl?: string, initialDesign?: DesignNode, room = 'design-room') {
+  constructor(wsUrl?: string, initialDesign?: DesignNode, room = 'design-room', collabExpected = false) {
     this.ydoc = new Y.Doc()
     this.designMap = this.ydoc.getMap(DESIGN_MAP)
     this.wsEndpoint = wsUrl
     this.roomName = room
-    if (initialDesign && this.designMap.size === 0) {
-      this.ydoc.transact(() => {
-        this.designMap.set(ROOT_KEY, plainToY(initialDesign))
-      }, RESET_ORIGIN)
+    this.collabExpected = collabExpected
+    /**
+     * 2026-09-17（B+）**房间为准**：有协作端点时**不**在连接前写本地副本。
+     *
+     * 原来这里无条件 seed —— 而"房间已存在别人未保存的编辑"时，两份并发 item 由 clientID
+     * 决定胜负（约一半概率把房间里的新编辑覆盖回旧稿，实测两侧一起回退）。
+     * 现在先记进 `pendingSeed`，等 provider 的首个 `sync`：房间为空才写、非空则采用房间状态；
+     * 一直连不上则由 `SEED_FALLBACK_MS` 兜底按本地副本渲染。
+     * 无协作端点（本地模式/单测/离线）依旧立刻写入 —— 行为与以前完全一致。
+     */
+    if (initialDesign) {
+      if (this.wsEndpoint || this.collabExpected) this.pendingSeed = initialDesign
+      else this._writeSeed(initialDesign)
     }
     // T2 presence 泄漏修复：provider 不再在构造期创建（原实现在渲染期建连、
     // 组件卸载后从不销毁，socket/awareness 残留导致服务端在线人数虚增）。
@@ -151,14 +277,165 @@ export class DesignStore {
       captureTimeout: 0, // 画布操作是离散事务，无需合并窗口，保证 canUndo 即时可用
     })
     // 缓存失效与订阅解耦：任何 update（本地事务/协作同步）都使快照失效
-    this.ydoc.on('update', () => {
+    this.ydoc.on('update', (_update, origin) => {
       this.cached = null
+      // 2026-09-16：只有**远端**改动才记账（本地/重置/撤销自身都不算"队友改的"）
+      if (origin === RESET_ORIGIN) {
+        // 整树替换（打开稿件/AI 恢复）：只更新基线，别把全树算成"队友改的"
+        this._trackRemoteChanges(false)
+        return
+      }
+      if (this._isLocalOrigin(origin)) return
+      // 远端写进来了：文档不再是我一个人的占位副本，之后"打开稿件"不许覆盖它
+      this.wroteOwnSeed = false
+      this._trackRemoteChanges(true)
     })
+    // 撤销步骤的元数据：事务结束时把 pendingUndoMeta 挂到栈项上
+    this.undoManager.on('stack-item-added', (event: { stackItem: { meta: Map<unknown, unknown> } }) => {
+      if (!this.pendingUndoMeta) return
+      event.stackItem.meta.set(UNDO_META, {
+        ...this.pendingUndoMeta,
+        at: Date.now(),
+        seq: ++this.opSeq,
+      } satisfies UndoMeta)
+      this.pendingUndoMeta = null
+    })
+    // 初始化基线快照：构造期写入初始设计时 update 处理器还没挂上，这里补一次，
+    // 否则第一笔"远端改动"会被当成基线更新（跳过记账），结构性步骤就永远不弹确认。
+    this._trackRemoteChanges(false)
   }
 
   destroy() {
+    this._clearSeedFallback()
     this.provider?.destroy()
     this.ydoc.destroy()
+  }
+
+  // ---- 2026-09-17（B+）：房间为准的种子/加载时序 ----
+
+  private pendingSeed: DesignNode | null = null
+  private pendingLoad: DesignNode | null = null
+  private syncedFlag = false
+  private dataReadyFlag = false
+  /**
+   * 这个 store **预期会走协作**，只是端点/房间名还没到手（已保存稿件的房间名要等服务端签发）。
+   *
+   * 为什么需要它：`?design={id}` 原来是"先连 `design-{id}`（临时房间）→ 签发房间到手再切"，
+   * 于是本地副本会先写进那个**临时房间**；切到真房间后两份内容合并 —— 实测（Playwright 抓
+   * WS URL + 量 `style.left`）：刷新后画布回退成 DB 版本（`180px → 120px`），队友未保存的编辑
+   * 就丢了。所以"端点未定"不等于"本地模式"：这时也不能写。
+   */
+  private collabExpected = false
+  private seedFallbackTimer: ReturnType<typeof setTimeout> | null = null
+  private dataReadyCbs: Array<() => void> = []
+  /** 兜底已触发（= 没等到协作同步，按本地副本渲染）；页面据此提示"协作未连接" */
+  degraded = false
+  /**
+   * 文档里的内容是不是**我自己**刚写进去的占位副本（房间当时是空的）。
+   *
+   * 只有这种情况允许被"打开稿件"的结果覆盖（`applyLoadedDesign`）——队友写进来的内容永远不许被覆盖；
+   * 一旦收到远端更新就置 false。
+   */
+  private wroteOwnSeed = false
+
+  /** 数据可读写了：本地模式 / 已 sync / 兜底已触发。页面据此开自动保存、导出与选区生效。 */
+  get dataReady(): boolean {
+    return this.dataReadyFlag
+  }
+
+  /** 注册"数据就绪"回调（已就绪则立即调用一次）；返回取消订阅 */
+  onDataReady(cb: () => void): () => void {
+    if (this.dataReadyFlag) {
+      cb()
+      return () => undefined
+    }
+    this.dataReadyCbs.push(cb)
+    return () => {
+      this.dataReadyCbs = this.dataReadyCbs.filter((f) => f !== cb)
+    }
+  }
+
+  private _markDataReady(): void {
+    if (this.dataReadyFlag) return
+    this.dataReadyFlag = true
+    const cbs = this.dataReadyCbs
+    this.dataReadyCbs = []
+    cbs.forEach((cb) => cb())
+  }
+
+  /** 房间为空（或本地模式）时把整棵树写进文档；已就绪则不再写。`own` = 这份是我自己的占位副本 */
+  private _writeSeed(design: DesignNode, own = false): void {
+    if (this.designMap.size === 0) {
+      this.ydoc.transact(() => {
+        this.designMap.set(ROOT_KEY, plainToY(design))
+      }, RESET_ORIGIN)
+      this.wroteOwnSeed = own
+    }
+    this._markDataReady()
+  }
+
+  private _clearSeedFallback(): void {
+    if (this.seedFallbackTimer !== null) {
+      clearTimeout(this.seedFallbackTimer)
+      this.seedFallbackTimer = null
+    }
+  }
+
+  private _armSeedFallback(): void {
+    if (this.seedFallbackTimer !== null || this.syncedFlag) return
+    if (!this.wsEndpoint && !this.collabExpected) return
+    if (!this.pendingSeed && !this.pendingLoad) return
+    this.seedFallbackTimer = setTimeout(() => {
+      this.seedFallbackTimer = null
+      if (this.syncedFlag) return
+      const pending = this.pendingLoad ?? this.pendingSeed
+      const fromSeed = !this.pendingLoad && !!this.pendingSeed
+      this.degraded = true
+      this.pendingLoad = null
+      this.pendingSeed = null
+      if (pending) this._writeSeed(pending, fromSeed)
+      else this._markDataReady()
+    }, SEED_FALLBACK_MS)
+  }
+
+  /** provider 首次 sync：此刻才知道房间里到底有没有东西 */
+  private handleSync = (isSynced: boolean): void => {
+    if (!isSynced) return
+    this.syncedFlag = true
+    this._clearSeedFallback()
+    const pending = this.pendingLoad ?? this.pendingSeed
+    const fromSeed = !this.pendingLoad && !!this.pendingSeed
+    this.pendingLoad = null
+    this.pendingSeed = null
+    // 房间为空（新房间）→ 用本地副本；房间已有内容 → **采用房间状态**（DB 只是保存目标）
+    if (pending && this.designMap.size === 0) this._writeSeed(pending, fromSeed)
+    this._markDataReady()
+  }
+
+  /**
+   * 打开/切换稿件（room-first）。替代调用方原来直接用的 `resetDesign(target)`：
+   * - 无协作端点（本地模式/单测）→ 立刻写，行为与以前一致；
+   * - 已 sync → 房间为空才写，非空则采用房间状态；
+   * - 还没 sync → 先记下来，等 `sync`（或兜底超时）再决定。
+   *
+   * 目的：新客户端**不许**用"从 DB 读出来的旧稿"覆盖房间里别人未保存的编辑。
+   */
+  applyLoadedDesign(design: DesignNode): void {
+    if (!this.wsEndpoint && !this.collabExpected) {
+      this.resetDesign(design)
+      this._markDataReady()
+      return
+    }
+    if (this.syncedFlag) {
+      // 房间空 → 写入；房间里的东西是我自己的占位副本（房间当时是空的）→ 允许被真正的稿件覆盖。
+      // 队友写进来的内容（wroteOwnSeed=false）一律不动。
+      if (this.designMap.size === 0 || this.wroteOwnSeed) this.resetDesign(design)
+      this.wroteOwnSeed = false
+      this._markDataReady()
+      return
+    }
+    this.pendingLoad = design
+    this._armSeedFallback()
   }
 
   /** T2：按端点确保 provider 存在（幂等）。与 disconnectProvider 配对使用：
@@ -167,7 +444,16 @@ export class DesignStore {
     if (wsUrl !== undefined) this.wsEndpoint = wsUrl
     if (room !== undefined) this.roomName = room
     if (!this.wsEndpoint || this.provider) return
-    this.provider = new WebsocketProvider(this.wsEndpoint, this.roomName, this.ydoc)
+    this.provider = new WebsocketProvider(this.wsEndpoint, this.roomName, this.ydoc, this.wsOptions())
+    this.provider.on('connection-close', (event: CloseEvent | null) => {
+      // 4403 = 网关判定"未授权/非成员"（见 docker/collab-gateway）；其余关闭码交给默认重连逻辑
+      if (event?.code === 4403) this.onForbidden?.()
+    })
+    // 2026-09-17（B+）：首个 sync 是"房间到底有没有内容"的唯一权威时点
+    this.provider.on('sync', this.handleSync)
+    // 真实 provider 有可能在我们挂上监听之前就同步完了（`synced` 由 y-websocket 维护）
+    if ((this.provider as { synced?: boolean }).synced) this.handleSync(true)
+    this._armSeedFallback()
     this.bindProviderEvents()
     this._reapplyPresence()
   }
@@ -191,7 +477,10 @@ export class DesignStore {
     this.wsEndpoint = wsUrl
     this.roomName = newRoom
     if (wsUrl) {
-      this.provider = new WebsocketProvider(wsUrl, newRoom, this.ydoc)
+      this.provider = new WebsocketProvider(wsUrl, newRoom, this.ydoc, this.wsOptions())
+      // 新房间同样要认"首个 sync"（房间迁移后本地文档就是事实来源，handleSync 不会覆盖它）
+      this.provider.on('sync', this.handleSync)
+      if ((this.provider as { synced?: boolean }).synced) this.handleSync(true)
       this.bindProviderEvents()
       this._reapplyPresence()
     }
@@ -211,6 +500,54 @@ export class DesignStore {
     if (this.presenceName !== null && this.provider) {
       this.provider.awareness.setLocalStateField('user', { name: this.presenceName })
     }
+  }
+
+  // ---- 2026-09-16：光标级 presence（把"谁在线"变成"谁在哪"）----
+
+  /**
+   * 广播本地光标（画布世界坐标）；传 null 表示离开画布（立即清掉，不受节流影响）。
+   * 无 provider（本地模式/单测）时静默跳过——与 presence 的处理一致。
+   */
+  publishCursor(pos: CursorPos | null): void {
+    if (!this.provider) return
+    if (pos !== null) {
+      const now = Date.now()
+      if (now - this.lastCursorAt < CURSOR_THROTTLE_MS) return
+      this.lastCursorAt = now
+    }
+    this.provider.awareness.setLocalStateField('cursor', pos)
+  }
+
+  /**
+   * 广播"我正在编辑什么"（选中元素的简短描述，如 `按钮「提交」`）。
+   * 空选择就清掉——队友不该看到你早已不看的元素还挂着一个标签。
+   */
+  publishSelection(label: string): void {
+    if (!this.provider) return
+    this.provider.awareness.setLocalStateField('selection', label ? { label } : null)
+  }
+
+  /** 队友光标（排除自己）：只有同时带 cursor 与昵称的状态才会画出来 */
+  get remoteCursors(): RemoteCursor[] {
+    const awareness = this.provider?.awareness
+    if (!awareness) return []
+    const out: RemoteCursor[] = []
+    for (const [clientId, state] of awareness.getStates()) {
+      if (clientId === awareness.clientID) continue
+      const cursor = (state as { cursor?: CursorPos | null } | undefined)?.cursor
+      const name = (state as { user?: { name?: unknown } } | undefined)?.user?.name
+      if (!cursor || typeof cursor.x !== 'number' || typeof cursor.y !== 'number') continue
+      const label = (state as { selection?: { label?: unknown } | null } | undefined)?.selection?.label
+      out.push({
+        clientId,
+        x: cursor.x,
+        y: cursor.y,
+        name: typeof name === 'string' && name ? name : '队友',
+        color: cursorColor(clientId),
+        label: typeof label === 'string' && label ? label : undefined,
+      })
+    }
+    return out
   }
 
   /** 订阅 awareness 变化（他人进出/状态更新）；无 provider（本地模式）时立即回调一次 */
@@ -265,6 +602,26 @@ export class DesignStore {
   }
 
   /**
+   * T46a-3e：设置只读态（viewer 角色）。协作网关已经在服务端丢弃 viewer 的写消息，
+   * 这里是**同一条规则的前端入口**：让"没有权限"立刻可见，而不是拖完之后发现没动、
+   * 或者被服务端静默回滚。写方法统一走 `_blockedByRole`，不靠 UI 禁用兜底。
+   */
+  setReadOnly(readOnly: boolean): void {
+    this.readOnly = readOnly
+  }
+
+  get isReadOnly(): boolean {
+    return this.readOnly
+  }
+
+  /** 只读拦截：返回 true 表示本次写入已被拒绝（并已广播可读原因） */
+  private _blockedByRole(what: string): boolean {
+    if (!this.readOnly) return false
+    this._rejectBlocked(`只读访客：${what}不会生效（需要 owner / editor 权限）`)
+    return true
+  }
+
+  /**
    * 锁定期的单节点改动白名单：只允许效果白名单 style 键变化。
    * props（文本/内容）、结构（children/type/id）、位置尺寸（x/y/hidden/width/height/layout 等）一律拒绝。
    */
@@ -307,9 +664,79 @@ export class DesignStore {
 
   /** 操作级撤销（P0-1）：回退最近一次本地用户操作；无可撤销返回 false */
   undo(): boolean {
+    // 2026-09-16：撤销前先看这一步**还该不该照原样执行**（实测结论见卡 §撤销的并发口径）
+    const top = this.undoManager.undoStack[this.undoManager.undoStack.length - 1]
+    const meta = top?.meta?.get(UNDO_META) as UndoMeta | undefined
+    if (meta) {
+      if (meta.kind === 'property') {
+        // 属性类：该字段已被队友改成别的值 → Yjs 的撤销会静默失效（实测：按钮消耗掉、界面无变化）。
+        // 与其"按了没反应、再按一次跳到更早一步"，不如丢掉这一步并明确告诉他。
+        const covered = meta.writes.some((w) => !sameValue(this._currentValue(w.nodeId, w.key), w.value))
+        if (covered) {
+          this.undoManager.undoStack.pop()
+          this.undoManager.redoStack.length = 0
+          this.onUndoBlocked?.('这一步已被队友的修改覆盖，撤销不生效（已跳过；再按 Ctrl+Z 会撤销你更早的一步）')
+          return false
+        }
+      } else {
+        // 结构性：撤销"我加的节点"会连带删掉队友在它上面做的一切（不可逆）→ 必须先问
+        const touched = meta.nodeIds.some((id) => (this.lastRemoteChangeSeq.get(id) ?? 0) > meta.seq)
+        if (touched && !(this.onUndoConfirm?.('这一步新增/删除的节点之后被队友改过，撤销会连他的改动一起撤掉。仍要撤销吗？') ?? true)) {
+          return false // 取消：栈保留，下次再问
+        }
+      }
+    }
     if (!this.undoManager.canUndo()) return false
     this.undoManager.undo()
     return true
+  }
+
+  /** 队友改了这个节点的哪些值？——节点级作用域，不相关节点不算（见 undo 的噪声检查） */
+  private _currentValue(nodeId: string, key: string): unknown {
+    const node = findPlainNode(this.getDesign(), nodeId)
+    if (!node) return undefined
+    if (key === 'x' || key === 'y' || key === 'hidden') return node[key]
+    if (key.startsWith('props.')) return node.props?.[key.slice('props.'.length)]
+    if (key.startsWith('style.')) return node.style?.[key.slice('style.'.length)]
+    return undefined
+  }
+
+  /** 本地来源（本地操作/重置/撤销重做自身）——这些不算"队友改的" */
+  private _isLocalOrigin(origin: unknown): boolean {
+    return origin === LOCAL_ORIGIN || origin === RESET_ORIGIN || origin === this.undoManager
+  }
+
+  /**
+   * 远端改动记账：diff 出"哪些节点变了"并打时间戳。
+   * mark=false 时只更新基线（用于 resetDesign 这类本地整体替换，避免下次 diff 把全树算成"队友改的"）。
+   */
+  private _trackRemoteChanges(mark: boolean): void {
+    const next = new Map<string, string>()
+    const collect = (node: DesignNode): void => {
+      next.set(node.id, JSON.stringify(node))
+      for (const child of node.children ?? []) collect(child)
+    }
+    collect(this.getDesign())
+    const first = this.nodeSnapshots.size === 0
+    if (mark && !first) {
+      const seq = ++this.opSeq
+      for (const [id, json] of next) {
+        if (this.nodeSnapshots.get(id) !== json) this.lastRemoteChangeSeq.set(id, seq)
+      }
+    }
+    this.nodeSnapshots = next
+  }
+
+  /**
+   * 测试专用缝隙：模拟"队友改了某个节点"（与 `__setStorageForTests` 同一套约定）。
+   * 走真实 Yjs 事务 + 非本地 origin，因此和线上远端改动的落地路径一致。
+   */
+  __applyRemoteForTests(nodeId: string, updater: (node: DesignNode) => DesignNode): void {
+    this.ydoc.transact(() => {
+      const root = this.designMap.get(ROOT_KEY) as YNode | undefined
+      const target = root ? findYNode(root, nodeId) : null
+      if (target) this._applyUpdate(target, updater(yToPlain(target)))
+    }, 'remote-test-origin')
   }
 
   /** 操作级重做（P0-1）：恢复被撤销的操作；无重做返回 false */
@@ -329,6 +756,7 @@ export class DesignStore {
 
   /** 通用字段更新：updater 返回新 DesignNode，同步写回 Y 节点（props/style 整表替换保持引用稳定） */
   updateNode(id: string, updater: (node: DesignNode) => DesignNode) {
+    if (this._blockedByRole('修改节点')) return
     this.ydoc.transact(
       () => {
         const root = this.designMap.get(ROOT_KEY) as YNode | undefined
@@ -342,6 +770,7 @@ export class DesignStore {
           return
         }
         this._applyUpdate(target, next)
+        this.pendingUndoMeta = { kind: 'property', writes: diffWrites(id, prev, next), nodeIds: [id] }
       },
       LOCAL_ORIGIN,
     )
@@ -349,6 +778,7 @@ export class DesignStore {
 
   /** 批量更新多个节点（缺陷 1 多选属性编辑 / P1 转自由画布）：单事务单撤销步 */
   updateMany(ids: string[], updater: (node: DesignNode, index: number) => DesignNode) {
+    if (this._blockedByRole('批量修改节点')) return
     this.ydoc.transact(
       () => {
         const root = this.designMap.get(ROOT_KEY) as YNode | undefined
@@ -367,6 +797,11 @@ export class DesignStore {
           return
         }
         for (const t of targets) this._applyUpdate(t.target, t.next)
+        this.pendingUndoMeta = {
+          kind: 'property',
+          writes: targets.flatMap((t) => diffWrites(t.target.get('id') as string, t.prev, t.next)),
+          nodeIds: targets.map((t) => t.target.get('id') as string),
+        }
       },
       LOCAL_ORIGIN,
     )
@@ -382,7 +817,28 @@ export class DesignStore {
   convertToFreeLayout(
     parentId: string,
     updates: Array<{ id: string; x: number; y: number; width: number; height: number }>,
+    containerSize?: { width: number; height: number },
   ): { ok: boolean; reason?: string } {
+    return this.convertToFreeLayoutBatch([{ parentId, updates, containerSize }])
+  }
+
+  /**
+   * 多层版本的转自由画布（2026-09-18）：一次冻结**整棵树**的每个 flex 容器。
+   *
+   * 为什么必须是同一个事务：自动冻结/一键转自由画布现在会写多个容器，
+   * 若逐层各开一个事务，Ctrl+Z 就得按好几次才能退回布局原样（每层一个撤销步），
+   * 中途停下会留下"外层 free + 内层 flex"的半成品——比不冻更糟。
+   *
+   * 语义与单层完全一致（越权/锁定整批不落、先收集后写入）。
+   */
+  convertToFreeLayoutBatch(
+    groups: Array<{
+      parentId: string
+      updates: Array<{ id: string; x: number; y: number; width: number; height: number }>
+      containerSize?: { width: number; height: number }
+    }>,
+  ): { ok: boolean; reason?: string } {
+    if (this._blockedByRole('转自由画布')) return { ok: false, reason: 'read-only' }
     if (this.beautifyLock) {
       this._rejectBlocked('版面已确认：请先解除版面锁定再转自由画布')
       return { ok: false, reason: 'locked' }
@@ -392,40 +848,55 @@ export class DesignStore {
       () => {
         const root = this.designMap.get(ROOT_KEY) as YNode | undefined
         if (!root) return
-        const parent = findYNode(root, parentId)
-        if (!parent) return
+        // 先收集全部写入，任一越权/缺失则整批不落（原子语义）
+        const writes: Array<{ target: YNode; next: DesignNode }> = []
+        const nodeIds: string[] = []
+        for (const g of groups) {
+          const parent = findYNode(root, g.parentId)
+          if (!parent) return
 
-        const prevParent = yToPlain(parent)
-        const nextParent: DesignNode = {
-          ...prevParent,
-          style: { ...(prevParent.style ?? {}), layout: 'free' as const },
-        }
-        if (!this._allowedWhileLocked(prevParent, nextParent)) {
-          this._rejectBlocked('版面已确认：仅允许修改样式效果（布局/文本/结构已锁定）')
-          return
-        }
-
-        // 先收集全部目标，任一越权则整批不落（原子语义）
-        const targets: Array<{ target: YNode; next: DesignNode }> = []
-        for (const u of updates) {
-          const target = findYNode(root, u.id)
-          if (!target) continue
-          const prev = yToPlain(target)
-          const next: DesignNode = {
-            ...prev,
-            x: Math.round(u.x),
-            y: Math.round(u.y),
-            style: { ...(prev.style ?? {}), width: u.width, height: u.height },
+          const prevParent = yToPlain(parent)
+          const nextParent: DesignNode = {
+            ...prevParent,
+            style: {
+              ...(prevParent.style ?? {}),
+              layout: 'free' as const,
+              // 2026-09-17：容器自己的盒子也要一起冻。子节点变绝对定位后不再撑高父容器，
+              // 而模板/AI 产物的容器多是 auto 高度 → 只冻结子节点会把容器塌成"只剩 padding"
+              // 的一条（E2E 实测 demo 根节点 276 → 64），背景/圆角消失、子节点浮在容器外。
+              ...(g.containerSize
+                ? { width: Math.round(g.containerSize.width), height: Math.round(g.containerSize.height) }
+                : {}),
+            },
           }
-          if (!this._allowedWhileLocked(prev, next)) {
+          if (!this._allowedWhileLocked(prevParent, nextParent)) {
             this._rejectBlocked('版面已确认：仅允许修改样式效果（布局/文本/结构已锁定）')
             return
           }
-          targets.push({ target, next })
+          writes.push({ target: parent, next: nextParent })
+          nodeIds.push(g.parentId)
+
+          for (const u of g.updates) {
+            const target = findYNode(root, u.id)
+            if (!target) continue
+            const prev = yToPlain(target)
+            const next: DesignNode = {
+              ...prev,
+              x: Math.round(u.x),
+              y: Math.round(u.y),
+              style: { ...(prev.style ?? {}), width: u.width, height: u.height },
+            }
+            if (!this._allowedWhileLocked(prev, next)) {
+              this._rejectBlocked('版面已确认：仅允许修改样式效果（布局/文本/结构已锁定）')
+              return
+            }
+            writes.push({ target, next })
+            nodeIds.push(u.id)
+          }
         }
 
-        this._applyUpdate(parent, nextParent)
-        for (const t of targets) this._applyUpdate(t.target, t.next)
+        for (const w of writes) this._applyUpdate(w.target, w.next)
+        this.pendingUndoMeta = { kind: 'structural', writes: [], nodeIds }
         ok = true
       },
       LOCAL_ORIGIN,
@@ -463,7 +934,9 @@ export class DesignStore {
   }
 
   removeNode(id: string) {
+    if (this._blockedByRole('删除节点')) return
     if (this._blockStructuralWhileLocked()) return
+    this.pendingUndoMeta = { kind: 'structural', writes: [], nodeIds: [id] }
     this.ydoc.transact(
       () => {
         const root = this.designMap.get(ROOT_KEY) as YNode | undefined
@@ -481,7 +954,9 @@ export class DesignStore {
   }
 
   duplicateNode(id: string) {
+    if (this._blockedByRole('复制节点')) return
     if (this._blockStructuralWhileLocked()) return
+    this.pendingUndoMeta = { kind: 'structural', writes: [], nodeIds: [id] }
     this.ydoc.transact(
       () => {
         const root = this.designMap.get(ROOT_KEY) as YNode | undefined
@@ -525,9 +1000,39 @@ export class DesignStore {
     )
   }
 
+  /**
+   * 落地 AI 修改的**差量**（2026-09-17，替代原来的整树 `resetDesign`）。
+   *
+   * 两条语义要点：
+   * 1) 只写被改动的节点 → 队友在这期间对**其它节点**的并发改动不会被整树替换吞掉；
+   * 2) 期间**临时关掉 beautifyLock 守卫**：锁定的权威判定在**服务端闸门**
+   *    （`/api/apply-locked-edit` 按会话查表），客户端这把锁只是 UX 护栏。
+   *    旧实现 `resetDesign` 本来就不经过该守卫；若这里不关，服务端放行的合法效果
+   *    会被客户端二次否决（实测：`locked-edit` 用例「合法效果照常落地」直接红）。
+   */
+  applyAiDiff(diff: DesignDiff): void {
+    if (diff.replace) {
+      this.resetDesign(diff.replace)
+      return
+    }
+    const lock = this.beautifyLock
+    this.beautifyLock = false
+    try {
+      for (const id of diff.removed) this.removeNode(id)
+      for (const m of diff.moved) this.moveNodeTo(m.id, m.toParent, m.index)
+      for (const u of diff.updated) this.updateNode(u.id, (cur) => applyNodePatch(cur, u.patch))
+      for (const a of diff.added) this.insertChild(a.parentId, a.node, a.index)
+      for (const o of diff.orders) this.reorderChildren(o.parentId, o.ids)
+    } finally {
+      this.beautifyLock = lock
+    }
+  }
+
   /** 在指定父节点 children 末尾插入新节点（组件面板添加）；index 指定插入位置（E3-3 推荐落位） */
   insertChild(parentId: string, node: DesignNode, index?: number) {
+    if (this._blockedByRole('添加组件')) return
     if (this._blockStructuralWhileLocked()) return
+    this.pendingUndoMeta = { kind: 'structural', writes: [], nodeIds: [node.id, parentId] }
     this.ydoc.transact(
       () => {
         const root = this.designMap.get(ROOT_KEY) as YNode | undefined
@@ -557,6 +1062,15 @@ export class DesignStore {
 
   /** 恢复最近一次快照（撤销 AI 版本）；无快照返回 false */
   popSnapshot(): boolean {
+    if (this._blockedByRole('撤销优化')) return false
+    // 2026-09-17：版面锁定（版面已确认）阶段不允许**整树回退**——它会把布局/尺寸一起改回去，
+    // 与「转自由画布」「智能优化」同一口径（后两者早已被拦）。
+    // 三处内部回退（优化失败 / 自动冻结回滚 / 转自由画布失败）都在"锁定已被前置拦截"的路径里，
+    // 所以这里加锁不会破坏那些回滚。
+    if (this.beautifyLock) {
+      this._rejectBlocked('版面已确认：不能回退到旧版面（会改变布局/尺寸），请先解除版面锁定')
+      return false
+    }
     const snapshot = this.snapshots.pop()
     if (!snapshot) return false
     this.resetDesign(snapshot)
@@ -569,7 +1083,9 @@ export class DesignStore {
 
   /** 跨父移动（图层管理：拖拽改父级）；目标不能是自己的后代 */
   moveNodeTo(nodeId: string, newParentId: string, index: number) {
+    if (this._blockedByRole('移动图层')) return
     if (this._blockStructuralWhileLocked()) return
+    this.pendingUndoMeta = { kind: 'structural', writes: [], nodeIds: [nodeId, newParentId] }
     this.ydoc.transact(
       () => {
         const root = this.designMap.get(ROOT_KEY) as YNode | undefined
@@ -606,7 +1122,9 @@ export class DesignStore {
 
   /** flex 布局拖拽重排 */
   moveChild(childId: string, parentId: string, targetIndex: number) {
+    if (this._blockedByRole('调整顺序')) return
     if (this._blockStructuralWhileLocked()) return
+    this.pendingUndoMeta = { kind: 'structural', writes: [], nodeIds: [childId, parentId] }
     this.ydoc.transact(
       () => {
         const root = this.designMap.get(ROOT_KEY) as YNode | undefined
@@ -627,6 +1145,38 @@ export class DesignStore {
         // 新副本保证协作端合并语义一致：删除 + 新增）
         children.insert(target, [plainToY(yToPlain(arr[from] as YNode))])
         children.delete(from < target ? from : from + 1, 1)
+      },
+      LOCAL_ORIGIN,
+    )
+  }
+
+  /**
+   * 按目标顺序重排某父级的子节点（单个事务；AI 差量落地用，2026-09-17）。
+   *
+   * 存在的理由：`moveNodeTo` 只在**换父级**时被记录，同父级的顺序变化（ops 的 move、
+   * "把某个模块挪到最上面"）不会产生任何 diff 条目 —— 落地时被整条丢掉。
+   * 逐位就位：第 i 位不是期望 id 就把期望节点搬过来（先插副本再删原件，与 moveChild 同款，
+   * 规避 Yjs 同事务"先删后插"的集成问题）；期望 id 已不存在（被队友删了）则跳过，不硬造。
+   */
+  reorderChildren(parentId: string, orderedIds: string[]): void {
+    if (this._blockedByRole('调整顺序')) return
+    if (this._blockStructuralWhileLocked()) return
+    this.pendingUndoMeta = { kind: 'structural', writes: [], nodeIds: [parentId, ...orderedIds] }
+    this.ydoc.transact(
+      () => {
+        const root = this.designMap.get(ROOT_KEY) as YNode | undefined
+        const parent = root ? findYNode(root, parentId) : null
+        const children = parent?.get('children')
+        if (!(children instanceof Y.Array)) return
+        for (let i = 0; i < orderedIds.length; i++) {
+          const arr = children.toArray() as YNode[]
+          const want = orderedIds[i]
+          if (arr[i]?.get('id') === want) continue
+          const from = arr.findIndex((c) => c?.get('id') === want)
+          if (from < 0) continue
+          children.insert(i, [plainToY(yToPlain(arr[from]))])
+          children.delete(from < i ? from : from + 1, 1)
+        }
       },
       LOCAL_ORIGIN,
     )

@@ -16,7 +16,8 @@
     "type": {
       "type": "string",
       "enum": ["frame", "text", "rect", "component", "group"],
-      "description": "节点类型"
+      "description": "节点类型",
+      "$comment": "group 仅为旧稿校验/渲染兼容保留：新稿不再产生 group（AI 落地时 repair 归一化为 frame），用户面板只开放 text/rect/frame——不是遗留未清，勿删。"
     },
     "componentType": {
       "type": "string",

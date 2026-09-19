@@ -13,7 +13,15 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { DesignNode } from '@/design/types'
 import { resolveColor } from '@/design/styleToCss'
-import { CanvasIcon, buildIconExport, FALLBACK_ICON_NAME, iconSchema, ICON_LIBRARY, resolveIcon } from './index'
+import {
+  CanvasIcon,
+  buildIconExport,
+  FALLBACK_ICON_NAME,
+  iconSchema,
+  ICON_LIBRARY,
+  isKnownIconName,
+  resolveIcon,
+} from './index'
 
 const SHARED_ICONS = JSON.parse(
   readFileSync(resolve(process.cwd(), '../shared/icon-library.json'), 'utf-8'),
@@ -46,6 +54,25 @@ describe('icon 单一来源契约（shared/icon-library.json）', () => {
     const names = SHARED_ICONS.icons.map((i) => i.name)
     expect(new Set(names).size).toBe(names.length)
     expect(iconSchema[0].options).toEqual(names)
+  })
+
+  it('①-2 库级数据守门：每个图标都有非空 path/label，名字唯一，兜底与缺省图标都在库内', () => {
+    // 「空 <svg>」唯一可能的来源就是这里——库里混进一条空 path。
+    // 这条守门把该类数据问题挡在提交之前（渲染侧只会兜底成 help-circle，无法自证）。
+    const broken = SHARED_ICONS.icons.filter((i) => !i.name?.trim() || !i.label?.trim() || !i.path?.trim())
+    expect(broken.map((i) => i.name || '(无名)')).toEqual([])
+
+    const names = SHARED_ICONS.icons.map((i) => i.name)
+    expect(new Set(names).size).toBe(names.length)
+    expect(names).toContain(FALLBACK_ICON_NAME)
+    expect(names).toContain(ICON_LIBRARY.icons[0].name)
+  })
+
+  it('①-3 未知名判定：空值/非字符串算"没提供"，非空且不在库内才算未知', () => {
+    expect(isKnownIconName('star')).toBe(true)
+    expect(isKnownIconName('不存在的图标')).toBe(false)
+    expect(isKnownIconName('')).toBe(false)
+    expect(isKnownIconName(undefined)).toBe(false)
   })
 })
 
@@ -93,6 +120,8 @@ describe('icon 画布渲染（内联值断言）', () => {
     const { container } = render(<CanvasIcon props={{ name: '不存在的图标' }} />)
     expect(container.querySelector('path')?.getAttribute('d')).toBe(fallbackPath())
     expect(warn).toHaveBeenCalledTimes(1)
+    // 2026-09-16：未知名字还要在 DOM 上**看得见**（否则产物里只是个正常的问号，没人发现模型编造过）
+    expect(container.querySelector('[data-icon-fallback]')?.getAttribute('data-icon-fallback')).toBe('不存在的图标')
   })
 
   it('name 缺省 → star（组件库 default，与后端提示词口径一致）；缺省不触发 warn', () => {
@@ -100,6 +129,7 @@ describe('icon 画布渲染（内联值断言）', () => {
     const { container } = render(<CanvasIcon props={{}} />)
     expect(container.querySelector('path')?.getAttribute('d')).toBe(starPath())
     expect(warn).not.toHaveBeenCalled()
+    expect(container.querySelector('[data-icon-fallback]')).toBeNull() // 缺省不算未知
   })
 })
 
@@ -117,6 +147,16 @@ describe('icon 导出语义与属性面板', () => {
     const path = svg.children![0]
     expect(path.tag).toBe('path')
     expect(path.attrs).toEqual({ d: starPath() })
+  })
+
+  it('未知名：导出语义带上 data-icon-fallback（两通道同源，产物里能看出名字被编造过）', () => {
+    const node: DesignNode = { id: 'i', type: 'component', componentType: 'icon', props: { name: '不存在' } }
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const el = buildIconExport(node)
+    expect(el.attrs).toEqual({ 'data-icon-fallback': '不存在' })
+    // 路径同时兜底成 help-circle（既可见又能定位）
+    expect((el.children![0].children![0] as { attrs: Record<string, string> }).attrs.d).toBe(fallbackPath())
+    expect(warn).toHaveBeenCalledTimes(1)
   })
 
   it('未知 name 导出走兜底占位（与画布同源）', () => {

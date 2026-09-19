@@ -16,10 +16,14 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session as DbSession
 
-from ..models import ChatMessage, ChatSession, DesignLock, SessionToolCall
+from ..models import ChatMessage, ChatSession, DesignLock, SessionToolCall, User
 
 SESSION_KEY_RE = re.compile(r"^[A-Za-z0-9_-]{3,64}$")
 MAX_MESSAGES = 200
+# 工具调用账本同样的上限（2026-09-18 补）：此前 messages 有 200 条上限、tool_calls **没有**，
+# 而每次生成/修改/效果/探索都会记一条 → 长期会话（或 MCP 反复调用）在这张表上无上限增长。
+# 读取侧一直只有 limit=50，所以"留最近 200 条"对功能没有任何影响。
+MAX_TOOL_CALLS = 200
 MESSAGE_LIST_LIMIT = 500
 ROLES = {"user", "assistant"}
 DEFAULT_TITLE = "新会话"
@@ -47,6 +51,14 @@ def get_owned_session(db: DbSession, owner_id: int, key: str) -> ChatSession | N
     return db.execute(
         select(ChatSession).where(ChatSession.owner_id == owner_id, ChatSession.session_key == key)
     ).scalar_one_or_none()
+
+
+def owner_id_of(db: DbSession, username: str) -> int | None:
+    """用户名 → owner_id；用户不存在返回 None（403/404 的判定留给 router 层）。
+
+    T24：history 服务需要"查不到就安全降级"，不能 import router 的私有 _owner_id（会翻层）。
+    """
+    return db.execute(select(User.id).where(User.username == username)).scalar_one_or_none()
 
 
 def get_or_create_session(
@@ -170,7 +182,28 @@ def record_tool_call(db: DbSession, session: ChatSession, kind: str, ok: bool, s
     _touch(db, session)
     db.commit()
     db.refresh(call)
+    _prune_tool_calls(db, session)
     return call
+
+
+def _prune_tool_calls(db: DbSession, session: ChatSession) -> int:
+    """超出上限裁旧（与消息同一口径：保留最新 N 条），返回被裁条数。"""
+    total = db.execute(
+        select(func.count()).select_from(SessionToolCall).where(SessionToolCall.session_id == session.id)
+    ).scalar_one()
+    overflow = total - MAX_TOOL_CALLS
+    if overflow <= 0:
+        return 0
+    old_ids = db.execute(
+        select(SessionToolCall.id)
+        .where(SessionToolCall.session_id == session.id)
+        .order_by(SessionToolCall.id.asc())
+        .limit(overflow)
+    ).scalars().all()
+    if old_ids:
+        db.execute(delete(SessionToolCall).where(SessionToolCall.id.in_(old_ids)))
+        db.commit()
+    return len(old_ids)
 
 
 def list_tool_calls(db: DbSession, session: ChatSession, limit: int = 50) -> list[SessionToolCall]:

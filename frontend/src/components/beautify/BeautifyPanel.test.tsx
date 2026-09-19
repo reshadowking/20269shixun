@@ -51,6 +51,22 @@ describe('BeautifyPanel（缺陷 3）', () => {
     expect(props.onUnlock).toHaveBeenCalledTimes(1)
   })
 
+  /**
+   * 2026-09-18（用户实测报过）：面板分支原本取决于 `baseSnapshot` 而不是 `locked`，
+   * 于是**解锁后快照还在 → 面板永远停在"版面已锁定 / 解除版面锁定"**，
+   * 用户看到的是"点了确认之后变成解除绑定，再按几次都没有变化"。
+   * 现在分支只看真实锁状态；快照作为"对比原始版面"的基线继续保留。
+   */
+  it('解锁后（快照仍在）：回到「确认版面」分支，并提示基线仍可对比', () => {
+    renderPanel({ baseSnapshot: { design: DESIGN, at: Date.now() }, locked: false })
+    expect(screen.getByTestId('beautify-confirm')).toBeInTheDocument()
+    expect(screen.queryByTestId('beautify-confirmed')).not.toBeInTheDocument()
+    // 效果区那条说明是常驻元素，它也要跟着切回"尚未确认版面"
+    expect(screen.getByTestId('beautify-lock-note')).toHaveTextContent('尚未确认版面')
+    expect(screen.queryByTestId('lock-state')).not.toBeInTheDocument()
+    expect(screen.getByTestId('beautify-base-kept')).toHaveTextContent('上次基础版仍保留')
+  })
+
   it('对比原始版面：弹窗同时给出基础版与当前缩略图', async () => {
     renderPanel({ baseSnapshot: { design: DESIGN, at: Date.now() } })
     await userEvent.click(screen.getByTestId('beautify-compare'))

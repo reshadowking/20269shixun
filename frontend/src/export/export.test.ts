@@ -109,11 +109,17 @@ describe('导出安全（P0-1）', () => {
     const evil: DesignNode = {
       id: 'r',
       type: 'frame',
-      style: { color: `red'});globalThis.__pwned=1;//` },
+      // T52 批2 注：payload 放在 shadow（不经 resolveColor 分流的直通键）——color 值如今会被
+      // resolveColor 对未知裸词显式丢弃、到不了 styleLiteral；本测试钉的是"任意 style 值到达
+      // 字面量时必须被 JSON 包裹"的转义性质，因此用不受颜色策略影响的键。
+      style: { shadow: `red'});globalThis.__pwned=1;//` },
       children: [],
     }
     const code = designToReactApp(evil, false)
-    const styleLiterals = [...code.matchAll(/style=\{\{(\{.*?\})\}\}/gs)].map((m) => m[1])
+    // 注意形状：只能是 `style={ <JSON 对象> }`（一层花括号 + JSON.stringify 自带的 {}）。
+    // 旧断言写的是 `style={{…}}`（三层花括号）——那正是 2026-09-16 抓到的 P0（产物编译不过），
+    // 这条正则当时把 bug 固化成了"期望形状"。
+    const styleLiterals = [...code.matchAll(/style=\{(\{.*?\})\}/gs)].map((m) => m[1])
     expect(styleLiterals.length).toBeGreaterThan(0)
     // 恶意 style 字面量必须能被 JSON.parse 完整解析（引号由 JSON 规则包裹，无法提前闭合执行）
     const evilObj = styleLiterals.find((s) => s.includes('__pwned'))

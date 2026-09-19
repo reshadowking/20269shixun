@@ -562,13 +562,18 @@ describe('T10：守卫分级（增量路径放行，缺口清单 §4.9）', () =
     expect(fetchMock.mock.calls.some((c) => String(c[0]).includes('/api/generate'))).toBe(false)
   })
 
-  it('有设计稿但无编辑动词（今天天气怎么样）：仍被拦', async () => {
+  it('有设计稿但无编辑动词（今天天气怎么样）：放行给模型，零改动时如实说明（T24 口径）', async () => {
     const fetchMock = mockFetch({ questions: [] })
     vi.stubGlobal('fetch', fetchMock)
     render(<AIChatPanel sessionKey="s-test" onGenerate={() => {}} design={DESIGN as DesignNode} />)
     typeAndSend('今天天气怎么样')
-    expect(await screen.findByText(/只负责 UI/)).toBeInTheDocument()
-    expect(fetchMock.mock.calls.some((c) => String(c[0]).includes('/api/generate'))).toBe(false)
+    // T24 起：有稿时不再由前端前置拦下（否则"太丑了"这类延续也被误拦）；
+    // 模型原样返回 → 面板如实说"没有需要改动的地方"，而不是"已应用修改 ✓"
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some((c) => String(c[0]) === '/api/generate')).toBe(true)
+    })
+    expect(await screen.findByText(/没有需要改动的地方/)).toBeInTheDocument()
+    expect(screen.queryByText(/已应用修改/)).toBeNull()
   })
 })
 
@@ -618,7 +623,8 @@ describe('T10 批2：增量路径降级提示（缺口清单 §4.8 #15 补测）
   it('增量编辑响应带 degraded：成功消息提示「有 N 项能力暂不支持」', async () => {
     const fetchMock = mockFetch(
       { questions: [] },
-      { design: { ...DESIGN, style: { layout: 'column' } }, template: 'edit', compliance: 100, violations: 0, fallback: false, degraded: ['icon@ic'] },
+      // T24：必须返回"确实发生了改动"的树——零改动会被面板如实判为"没有需要改动的地方"
+      { design: { ...DESIGN, style: { layout: 'column', background: 'primary' } }, template: 'edit', compliance: 100, violations: 0, fallback: false, degraded: ['icon@ic'] },
     )
     vi.stubGlobal('fetch', fetchMock)
     const onIncrementalEdit = vi.fn(async () => ({ ok: true }))
@@ -626,5 +632,64 @@ describe('T10 批2：增量路径降级提示（缺口清单 §4.8 #15 补测）
     typeAndSend('把标题改成新文案')
     await waitFor(() => expect(screen.getByText(/已应用修改 ✓/)).toBeInTheDocument())
     expect(screen.getByText(/1 项能力暂不支持，已用近似组件表达/)).toBeInTheDocument()
+  })
+})
+
+describe('T24 多轮：有稿时的输入分流与上下文', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    localStorage.clear()
+  })
+
+  it('有设计稿时「太丑了」不再被守卫拦下，而是带 design/session_key 走增量', async () => {
+    const EDITED = { ...DESIGN, style: { layout: 'column', background: 'primary' } }
+    const fetchMock = mockFetch({ questions: [] }, { design: EDITED, template: 'edit', compliance: 100, violations: 0, fallback: false })
+    vi.stubGlobal('fetch', fetchMock)
+    const onIncrementalEdit = vi.fn(async () => ({ ok: true }))
+    render(
+      <AIChatPanel
+        sessionKey="s-test"
+        onGenerate={() => {}}
+        design={DESIGN as DesignNode}
+        onIncrementalEdit={onIncrementalEdit}
+      />,
+    )
+    typeAndSend('太丑了')
+    await waitFor(() => expect(screen.getByText(/已应用修改 ✓/)).toBeInTheDocument())
+    expect(screen.queryByText(/只负责 UI/)).toBeNull() // 未被角色守卫拦下
+
+    const call = fetchMock.mock.calls.find((c) => String(c[0]) === '/api/generate')
+    expect(call).toBeTruthy()
+    const body = JSON.parse(String(call?.[1]?.body))
+    expect(body.design).toEqual(DESIGN)
+    expect(body.prompt).toBe('太丑了')
+    expect(body.session_key).toBe('s-test') // 会话 id 让后端能取最近 2 轮历史
+  })
+
+  it('空画布上「太丑了」仍被守卫拦下（角色边界不退化）', async () => {
+    const fetchMock = mockFetch({ questions: [] })
+    vi.stubGlobal('fetch', fetchMock)
+    renderPanel()
+    typeAndSend('太丑了')
+    expect(await screen.findByText(/只负责 UI/)).toBeInTheDocument()
+    expect(fetchMock.mock.calls.some((c) => String(c[0]) === '/api/generate')).toBe(false)
+  })
+
+  it('编辑成功回执带用户原话回声', async () => {
+    const fetchMock = mockFetch(
+      { questions: [] },
+      { design: { ...DESIGN, style: { layout: 'column', background: 'primary' } }, template: 'edit', compliance: 100, violations: 0, fallback: false },
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    render(
+      <AIChatPanel
+        sessionKey="s-test"
+        onGenerate={() => {}}
+        design={DESIGN as DesignNode}
+        onIncrementalEdit={vi.fn(async () => ({ ok: true }))}
+      />,
+    )
+    typeAndSend('把主按钮改成橙色')
+    await waitFor(() => expect(screen.getByText(/按你说的「把主按钮改成橙色」/)).toBeInTheDocument())
   })
 })

@@ -5,7 +5,7 @@ import {
   Tag as TagIcon, TrendingUp, UserRound, type LucideIcon,
 } from 'lucide-react'
 
-import { componentPalette } from '@/components/canvas/registry'
+import { componentPalette, createPrimitiveNode, encodePaletteDragPayload, primitivePalette, type PrimitiveType } from '@/components/canvas/registry'
 import { Button } from '@/components/ui/button'
 import { genId } from '@/design/tree'
 import type { DesignNode } from '@/design/types'
@@ -43,8 +43,9 @@ export default function ComponentPalette({
   onAdd: (node: DesignNode) => void
 }) {
   const handleDragStart = useCallback(
-    (e: React.DragEvent, type: string) => {
-      e.dataTransfer.setData('application/design-component', type)
+    (e: React.DragEvent, payload: string, kind: 'component' | 'primitive') => {
+      // 组件是裸 componentType（历史格式）；基元带 primitive: 前缀（编解码收敛在 registry）
+      e.dataTransfer.setData('application/design-component', encodePaletteDragPayload(payload, kind))
       e.dataTransfer.effectAllowed = 'copy'
     },
     [],
@@ -58,6 +59,10 @@ export default function ComponentPalette({
       props: {},
       style: { width: 200 },
     })
+  }
+
+  const addPrimitive = (type: PrimitiveType) => {
+    onAdd(createPrimitiveNode(type))
   }
 
   if (collapsed) {
@@ -80,13 +85,27 @@ export default function ComponentPalette({
               data-testid={`palette-icon-${type}`}
               title={label}
               draggable
-              onDragStart={(e) => handleDragStart(e, type)}
+              onDragStart={(e) => handleDragStart(e, type, 'component')}
               onClick={() => addNode(type)}
             >
               <Icon className="h-4 w-4" />
             </button>
           )
         })}
+        <div className="my-1 h-px w-6 bg-border" />
+        {primitivePalette.map(({ type, label, icon: Icon }) => (
+          <button
+            key={type}
+            className="rounded p-1.5 hover:bg-accent"
+            data-testid={`palette-icon-${type}`}
+            title={label}
+            draggable
+            onDragStart={(e) => handleDragStart(e, type, 'primitive')}
+            onClick={() => addPrimitive(type)}
+          >
+            <Icon className="h-4 w-4" />
+          </button>
+        ))}
       </div>
     )
   }
@@ -113,13 +132,31 @@ export default function ComponentPalette({
             className="h-9 justify-start gap-1.5 text-xs"
             data-testid={`palette-${type}`}
             draggable
-            onDragStart={(e) => handleDragStart(e, type)}
+            onDragStart={(e) => handleDragStart(e, type, 'component')}
             onClick={() => addNode(type)}
           >
             {(() => {
               const Icon = COMPONENT_ICONS[type] ?? SquarePen
               return <Icon className="h-3.5 w-3.5 shrink-0" />
             })()}
+            {label}
+          </Button>
+        ))}
+      </div>
+      <div className="mt-1 text-[11px] font-medium text-muted-foreground">基础元素</div>
+      <div className="grid grid-cols-2 gap-2">
+        {primitivePalette.map(({ type, label, icon: Icon }) => (
+          <Button
+            key={type}
+            variant="outline"
+            size="sm"
+            className="h-9 justify-start gap-1.5 text-xs"
+            data-testid={`palette-${type}`}
+            draggable
+            onDragStart={(e) => handleDragStart(e, type, 'primitive')}
+            onClick={() => addPrimitive(type)}
+          >
+            <Icon className="h-3.5 w-3.5 shrink-0" />
             {label}
           </Button>
         ))}

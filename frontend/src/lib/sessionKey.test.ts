@@ -15,6 +15,21 @@ describe('sessionKey 派生', () => {
     expect(designSessionKey(42)).toBe('s-design-42')
   })
 
+  it('缺陷 5：服务端登记的会话优先于 s-design-{id}（保存前的随机 key 才是真对话）', () => {
+    expect(deriveSessionKey(null, '42', 's-random11', 's-rand1234')).toBe('s-rand1234')
+    // 绑定值非法（脏数据/空）→ 退化，不能把脏 key 带进后端 422
+    expect(deriveSessionKey(null, '42', 's-random11', 'bad key!')).toBe('s-design-42')
+    expect(deriveSessionKey(null, '42', 's-random11', null)).toBe('s-design-42')
+  })
+
+  it('URL 显式 ?session= 仍然最高优先（绑定值只补在缺省时）', () => {
+    expect(deriveSessionKey('s-explicit1', '42', 's-random11', 's-rand1234')).toBe('s-explicit1')
+  })
+
+  it('绑定值只在 ?design= 分支生效：未保存画布不受影响（不会串到别人的会话）', () => {
+    expect(deriveSessionKey(null, null, 's-random11', 's-rand1234')).toBe('s-random11')
+  })
+
   it('无会话无设计 → 用调用方给的随机 key', () => {
     expect(deriveSessionKey(null, null, 's-random11')).toBe('s-random11')
     expect(deriveSessionKey(undefined, undefined, 's-random11')).toBe('s-random11')

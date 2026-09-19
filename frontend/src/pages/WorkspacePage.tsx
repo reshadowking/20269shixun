@@ -8,7 +8,7 @@ import BeautifyPanel from '@/components/beautify/BeautifyPanel'
 import CodeViewer from '@/components/export/CodeViewer'
 import AIChatPanel from '@/components/chat/AIChatPanel'
 import { NodeRenderer } from '@/canvas/NodeRenderer'
-import { freezeToFreeLayout } from '@/canvas/freeze'
+import { collectFreezeTargets, freezeToFreeLayout, waitForLayoutStable } from '@/canvas/freeze'
 import type { DesignCanvasHandle } from '@/canvas/DesignCanvas'
 import { EFFECT_SPECS } from '@/design/beautify'
 import { loadBaseSnapshot, saveBaseSnapshot, type BaseSnapshot } from '@/lib/baseSnapshot'
@@ -17,9 +17,11 @@ import HistoryPanel from '@/components/history/HistoryPanel'
 import { SaveNameForm } from '@/components/history/SaveNameForm'
 import ComponentPalette from '@/components/palette/ComponentPalette'
 import ComponentRecommend, { type RecommendItem } from '@/components/props/ComponentRecommend'
+import { createPrimitiveNode, isPrimitiveType, parsePaletteDragPayload } from '@/components/canvas/registry'
 import CanvasSettings from '@/components/props/CanvasSettings'
 import MultiSelectPanel from '@/components/props/MultiSelectPanel'
 import PropertyPanel from '@/components/props/PropertyPanel'
+import MembersPanel from '@/components/collab/MembersPanel'
 import FollowupModeSelect from '@/components/settings/FollowupModeSelect'
 import AlignToolbar from '@/components/toolbar/AlignToolbar'
 import { Button } from '@/components/ui/button'
@@ -28,14 +30,22 @@ import { BLANK_DESIGN, DEMO_DESIGNS } from '@/design/demoData'
 import { loadDraft, saveDraft } from '@/lib/designSession'
 import { designToReactApp } from '@/export/designToReact'
 import { findNode, findParent as findParentOf, genId } from '@/design/tree'
+import { diffDesign, planAiLanding } from '@/design/applyDiff'
+import { canAutoFreeze, readAutoFreeze, writeAutoFreeze } from '@/lib/autoFreeze'
 import type { ComponentType, DesignNode } from '@/design/types'
 import { api } from '@/lib/api'
 import SessionBar from '@/components/chat/SessionBar'
-import { deriveCollabRoom } from '@/lib/collabRoom'
+import PanelResizeHandle from '@/components/shell/PanelResizeHandle'
+import { clampPanelWidth, readPanelWidth } from '@/lib/panelWidth'
+import { deriveCollabRoom, needsSignedRoom, usesGateway } from '@/lib/collabRoom'
 import { clearSnapshots, deleteSnapshot, loadSnapshots, saveSnapshot, type SessionSnapshot } from '@/lib/sessionSnapshots'
 import { sessionApi, type SessionMeta } from '@/lib/sessionApi'
 import { deriveSessionKey, isSessionKey, randomSessionKey, SESSION_PARAM } from '@/lib/sessionKey'
+import { findSessionKeyForDesign } from '@/lib/sessionApi'
+import { applyTheme, getTheme } from '@/lib/theme'
 import { migrateLegacySessions } from '@/lib/migrateLegacySessions'
+import { auditGeometry, type AuditIssue } from '@/canvas/geometryAudit'
+import { placeUnpositionedChildren } from '@/design/freePlacement'
 import { useDesignStore } from '@/yjs/useDesignStore'
 
 interface OptimizeReport {
@@ -48,6 +58,10 @@ interface OptimizeReport {
 /**
  * 工作台入口（缺陷 4）：解析会话身份并写回 URL，再按会话 key 挂载内部工作台。
  * 切换会话 = navigate 换 ?session= → key 变化 → 整个工作台干净重挂（会话状态天然不串）。
+ *
+ * 缺陷 5（对话随项目留存）：`?design={id}` 且 URL 未显式给会话时，先问服务端"这张稿件当初用的是
+ * 哪条会话"再挂载——保存前聊天用的是随机会话 key（绑定记在 chat_sessions.design_id 上），
+ * 不查就只会打开 `s-design-{id}` 这条空会话，表现为"重新打开项目，对话被清空"。
  */
 export default function WorkspacePage() {
   const [searchParams, setSearchParams] = useSearchParams()
@@ -56,40 +70,112 @@ export default function WorkspacePage() {
   const sessionRef = useRef<string | null>(null)
   if (sessionRef.current === null) {
     // 懒初始化：StrictMode 双渲染下随机值只生成一次，会话身份稳定
-    sessionRef.current = deriveSessionKey(sessionParam, designParam, randomSessionKey())
+    sessionRef.current = randomSessionKey()
   }
-  const sessionKey = isSessionKey(sessionParam) ? (sessionParam as string) : sessionRef.current
+  const explicitSession = isSessionKey(sessionParam)
+  const designId = designParam && /^\d+$/.test(designParam) ? Number(designParam) : null
+  /** 服务端登记的"本设计原本的会话"；查不到/查询失败保持 null → 退化 s-design-{id} */
+  const [boundKey, setBoundKey] = useState<string | null>(null)
+  /** 解析是否完成：未完成前不挂载（否则会先亮出空会话，再重挂一次） */
+  const [lookupDone, setLookupDone] = useState(() => explicitSession || designId === null)
   useEffect(() => {
+    if (explicitSession || designId === null) {
+      setLookupDone(true)
+      return
+    }
+    let cancelled = false
+    setLookupDone(false)
+    void findSessionKeyForDesign(designId).then((key) => {
+      if (cancelled) return
+      setBoundKey(key)
+      setLookupDone(true)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [designId, explicitSession])
+  const sessionKey = deriveSessionKey(sessionParam, designParam, sessionRef.current, boundKey)
+  useEffect(() => {
+    if (!lookupDone) return
     if (searchParams.get(SESSION_PARAM) === sessionKey) return
     const next = new URLSearchParams(searchParams)
     next.set(SESSION_PARAM, sessionKey)
     setSearchParams(next, { replace: true })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionKey])
+  }, [sessionKey, lookupDone])
+  if (!lookupDone) {
+    return (
+      <div className="flex h-screen items-center justify-center" data-testid="workspace-session-resolving">
+        <p className="text-sm text-muted-foreground">正在恢复本项目的对话…</p>
+      </div>
+    )
+  }
   return <WorkspaceInner key={sessionKey} sessionKey={sessionKey} />
 }
 
 /** 工作台内部：组件面板 + 画布 + 右侧活动栏（P1：活动栏图标 + 展开面板） */
 function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
-  const wsUrl = import.meta.env.VITE_WS_URL ?? 'ws://localhost:1234'
+  /** 直连端点（草稿 / 显式 ?room= 用；未配置网关时也是唯一端点） */
+  const wsDirectUrl = import.meta.env.VITE_WS_URL ?? 'ws://localhost:1234'
+  /** §三.1：协作网关地址。**不设时行为与改造前完全一致**（全部直连，房间名本地派生） */
+  const wsGatewayUrl = import.meta.env.VITE_WS_GATEWAY_URL || undefined
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const designParam = searchParams.get('design')
+  const explicitRoom = searchParams.get('room')
   // 协作 room（P0-4 + 缺陷 4）：?room= > design-{id} > session-{sessionKey}（不再每标签随机）
   const roomRef = useRef<string | null>(null)
   if (roomRef.current === null) {
-    roomRef.current = deriveCollabRoom(searchParams.get('room'), designParam, sessionKey)
+    roomRef.current = deriveCollabRoom(explicitRoom, designParam, sessionKey)
   }
   const room = roomRef.current
+  /**
+   * §三.1 + §四 传输决策（2026-09-16 收紧后）：
+   *   ① 配了网关 → **所有**房间都过网关（草稿、显式 ?room= 也一样）；
+   *   ② 其中"已保存稿件"必须等服务端签发房间：拿到之前**先不连**，
+   *      不能"先连可猜的 design-{id}、拿到再换"，那等于把网关绕过去了；
+   *   ③ 草稿/显式 ?room= 用本地房间名（`session-*` / `?room=` 原值），登录即可协作；
+   *   ④ 没配网关 → 与改造前完全一致（直连）。
+   */
+  const gatewayOn = usesGateway(wsGatewayUrl)
+  const signedRoomNeeded = needsSignedRoom(designParam, explicitRoom)
+  const [signedRoom, setSignedRoom] = useState<string | null>(null)
+  /**
+   * 2026-09-17 修（主流程）：**只有过网关才需要签发房间**。
+   *
+   * 原来"没配网关"时也会先直连 `design-{id}`、拿到签发房间后再切过去 —— 同一页面先后连两个房间，
+   * 本地副本先写进那个**临时房间**，切过去后两份内容合并：Playwright 抓 WS URL 实测房间序列
+   * `design-7 → tgRdBs-…`，量到刷新后画布回退成 DB 版本（`style.left` 180px → 120px，队友未保存的
+   * 编辑就丢了）。现在直连模式**一个房间连到底**（房间名仍是 `design-{id}`，与改造前一致）；
+   * 走网关时才等服务端签发，并把 `collabExpected` 传给 store（签发前不写占位副本）。
+   */
+  const waitForSignedRoom = signedRoomNeeded && gatewayOn && !signedRoom
+  const connectUrl = waitForSignedRoom ? undefined : gatewayOn ? wsGatewayUrl : wsDirectUrl
+  const connectRoom = signedRoomNeeded && gatewayOn && signedRoom ? signedRoom : room
   // D5：presence 昵称（?user= 可区分多标签演示；默认与登录账号一致）
   const userName = searchParams.get('user') ?? 'demo'
-  const { design, store } = useDesignStore(wsUrl, DEMO_DESIGNS[0], room)
+  const { design, store } = useDesignStore(
+    connectUrl,
+    DEMO_DESIGNS[0],
+    connectRoom,
+    // 走网关且房间名还没签发 → 让 store 知道"协作在路上"，别把占位副本先写进文档
+    waitForSignedRoom,
+  )
   /** 转自由画布（P1-13）：测量需要画布的 DOM 与缩放状态，因此由画布暴露能力 */
   const canvasRef = useRef<DesignCanvasHandle>(null)
+  /** T42：几何体检只在本页自己的画布子树里量（见 handleAudit 注释） */
+  const pageRef = useRef<HTMLDivElement>(null)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
 
   // P1 文件系统（缺陷 5/8/11）：打开保存的设计 / 模板起手 / 草稿 / 空白
   const [loaded, setLoaded] = useState(false)
+  /**
+   * 2026-09-17（B+）：**数据就绪**才算可读写 —— 本地模式 / 协作已 sync / 兜底已触发。
+   * 为什么单独一个状态：修成"房间为准"之后，`sync` 之前文档可能是空的，
+   * 这时自动保存/导出/选区若照常工作，就会把**空树**当成用户内容存下去（比原来的 bug 更糟）。
+   */
+  const [dataReady, setDataReady] = useState(() => store.dataReady)
+  useEffect(() => store.onDataReady(() => setDataReady(true)), [store])
   const [savedMeta, setSavedMeta] = useState<{ id?: number; name?: string }>({})
   const [saveDialogOpen, setSaveDialogOpen] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -143,8 +229,16 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
         target = null
       }
       if (target) {
-        store.resetDesign(target)
+        // 2026-09-17（B+）：**房间为准** —— 有协作端点时这里不再直接写文档，
+        // 而是等 provider 首个 sync：房间空才写、房间已有别人的内容则采用房间状态。
+        // 2026-09-18：打开时补一次"孤儿节点"坐标（free 父级下没有 x/y 的子节点会压在一起，
+        // 实测已有按钮 (276,192) / 新按钮 (268,184) 完全重叠）。有坐标的节点原样不动，
+        // 所以这一步只在真的存在孤儿时才有改动——顺带自愈历史上已经存坏了的稿件。
+        store.applyLoadedDesign(placeUnpositionedChildren(target))
         setSavedMeta(meta)
+      } else {
+        // 没给任何参数（裸 /workspace、?asset=… 等）：沿用"演示稿起手"的既有行为
+        store.applyLoadedDesign(placeUnpositionedChildren(DEMO_DESIGNS[0]))
       }
       setLoaded(true)
     }
@@ -152,23 +246,164 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // P1 草稿自动保存（缺陷 5/8 + 缺陷 4：按会话分片，300ms 防抖）
+  // T46a-3d：协作角色（owner/editor/viewer）。写入阻断由协作网关负责，这里只做"如实告知"。
+  // §三.1：同一个请求把**签发房间**也拿回来（一次调用两样东西，避免重复打接口）。
+  const [collabRole, setCollabRole] = useState<string | null>(null)
+  const [collabRoomError, setCollabRoomError] = useState('')
+  /** T46a-4：本稿所属工作区（工作台内"邀请协作"入口用） */
+  const [collabWorkspaceId, setCollabWorkspaceId] = useState<number | null>(null)
+  const [inviteOpen, setInviteOpen] = useState(false)
   useEffect(() => {
-    if (!loaded) return
-    const timer = window.setTimeout(
-      () => saveDraft(sessionKey, design, { savedId: savedMeta.id, savedName: savedMeta.name }),
-      300,
-    )
+    if (!designParam || !loaded) return
+    let cancelled = false
+    api<{ role: string; room: string; workspace_id: number | null }>(`/api/designs/${designParam}/collab`)
+      .then((r) => {
+        if (cancelled) return
+        setCollabRole(r.role)
+        setCollabWorkspaceId(r.workspace_id ?? null)
+        setCollabRoomError('')
+        if (r.room) setSignedRoom(r.room)
+      })
+      .catch(() => {
+        /* 拿不到角色（老数据/未启用网关）就不标角色，不阻塞画布 */
+        if (cancelled || !gatewayOn) return
+        // 走网关时拿不到房间就不连——兜底直连等于给"猜房间名"开后门
+        setCollabRoomError('未能获取协作房间（服务端未签发），本次未建立协作连接。')
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [designParam, loaded, gatewayOn])
+
+  // 网关 4403 → 明确告知（不静默重连，避免"看着在线其实被拒"）
+  useEffect(() => {
+    store.onForbidden = () => {
+      setLockHint('无权进入该协作房间：请确认已用被邀请的账号登录，或让管理员重新邀请。')
+      window.setTimeout(() => setLockHint(''), 8000)
+    }
+    return () => {
+      store.onForbidden = undefined
+    }
+  }, [store])
+
+  /**
+   * 2026-09-16 撤销的并发口径（实测收窄版）：
+   * - 属性步骤若已被队友改成别的值 → store 跳过并回调 `onUndoBlocked`，这里提示（不弹框）；
+   * - 结构性步骤（新增/删除/换父级）若涉及的节点之后被队友改过 → 先 `window.confirm` 再撤。
+   * `window.confirm` 是阻塞式的，所以按住 Ctrl+Z 不会叠出多个对话框。
+   */
+  useEffect(() => {
+    store.onUndoBlocked = (reason) => {
+      setLockHint(reason)
+      window.setTimeout(() => setLockHint(''), 6000)
+    }
+    store.onUndoConfirm = (reason) => window.confirm(reason)
+    return () => {
+      store.onUndoBlocked = undefined
+      store.onUndoConfirm = undefined
+    }
+  }, [store])
+
+  // viewer 角色：进画布即提示"只读"（真实写入阻断在协作网关，这里负责让人知道自己是只读）
+  useEffect(() => {
+    if (collabRole !== 'viewer') return
+    setLockHint('只读访客：可以查看实时协作，但你的画布改动不会被保存。')
+    window.setTimeout(() => setLockHint(''), 8000)
+  }, [collabRole])
+
+  /**
+   * 2026-09-16：把"我正在编辑什么"广播给队友（显示在对方光标标签里，如 `小张 · 按钮「提交」`）。
+   * 只在**标签真的变了**时才写 awareness——否则每次文档更新都会推一条 presence。
+   */
+  const lastSelLabelRef = useRef('')
+  useEffect(() => {
+    const only = selectedIds.size === 1 ? findNode(design, [...selectedIds][0]) : null
+    const text = typeof only?.props?.text === 'string' ? String(only.props.text).slice(0, 8) : ''
+    const label = only ? `${only.componentType ?? only.type}${text ? `「${text}」` : ''}` : ''
+    if (label === lastSelLabelRef.current) return
+    lastSelLabelRef.current = label
+    store.publishSelection(label)
+  }, [store, selectedIds, design])
+
+  /**
+   * T46a-3e：只读访客的写入口一律关掉（拖拽 / 属性 / AI / 美化 / 保存）。
+   * 三层防护：① 网关丢弃 viewer 的写消息（服务端）；② 写接口 403（服务端）；
+   * ③ store 写入层拒绝 + UI 禁用（这里）——③ 的意义是"立刻可见"，而不是拖完才发现没动。
+   */
+  const readOnly = collabRole === 'viewer'
+  useEffect(() => {
+    store.setReadOnly(readOnly)
+  }, [store, readOnly])
+
+  /**
+   * T43：从资产库一键插入——`/workspace?asset=<id>` 时，把图片写进"当前选中的图片组件"。
+   * 没选中 / 选中的不是图片组件时，给出明确提示（不静默丢弃，也不猜用户想插到哪）。
+   *
+   * 2026-09-17 修：原来这个 effect 只在 `[loaded, searchParams]` 变化时跑，而它给出的提示恰恰是
+   * "请先选中一个「图片」组件，再点资产库的「插入到画布」" —— 用户照做（选中图片组件）之后，
+   * effect 不会再跑，插入**永远不会发生**（探针实测：选中后提示原样不动、节点 src 仍是空）。
+   * 现在把"当前选中的节点"纳入依赖；插入成功后把 `?asset=` 从 URL 去掉，否则之后每改选一次
+   * 节点都会把同一张图再插一遍（还会多推一个撤销步）。
+   */
+  const selectedKey = [...selectedIds].join(',')
+  /** 提示只弹一次（依赖里加了选中项，避免每次改选都刷屏）；插入过的 asset 也记下来防重复 */
+  const assetHintRef = useRef<string | null>(null)
+  const insertedAssetRef = useRef<string | null>(null)
+  useEffect(() => {
+    const assetId = searchParams.get('asset')
+    if (!assetId || !loaded || insertedAssetRef.current === assetId) return
+    const selected = [...selectedIds]
+    const targetId = selected.find((id) => {
+      const node = findNode(design, id)
+      return node?.type === 'component' && node.componentType === 'image'
+    })
+    if (!targetId) {
+      if (assetHintRef.current !== assetId) {
+        assetHintRef.current = assetId
+        setLockHint('已从资产库带回图片：请先选中画布上的「图片」组件，图片会插进它。')
+        window.setTimeout(() => setLockHint(''), 6000)
+      }
+      return
+    }
+    const src = `/api/images/${assetId}`
+    insertedAssetRef.current = assetId
+    store.pushSnapshot()
+    store.updateNode(targetId, (node) => ({ ...node, props: { ...node.props, src } }))
+    const next = new URLSearchParams(searchParams)
+    next.delete('asset')
+    setSearchParams(next, { replace: true })
+    setLockHint('已把资产库图片插入选中的图片组件（可撤销）')
+    window.setTimeout(() => setLockHint(''), 6000)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loaded, dataReady, searchParams, selectedKey])
+
+  // P1 草稿自动保存（缺陷 5/8 + 缺陷 4：按会话分片，300ms 防抖）
+  /** 草稿写失败只提示一次（否则 300ms 防抖会让提示反复闪） */
+  const draftWarnedRef = useRef(false)
+  useEffect(() => {
+    // B+：数据没就绪（协作还在 sync）时不落草稿——否则会把"尚未同步回来的空树"存成本地草稿
+    if (!loaded || !dataReady) return
+    const timer = window.setTimeout(() => {
+      const ok = saveDraft(sessionKey, design, { savedId: savedMeta.id, savedName: savedMeta.name })
+      // 2026-09-17：本地存储写失败（配额满 / 被禁用）以前是**静默**的 —— 用户以为草稿一直在，
+      // 关掉标签页就什么都没了。这里提示一次（同一会话不重复刷屏），并指路服务端保存。
+      if (!ok && !draftWarnedRef.current) {
+        draftWarnedRef.current = true
+        setLockHint('本地存储已满或不可用：草稿没能自动保存，请点右上角「💾 保存」存到服务器')
+        window.setTimeout(() => setLockHint(''), 10000)
+      }
+    }, 300)
     return () => window.clearTimeout(timer)
-  }, [design, savedMeta, loaded, sessionKey])
+  }, [design, savedMeta, loaded, dataReady, sessionKey])
 
   // 缺陷 4：卸载（切会话/离开工作台）前立即落草稿，避免 300ms 防抖窗口内丢内容
-  const latestDraftRef = useRef({ design, savedMeta, sessionKey, loaded })
-  latestDraftRef.current = { design, savedMeta, sessionKey, loaded }
+  const latestDraftRef = useRef({ design, savedMeta, sessionKey, loaded, dataReady })
+  latestDraftRef.current = { design, savedMeta, sessionKey, loaded, dataReady }
   useEffect(
     () => () => {
-      const { design: d, savedMeta: m, sessionKey: k, loaded: l } = latestDraftRef.current
-      if (l) saveDraft(k, d, { savedId: m.id, savedName: m.name })
+      const { design: d, savedMeta: m, sessionKey: k, loaded: l, dataReady: ready } = latestDraftRef.current
+      // B+：同样只在数据就绪时落草稿（别把"还没同步回来的空树"存下去）
+      if (l && ready) saveDraft(k, d, { savedId: m.id, savedName: m.name })
     },
     [],
   )
@@ -176,6 +411,16 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
   // 保存到后端（缺陷 16/17）：未命名先弹命名框，已命名直接 PUT
   const handleSave = () => {
     if (saving) return
+    // B+：协作内容还没同步回来时不许保存——否则会把空树/旧树写成新版本
+    if (!dataReady) {
+      setSaveError('协作内容还在同步，请稍候再保存')
+      return
+    }
+    // T46a-3e：只读访客不能保存（后端 PUT 也会 403，这里先给出可读原因）
+    if (readOnly) {
+      setSaveError('只读访客：不能保存修改（需要 owner / editor 权限）。')
+      return
+    }
     if (savedMeta.id !== undefined) {
       setSaving(true)
       setSaveError('')
@@ -204,17 +449,21 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
     try {
       const r = await api<{ id: number; name: string }>('/api/designs', {
         method: 'POST',
-        body: JSON.stringify({ name: name.trim(), design }),
+        // 2026-09-18：会话绑定跟保存**同一次请求**落库（后端同事务写入 chat_sessions.design_id）。
+        // 此前是保存成功后再发一次 PATCH 且 `.catch(() => {})` 静默吞错——一次网络抖动就会让
+        // "这张稿件当初聊的会话"永远找不到，用户重开项目看到的就是对话被清空。
+        body: JSON.stringify({ name: name.trim(), design, session_key: sessionKey }),
       })
       setSavedMeta({ id: r.id, name: r.name })
-      // B3-1：新建保存为正式设计后迁移到 design-{id} 协作房间（保留 ydoc/撤销栈，不整页刷新）
-      store.reconnectRoom(wsUrl, `design-${r.id}`)
+      // B3-1：新建保存为正式设计后迁移协作房间（保留 ydoc/撤销栈，不整页刷新）。
+      // §三.1：配了网关时**不在这里连可猜房间**——先清掉直连端点，等 /collab 签发房间后由传输 effect 连。
+      if (gatewayOn) store.reconnectRoom(undefined, `design-${r.id}`)
+      else store.reconnectRoom(wsDirectUrl, `design-${r.id}`)
       // 缺陷 4：URL 补 design 参数（刷新后 room 派生一致）+ 会话绑定该设计
       const next = new URLSearchParams(searchParams)
       next.set('design', String(r.id))
       next.set(SESSION_PARAM, sessionKey)
       setSearchParams(next, { replace: true })
-      sessionApi.bindDesign(sessionKey, r.id).catch(() => {})
       lastSavedJsonRef.current = JSON.stringify(design)
       setUnsaved(false)
       setSaveDialogOpen(false)
@@ -242,11 +491,14 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
     return () => window.clearTimeout(timer)
   }, [design, loaded])
 
-  // 深色模式：只切换工作台 UI（shadcn dark class），不改变设计稿画布（v2.2 §5.1/§12）
-  const [dark, setDark] = useState(() => localStorage.getItem('design-dark') === '1')
+  // 深色模式：只切换工作台 UI（shadcn dark class），不改变设计稿画布（v2.2 §5.1/§12）。
+  // 2026-09-18：改用全局主题（lib/theme.ts）的**唯一一份存储**。此前工作台自己写 `design-dark`、
+  // AppShell 写 `design-tool-theme`，两边都会去动 `<html class="dark">` —— 在首页开深色再进工作台，
+  // 工作台按自己那份（默认浅色）把 dark class 摘掉，回到首页按钮还显示"浅色模式"但页面已经变亮，
+  // 用户看到的就是"深色模式时有时无/切页就丢"。
+  const [dark, setDark] = useState(() => getTheme() === 'dark')
   useEffect(() => {
-    document.documentElement.classList.toggle('dark', dark)
-    localStorage.setItem('design-dark', dark ? '1' : '0')
+    applyTheme(dark ? 'dark' : 'light')
   }, [dark])
 
   // AI 生成中：画布锁定（v2.2 §8.8）
@@ -318,7 +570,13 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
   /** 删除会话（4b：二次确认；连带服务端消息与本地快照） */
   const handleDeleteSession = (key: string) => {
     const target = sessions.find((x) => x.session_id === key)
-    if (!window.confirm(`删除会话「${target?.title ?? key}」？消息与快照将删除且不可恢复，画布内容不受影响。`)) return
+    // 2026-09-17：文案要说实话——删**当前**会话会把画布切到新的空白草稿（原草稿仍在本地，
+    // 可从首页「继续上次编辑」找回），此前统一写"画布内容不受影响"，与行为不符。
+    const isCurrent = key === sessionKey
+    const tail = isCurrent
+      ? '当前会话的画布会切到新的空白草稿；原草稿仍留在本地，可回首页用「继续上次编辑」找回。'
+      : '画布内容不受影响。'
+    if (!window.confirm(`删除会话「${target?.title ?? key}」？消息与快照将删除且不可恢复。${tail}`)) return
     void (async () => {
       try {
         await sessionApi.remove(key)
@@ -335,13 +593,24 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
   }
 
   const handleSaveSessionSnapshot = (label: string) => {
-    setSnapshots(saveSnapshot(sessionKey, design, label))
+    const { ok, list } = saveSnapshot(sessionKey, design, label)
+    setSnapshots(list)
+    // 2026-09-17：本地存储写失败不再静默（此前列表里显示"已保存"，刷新后却没有）
+    setSessionError(
+      ok ? '' : '快照保存失败（本地存储已满或不可用）：刷新后会丢失，请改用右上角「💾 保存」或清理浏览器存储。',
+    )
   }
 
   /** 回退到会话快照（4b：二次确认 + 可撤销） */
   const handleRestoreSessionSnapshot = (id: string) => {
     const snap = snapshots.find((x) => x.id === id)
     if (!snap) return
+    // 2026-09-17：版面已确认（锁定）阶段不允许整树回退——与「转自由画布」「智能优化」同一口径
+    if (store.isBeautifyLocked) {
+      setLockHint('版面已确认：不能回退到旧快照（会改变布局/尺寸），请先解除版面锁定')
+      window.setTimeout(() => setLockHint(''), 5000)
+      return
+    }
     if (!window.confirm(`回退到快照「${snap.label || '未命名快照'}」？当前画布内容会被覆盖（可撤销）。`)) return
     store.pushSnapshot()
     setUndoCount((c) => c + 1)
@@ -387,16 +656,23 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
     store.setBeautifyLock(true)
     setLayoutLocked(true)
     setBeautifyError('')
+    // T32：同步失败必须**回滚本地状态**——否则 UI 显示"已锁定/已解锁"，服务端却是另一个状态，
+    // 用户后续操作会被闸门静默拒绝（"点了没反应"的根源）。
     sessionApi.setBeautifyLock(sessionKey, true).catch(() => {
-      setBeautifyError('锁定状态未同步到服务端，刷新后可能丢失。请检查网络后重试。')
+      store.setBeautifyLock(false)
+      setLayoutLocked(false)
+      setBeautifyError('版面锁定未能同步到服务端（已回滚为未锁定）。请检查网络后重试。')
     })
   }
 
   const handleUnlockLayout = () => {
     store.setBeautifyLock(false)
     setLayoutLocked(false)
+    setBeautifyError('')
     sessionApi.setBeautifyLock(sessionKey, false).catch(() => {
-      setBeautifyError('解锁状态未同步到服务端，刷新后可能回到锁定态。请检查网络后重试。')
+      store.setBeautifyLock(true)
+      setLayoutLocked(true)
+      setBeautifyError('解除版面锁定失败（已回滚为仍锁定）。请检查网络后重试。')
     })
   }
 
@@ -413,7 +689,10 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
       })
       store.pushSnapshot()
       setUndoCount((c) => c + 1)
-      store.resetDesign(resp.design)
+      // 2026-09-17：改**差量落地**（原来 resetDesign 整树替换，与 ③ 里修掉的 AI 路径同一类问题）——
+      // 服务端只改了这个节点的效果，整树替换会 ① 吞掉队友在这期间的并发改动；
+      // ② 让所有人画布整体重挂；③ 清空发起者的操作级撤销栈（「↩ 撤销」直接变灰）。
+      store.applyAiDiff(diffDesign(design, resp.design))
       sessionApi.recordToolCall(sessionKey, `apply-effects:${key}`, true).catch(() => {})
     } catch (err) {
       sessionApi.recordToolCall(sessionKey, `apply-effects:${key}`, false).catch(() => {})
@@ -424,7 +703,7 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
   }
 
   /** T4 批3：批量应用高级效果（同类节点 / 选中多个）。
-   * 后端原子生效（任一 target 非法整批 422），成功后单次快照 + 整树替换 = 一步撤销。 */
+   * 后端原子生效（任一 target 非法整批 422），成功后单次快照 + **差量落地**。 */
   const handleApplyEffectBatch = async (nodeIds: string[], key: string, value: string | number | null) => {
     if (nodeIds.length === 0) return
     setBeautifying(true)
@@ -442,7 +721,8 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
       })
       store.pushSnapshot()
       setUndoCount((c) => c + 1)
-      store.resetDesign(resp.design)
+      // 同单人应用：差量落地（避免吞并发改动 / 画布重挂 / 清撤销栈）
+      store.applyAiDiff(diffDesign(design, resp.design))
       // 部分失败可读反馈（原子语义下服务端整批拒绝走 catch；此处防未来部分语义静默吞掉）
       if (resp.failed?.length) {
         setBeautifyError(`以下节点未能应用效果：${resp.failed.map((f) => f.node_id).join('、')}`)
@@ -458,6 +738,8 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
 
   // 画布背景网格点（P2-11，localStorage 记忆）
   const [showGrid, setShowGrid] = useState(() => localStorage.getItem('design-grid') !== '0')
+  /** 「AI 生成后自动转自由画布」偏好（默认开；关掉退回 flex，见 lib/autoFreeze.ts） */
+  const [autoFreeze, setAutoFreeze] = useState(() => readAutoFreeze())
 
   // 选中单个节点时显示属性
   const selectedNode = useMemo(() => {
@@ -489,6 +771,17 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
   // 右侧活动面板：点击图标展开，再次点击收起
   const [activePanel, setActivePanel] = useState<string | null>('props')
   const togglePanel = (key: string) => setActivePanel((prev) => (prev === key ? null : key))
+
+  // T49：右侧面板宽度可拖拽（所有右侧面板共用同一个宽度；持久化到本地）
+  const [panelWidth, setPanelWidth] = useState(() =>
+    readPanelWidth(typeof window === 'undefined' ? 1280 : window.innerWidth),
+  )
+  // 视口变化时重新夹紧：窄屏下拉宽过的面板不能把画布压没
+  useEffect(() => {
+    const onResize = () => setPanelWidth((w) => clampPanelWidth(w, window.innerWidth))
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
 
   // T6：常驻「代码」面板——当前设计对应的 src/App.tsx（与导出对话框同一产物函数，
   // withComments 同导出默认 true；上传图片在代码里以原始 URL 呈现，导出对话框才做内联）
@@ -528,14 +821,23 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
     store.insertChild(parentId, node)
   }
 
-  /** 组件库拖入画布：落点在自由布局根容器时设置坐标，否则追加 */
-  const handleDropComponent = (type: string, x: number, y: number) => {
-    const node: DesignNode = {
-      id: genId(type),
-      type: 'component',
-      componentType: type as DesignNode['componentType'],
-      props: {},
-      style: { width: 200 },
+  /** 组件库拖入画布：落点在自由布局根容器时设置坐标，否则追加。
+   *  payload 两类（编解码见 registry）：裸 componentType=组件（历史格式）；primitive: 前缀=排版基元。 */
+  const handleDropComponent = (payload: string, x: number, y: number) => {
+    const parsed = parsePaletteDragPayload(payload)
+    if (!parsed) return
+    let node: DesignNode
+    if (parsed.kind === 'primitive') {
+      if (!isPrimitiveType(parsed.type)) return
+      node = createPrimitiveNode(parsed.type)
+    } else {
+      node = {
+        id: genId(parsed.type),
+        type: 'component',
+        componentType: parsed.type as DesignNode['componentType'],
+        props: {},
+        style: { width: 200 },
+      }
     }
     if (design.style?.layout === 'free') {
       node.x = Math.max(0, Math.round(x))
@@ -551,6 +853,18 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
   const [errorMsg, setErrorMsg] = useState('')
 
   const handleOptimize = async () => {
+    if (readOnly) {
+      setLockHint('只读访客：不能执行智能优化（需要 owner / editor 权限）')
+      window.setTimeout(() => setLockHint(''), 4000)
+      return
+    }
+    // 版面已确认（锁定）阶段只有效果可改：优化会改 gap/padding/对齐（都是布局字段），
+    // 而落库走 resetDesign（整树替换、不过 _allowedWhileLocked），与 AI 路径的闸门口径不一致。
+    if (store.isBeautifyLocked) {
+      setLockHint('版面已确认：请先解除版面锁定再做布局优化')
+      window.setTimeout(() => setLockHint(''), 4000)
+      return
+    }
     setOptimizing(true)
     try {
       store.pushSnapshot()
@@ -559,7 +873,8 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
         method: 'POST',
         body: JSON.stringify({ design }),
       })
-      store.resetDesign(resp.design)
+      // 2026-09-17：同样改差量落地——优化只改布局样式，整树替换会吞并发改动 / 画布重挂 / 清撤销栈。
+      store.applyAiDiff(diffDesign(design, resp.design))
       setSelectedIds(new Set())
       setOptimizeReport(resp.report)
     } catch (err) {
@@ -574,50 +889,123 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
   }
 
   /** P1-13（缺陷 6 替代方案）：flex/网格布局 → 自由画布（子节点铺网格坐标，可拖拽） */
-  const handleConvertToFree = () => {
+  const convertingFreeRef = useRef(false)
+
+  /** 冻结结果：`ok=false` 时由调用方决定提示（手动）或静默（AI 落地后自动）。 */
+  type FreezeOutcome =
+    | { ok: true; nodes: number; containers: number; hidden: number }
+    | { ok: false; reason: 'no-canvas' | 'nothing' | 'unstable' | 'rejected'; detail?: string }
+
+  /**
+   * 冻结**整棵树**（2026-09-18 由"只冻根节点一层"扩到逐层）：一次 Ctrl+Z 可完整还原。
+   *
+   * 语义（P1-13）：保留当前视觉现状，只把节点变成可拖拽——**不是重新排布**。
+   * 先等版面稳定（字体/图片/两帧 rAF）→ 逐层测量（测量全部发生在写入之前）→ 单事务提交。
+   * 「🔓 转自由画布」与"AI 生成后自动冻结"共用这一条路径，两者行为因此永远一致。
+   */
+  const freezeWholeTree = async (): Promise<FreezeOutcome> => {
+    const canvas = canvasRef.current
+    if (!canvas) return { ok: false, reason: 'no-canvas' }
+    // 2026-09-17：先等版面稳定再测量——"测早了 → 冻结写进的小尺寸把版面压错位"是验收反馈头号嫌疑。
+    // 查询限定在本页子树（T42 的教训：全局 querySelector 会命中别的画布/预览层）。
+    const stable = await waitForLayoutStable(
+      pageRef.current?.querySelector<HTMLElement>('[data-testid="canvas-sheet"]') ?? null,
+    )
+    if (!stable.settled) {
+      const who = stable.pendingImages
+        ? `${stable.pendingImages} 张图片还没加载完`
+        : stable.fontsPending
+          ? '字体还没就绪'
+          : '版面还在变化'
+      return { ok: false, reason: 'unstable', detail: who }
+    }
+    const current = store.getDesign()
+    const groups: Array<{
+      parentId: string
+      updates: Array<{ id: string; x: number; y: number; width: number; height: number }>
+      containerSize?: { width: number; height: number }
+    }> = []
+    let nodes = 0
+    let hidden = 0
+    // 逐层测量：某一层完全量不到（整层隐藏等）就跳过它，不拖累其它层——但一层都没量到则整批取消
+    for (const parent of collectFreezeTargets(current)) {
+      const childIds = (parent.children ?? []).filter((c) => !c.hidden).map((c) => c.id)
+      const { measurements, missing, container } = canvas.measureFreeze(parent.id, childIds)
+      if (!measurements.length) continue
+      const updates = freezeToFreeLayout(parent.children ?? [], measurements)
+        .filter((c) => typeof c.x === 'number' && typeof c.y === 'number')
+        .map((c) => ({
+          id: c.id,
+          x: c.x as number,
+          y: c.y as number,
+          width: Number(c.style?.width ?? 0),
+          height: Number(c.style?.height ?? 0),
+        }))
+      if (!updates.length) continue
+      groups.push({ parentId: parent.id, updates, containerSize: container })
+      nodes += updates.length
+      hidden += missing.length
+    }
+    if (!groups.length) return { ok: false, reason: 'nothing' }
+    // 先快照（可"还原布局"），再单事务提交（一次 Ctrl+Z 完整还原）
+    store.pushSnapshot()
+    setUndoCount((c) => c + 1)
+    const result = store.convertToFreeLayoutBatch(groups)
+    if (!result.ok) {
+      // store 仍拒绝（锁定/越权/节点在测量期间被删）：把快照与计数退回，不留"按了没反应"的撤销步
+      store.popSnapshot()
+      setUndoCount((c) => Math.max(0, c - 1))
+      return { ok: false, reason: 'rejected' }
+    }
+    return { ok: true, nodes, containers: groups.length, hidden }
+  }
+
+  /**
+   * AI 产物落地后**自动冻结一次**（2026-09-17）：让"生成即可拖"，不用再点「🔓 转自由画布」。
+   *
+   * 前提：偏好开着（默认开）+ 不是锁定/只读 + 根节点还不是 free。
+   * 失败一律**静默保留 flex**（等图片显示出来用户仍可手动点按钮），不拿"可能偏小的尺寸"落库。
+   */
+  const autoFreezeAfterAi = async () => {
+    if (!readAutoFreeze()) return
+    const current = store.getDesign()
+    // 与「转自由画布」按钮同一套守卫：锁定/只读下 store 必然拒绝，先推快照只会留下空撤销步
+    if (!canAutoFreeze({ locked: store.isBeautifyLocked, readOnly: store.isReadOnly, layout: current.style?.layout })) return
+    if (!current.children?.length) return
+    await freezeWholeTree()
+  }
+
+  const handleConvertToFree = async () => {
     if (!design.children?.length) return
-    // 语义（P1-13）：保留当前视觉现状，只把子节点变成可拖拽——**不是重新排布**
+    if (convertingFreeRef.current) return // 等待测量期间重复点击：忽略（避免二次冻结覆盖）
     if (store.isBeautifyLocked) {
       setErrorMsg('版面已确认：请先解除版面锁定再转自由画布')
       return
     }
-    const canvas = canvasRef.current
-    if (!canvas) {
-      setErrorMsg('画布未就绪，请重试')
-      return
+    convertingFreeRef.current = true
+    try {
+      const outcome = await freezeWholeTree()
+      if (!outcome.ok) {
+        if (outcome.reason === 'unstable') {
+          setErrorMsg(`已取消转换：${outcome.detail}，此时测量会偏小并导致排版错乱。等画面稳定后重试即可。`)
+        } else if (outcome.reason === 'nothing') {
+          setErrorMsg('未能测量到任何节点，已取消转换')
+        } else if (outcome.reason === 'rejected') {
+          setErrorMsg('版面已锁定或存在越权改动，转换已取消')
+        } else {
+          setErrorMsg('画布未就绪，请重试')
+        }
+        return
+      }
+      setErrorMsg(
+        outcome.hidden
+          ? `已冻结 ${outcome.nodes} 个节点的位置与尺寸（含 ${outcome.containers} 个容器），现在可自由拖拽；${outcome.hidden} 个隐藏节点未冻结`
+          : `已冻结 ${outcome.nodes} 个节点的位置与尺寸（含 ${outcome.containers} 个容器），现在可自由拖拽`,
+      )
+      setSelectedIds(new Set())
+    } finally {
+      convertingFreeRef.current = false
     }
-    const childIds = design.children.filter((c) => !c.hidden).map((c) => c.id)
-    const { measurements, missing } = canvas.measureFreeze(design.id, childIds)
-    if (measurements.length === 0) {
-      setErrorMsg('未能测量到任何节点，已取消转换')
-      return
-    }
-    const updated = freezeToFreeLayout(design.children, measurements)
-    const updates = updated
-      .filter((c) => typeof c.x === 'number' && typeof c.y === 'number')
-      .map((c) => ({
-        id: c.id,
-        x: c.x as number,
-        y: c.y as number,
-        width: Number(c.style?.width ?? 0),
-        height: Number(c.style?.height ?? 0),
-      }))
-    // 先快照（可"还原布局"），再单事务提交（一次 Ctrl+Z 完整还原）
-    store.pushSnapshot()
-    setUndoCount((c) => c + 1)
-    const result = store.convertToFreeLayout(design.id, updates)
-    if (!result.ok) {
-      store.popSnapshot()
-      setUndoCount((c) => Math.max(0, c - 1))
-      setErrorMsg('版面已锁定或存在越权改动，转换已取消')
-      return
-    }
-    setErrorMsg(
-      missing.length
-        ? `已冻结 ${updates.length} 个节点的位置与尺寸，现在可自由拖拽；${missing.length} 个隐藏节点未冻结`
-        : `已冻结 ${updates.length} 个节点的位置与尺寸，现在可自由拖拽`,
-    )
-    setSelectedIds(new Set())
   }
 
   /** P0-1 操作级撤销/重做（缺陷 13）：用户编辑步骤，Ctrl+Z / Ctrl+Shift+Z */
@@ -647,6 +1035,27 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
   // ---- P0-1 增量编辑：被修改节点高亮（3 秒后消失）----
   const [highlightIds, setHighlightIds] = useState<Set<string>>(new Set())
 
+  // T26：几何体检（纯只读）——结果面板 + 复用 highlightIds 高亮相关节点
+  const [auditIssues, setAuditIssues] = useState<AuditIssue[] | null>(null)
+  const handleAudit = () => {
+    // T42：原来用 document.querySelector 全局找画布——一旦文档里还有别的 canvas-sheet
+    // （预览层 / 缩略图 / 测试里上一个用例的残留树），量的就是别人的 DOM，结果时对时错。
+    // 改成只在本页子树里找。
+    const sheet = pageRef.current?.querySelector<HTMLElement>('[data-testid="canvas-sheet"]')
+    if (!sheet) return
+    // 2026-09-17：把**设计语义**一起传进去（节点 id → 类型），否则规则只能靠 DOM 形状猜组件类型，
+    // 会把"渲染成裸 div 的 divider"报成空容器、把"svg 比盒子高 4px 的 icon"报成文字截断（都实测过）。
+    const byId = new Map<string, DesignNode>()
+    const walk = (node: DesignNode) => {
+      byId.set(node.id, node)
+      for (const child of node.children ?? []) walk(child)
+    }
+    walk(design)
+    const issues = auditGeometry(sheet, {}, { nodeTypeOf: (id) => byId.get(id) })
+    setAuditIssues(issues)
+    setHighlightIds(new Set(issues.map((issue) => issue.nodeId)))
+  }
+
   const handleIncrementalEdit = async (
     newDesign: DesignNode,
     changedIds: string[],
@@ -674,10 +1083,37 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
         setLockHint('AI 部分效果为非预置值，已忽略')
         window.setTimeout(() => setLockHint(''), 6000)
       }
+      // 2026-09-17：**差量落地**（原来是整树 clear+重建：并发下会吞掉队友在这期间对别的
+      // 节点的改动，并让所有人画布整体重挂）。根 id 变了这类（空白稿 empty → root）由
+      // diffDesign 返回 `replace`，自动退化为整体替换。
+      // 2026-09-18：落地前先补孤儿坐标——自动冻结之后父级都是 free，模型新增的节点不会带 x/y，
+      // 直接落地会压在已有节点上（见 freePlacement.ts）。补位发生在差量计算之前，
+      // 所以坐标跟着同一次 applyAiDiff 落库、撤销一步就能整体回退。
+      const diff = diffDesign(design, placeUnpositionedChildren(resp.design))
+      // ③ 并发前置条件（2026-09-17）：AI 是**基于快照**生成的。落地前核对"队友有没有动过
+      // 同一个字段 / 同一处结构"——此前只做到"事后提示已覆盖"，也就是仍然把队友的改动擦掉。
+      // 现在：结构被破坏 → 整批取消（不推快照、不动画布，让用户重发）；只有属性字段撞车 →
+      // 跳过那些字段（保留队友的版本），其余照常落地。
+      const plan = planAiLanding(design, store.getDesign(), diff)
+      if (plan.blocked.length) {
+        setLockHint(
+          `本次 AI 修改和队友刚做的改动撞了（${plan.blocked.length} 处结构改动），已取消、画布未改动；请稍后重新发起，AI 会基于最新画布生成`,
+        )
+        window.setTimeout(() => setLockHint(''), 9000)
+        return { ok: false, reason: '并发冲突：结构被队友改动' }
+      }
+      // 快照放在"确认能落地"之后：取消的分支不留空撤销步（同 autoFreezeAfterAi 的口径）
       store.pushSnapshot()
       setUndoCount((c) => c + 1)
-      store.resetDesign(resp.design)
+      store.applyAiDiff(plan.diff)
+      if (plan.skipped.length) {
+        const n = plan.skipped.reduce((sum, s) => sum + s.fields.length, 0)
+        setLockHint(`本次 AI 修改有 ${n} 处和队友的改动撞在一起，已保留队友的版本（其余已应用，可 Ctrl+Z 撤回）`)
+        window.setTimeout(() => setLockHint(''), 9000)
+      }
       setSelectedIds(new Set())
+      // 增量修改后若仍是 flex（首次生成没冻成 free 的情况），同样补一次自动冻结
+      void autoFreezeAfterAi()
       const changed = resp.changed_ids?.length ? resp.changed_ids : changedIds
       setHighlightIds(new Set(changed))
       window.setTimeout(() => setHighlightIds(new Set()), 5000)
@@ -713,7 +1149,7 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
   }
 
   return (
-    <div className="flex h-screen flex-col" data-testid="workspace-page">
+    <div className="flex h-screen flex-col" data-testid="workspace-page" ref={pageRef}>
       <header className="z-20 flex h-12 items-center justify-between border-b bg-background/85 px-4 shadow-sm backdrop-blur">
         <div className="flex items-center gap-3">
           <span className="flex items-center gap-2 font-semibold">
@@ -730,7 +1166,14 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
             variant="outline"
             className="h-7 text-xs"
             data-testid="optimize-layout"
-            disabled={optimizing}
+            disabled={optimizing || readOnly || layoutLocked}
+            title={
+              readOnly
+                ? '只读访客：不能修改画布'
+                : layoutLocked
+                  ? '版面已确认：请先解除版面锁定再做布局优化'
+                  : undefined
+            }
             onClick={handleOptimize}
           >
             ✨ 智能优化布局
@@ -744,15 +1187,38 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
           >
             ⬇ 导出代码
           </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 text-xs"
+            data-testid="geometry-audit"
+            onClick={handleAudit}
+          >
+            🧭 几何体检
+          </Button>
+          {/* T46a-4：工作台内的邀请入口（不用再跑到设置页）；草稿没有工作区时不显示 */}
+          {collabWorkspaceId !== null && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 text-xs"
+              data-testid="invite-collab"
+              onClick={() => setInviteOpen(true)}
+            >
+              👥 邀请协作
+            </Button>
+          )}
           {design.style?.layout !== 'free' && design.children && design.children.length > 0 && (
             <Button
               size="sm"
               variant="outline"
               className="h-7 text-xs"
               data-testid="convert-free"
-              disabled={layoutLocked}
+              disabled={layoutLocked || readOnly}
               title={
-                layoutLocked
+                readOnly
+                  ? '只读访客：不能修改画布'
+                  : layoutLocked
                   ? '版面已确认：请先解除版面锁定再转自由画布'
                   : '保留当前布局，把子节点变成可自由拖拽（不改位置与尺寸）'
               }
@@ -768,7 +1234,7 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
             className="h-7 text-xs"
             data-testid="undo-op"
             disabled={!store.canUndo}
-            title="撤销（Ctrl+Z）"
+            title="撤销（Ctrl+Z）· 只影响你自己的操作"
             onClick={handleUndoOp}
           >
             ↩ 撤销
@@ -790,6 +1256,7 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
               variant="ghost"
               className="h-7 text-xs"
               data-testid="undo-optimize"
+              disabled={readOnly}
               onClick={handleUndo}
             >
               ↩ 撤销优化
@@ -797,6 +1264,15 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
           )}
         </div>
         <div className="flex items-center gap-3 text-xs text-muted-foreground">
+          {readOnly && (
+            <span
+              className="rounded-full border border-amber-500/60 bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-600"
+              data-testid="readonly-badge"
+              title="只读访客：可查看实时协作，不能修改"
+            >
+              只读访客
+            </span>
+          )}
           {/* P1 文件系统（缺陷 5/8/16/17）：主页 + 文件名 + 保存；demo 切换已迁至主页 */}
           <span className="flex items-center gap-1 font-medium text-foreground" data-testid="design-name" title={savedMeta.name ?? '未命名'}>
             {savedMeta.name ?? '未命名'}
@@ -810,7 +1286,8 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
             variant="outline"
             className="h-7 text-xs"
             data-testid="save-design"
-            disabled={saving}
+            disabled={saving || readOnly}
+            title={readOnly ? '只读访客：不能保存修改' : undefined}
             onClick={handleSave}
           >
             💾 保存
@@ -830,11 +1307,33 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
               连接断开，自动重连中…
             </span>
           )}
+          {gatewayOn && signedRoomNeeded && !signedRoom && !collabRoomError && (
+            <span className="text-[11px] text-muted-foreground" data-testid="collab-waiting">
+              正在获取协作房间…
+            </span>
+          )}
+          {collabRoomError && (
+            <span className="text-[11px] text-amber-600" data-testid="collab-room-error">
+              {collabRoomError}
+            </span>
+          )}
           <Link to="/" className="hover:text-foreground" data-testid="go-home">← 主页</Link>
           <Link to="/api-config" className="hover:text-foreground">API 配置</Link>
           <span data-testid="selection-count">{selectedIds.size > 0 ? `已选 ${selectedIds.size} 个节点` : ''}</span>
         </div>
       </header>
+      {/* T46a-4：邀请协作风幕（复用设置页那块面板，固定到本稿的工作区） */}
+      {inviteOpen && collabWorkspaceId !== null && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-6"
+          data-testid="invite-dialog"
+          onClick={() => setInviteOpen(false)}
+        >
+          <div className="max-h-[80vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+            <MembersPanel fixedWorkspaceId={collabWorkspaceId} onClose={() => setInviteOpen(false)} />
+          </div>
+        </div>
+      )}
       <main className="flex flex-1 overflow-hidden">
         {/* 左侧：组件库（可折叠，P2） */}
         <aside
@@ -844,14 +1343,25 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
           <ComponentPalette
             collapsed={paletteCollapsed}
             onToggle={() => setPaletteCollapsed((c) => !c)}
-            onAdd={handleAdd}
+            onAdd={readOnly ? () => setLockHint('只读访客：不能添加组件（需要 owner / editor 权限）') : handleAdd}
           />
         </aside>
 
         {/* 中间：画布（AI 生成期间锁定） */}
         <div
           className="relative flex-1"
-          onPointerDown={() => {
+          onPointerDown={(e) => {
+            /**
+             * 2026-09-17 修（主流程）：**点在右键菜单/推荐浮层上时不要清空它们**。
+             *
+             * 原来这里无条件 `setCtxMenu(null)`：pointerdown 先冒泡到这里 → React 立刻卸载菜单 →
+             * 浏览器随后才派发 `click`，而目标（菜单项）已经从 DOM 里没了 → **整个右键菜单点不动**
+             * （推荐组件 / 智能优化 / 复制 / 删除 全是死的）。E2E `component-recommend.spec.ts` 抓到的：
+             * 点「✨ 推荐组件」后浮层从未出现。
+             * 菜单自己会在点完某项后关闭（各 onClick 里都 `setCtxMenu(null)`），所以这里只需跳过它自己。
+             */
+            const el = e.target as HTMLElement | null
+            if (el?.closest('[data-testid="context-menu"], [data-testid="recommend-popover"]')) return
             setCtxMenu(null)
             setRecommendPop(null)
           }}
@@ -861,12 +1371,71 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
             store={store}
             selectedIds={selectedIds}
             onSelectChange={setSelectedIds}
-            onDropComponent={handleDropComponent}
+            onDropComponent={readOnly ? undefined : handleDropComponent}
             showGrid={showGrid}
             onCanvasContextMenu={(nodeId, x, y) => setCtxMenu({ x, y, nodeId })}
             highlightIds={highlightIds}
             canvasRef={canvasRef}
+            readOnly={readOnly}
+            onReadOnlyDragAttempt={
+              readOnly
+                ? () => {
+                    setLockHint('只读访客：拖动/缩放不会生效（需要 owner / editor 权限）。')
+                    window.setTimeout(() => setLockHint(''), 4000)
+                  }
+                : undefined
+            }
           />
+          {auditIssues !== null && (
+            <div
+              className="absolute left-1/2 top-3 z-40 w-[420px] -translate-x-1/2 rounded-lg border bg-background p-3 text-xs shadow-lg"
+              data-testid="geometry-audit-panel"
+            >
+              <div className="mb-2 flex items-center justify-between">
+                <span className="font-medium">
+                  几何体检：{auditIssues.length === 0 ? '未发现问题 ✓' : `${auditIssues.length} 项`}
+                </span>
+                <button
+                  className="text-muted-foreground hover:text-foreground"
+                  data-testid="audit-close"
+                  onClick={() => {
+                    setAuditIssues(null)
+                    setHighlightIds(new Set())
+                  }}
+                >
+                  关闭
+                </button>
+              </div>
+              <ul className="max-h-48 space-y-1 overflow-y-auto">
+                {auditIssues.map((issue, index) => (
+                  <li key={`${issue.kind}-${issue.nodeId}-${index}`}>
+                    <button
+                      className="w-full rounded px-1.5 py-1 text-left hover:bg-accent"
+                      data-testid={`audit-issue-${index}`}
+                      onClick={() => setHighlightIds(new Set([issue.nodeId]))}
+                    >
+                      <span className="mr-1 rounded bg-muted px-1">
+                        {
+                          {
+                            overflow: '溢出',
+                            overlap: '重叠',
+                            'empty-frame': '空容器',
+                            'truncated-text': '截断',
+                            'low-contrast': '对比度',
+                          }[issue.kind]
+                        }
+                      </span>
+                      {/* 只报"对比度 2.97:1"用户不知道说的是哪个节点，必须点名（2026-09-18） */}
+                      <span className="text-muted-foreground" data-testid={`audit-node-${index}`}>
+                        {issue.nodeId}
+                      </span>
+                      <span className="ml-1">{issue.detail}</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
           {generating && (
             <div className="absolute inset-0 z-50 flex items-center justify-center bg-background/60" data-testid="canvas-lock">
               <span className="rounded-lg bg-background px-4 py-2 text-sm shadow">AI 生成中，画布已锁定…</span>
@@ -908,6 +1477,15 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
               data-testid="beautify-blocked-hint"
             >
               {lockHint}
+            </div>
+          )}
+          {/* B+：协作内容还没同步回来（房间为准）——明确告诉用户"在等"，而不是看着空画布 */}
+          {!dataReady && (
+            <div
+              className="absolute bottom-24 left-1/2 z-40 -translate-x-1/2 rounded-lg border bg-background px-3 py-1.5 text-xs text-muted-foreground shadow"
+              data-testid="sync-pending-hint"
+            >
+              正在同步协作内容…
             </div>
           )}
           {/* E3-2：优化报告（可一键撤销） */}
@@ -1013,7 +1591,15 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
         {/* 右侧：活动面板 + 活动栏（P1） */}
         <div className="flex">
           {activePanel && (
-            <aside className="w-80 shrink-0 overflow-hidden border-l bg-background" data-testid="activity-panel" data-panel={activePanel}>
+            <>
+              {/* T49：分隔条在 aside 左侧（flex 子项，不用绝对定位） */}
+              <PanelResizeHandle width={panelWidth} onWidthChange={setPanelWidth} />
+              <aside
+                className="shrink-0 overflow-hidden border-l bg-background"
+                style={{ width: panelWidth }}
+                data-testid="activity-panel"
+                data-panel={activePanel}
+              >
               <div className="flex h-10 items-center justify-between border-b px-3">
                 <span className="text-sm font-medium">{ACTIVITY_TITLES[activePanel]}</span>
                 <button
@@ -1042,6 +1628,7 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
                       node={selectedNode}
                       design={design}
                       locked={layoutLocked}
+                      readOnly={readOnly}
                       onUpdate={(updater) => store.updateNode(selectedNode.id, updater)}
                       onDelete={() => {
                         store.removeNode(selectedNode.id)
@@ -1052,7 +1639,11 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
                       onAddRecommend={handleRecommendAdd}
                     />
                   ) : (
-                    <CanvasSettings root={design} onUpdate={(updater) => store.updateNode(design.id, updater)} />
+                    <CanvasSettings
+                      root={design}
+                      readOnly={readOnly}
+                      onUpdate={(updater) => store.updateNode(design.id, updater)}
+                    />
                   )
                 )}
                 {activePanel === 'ai' && (
@@ -1074,9 +1665,14 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
                   <AIChatPanel
                     sessionKey={sessionKey}
                     onGeneratingChange={setGenerating}
+                    readOnly={readOnly}
                     onGenerate={(generated) => {
-                      store.resetDesign(generated)
+                      // 生成落地同样补一次孤儿坐标（模板骨架是 flex，一般用不上；
+                      // 但"在 free 画布上重新生成"时会用到，见 freePlacement.ts）
+                      store.resetDesign(placeUnpositionedChildren(generated))
                       setSelectedIds(new Set())
+                      // 生成即可拖：落地后自动冻结一次（偏好可关，见设置面板）
+                      void autoFreezeAfterAi()
                     }}
                     design={design}
                     onIncrementalEdit={handleIncrementalEdit}
@@ -1094,8 +1690,20 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
                       // D3：采用探索方案——先快照（可撤销回加载前），再整树替换（不入操作级撤销栈）
                       store.pushSnapshot()
                       setUndoCount((c) => c + 1)
-                      store.resetDesign(explored)
+                      store.resetDesign(placeUnpositionedChildren(explored))
                       setSelectedIds(new Set())
+                    }}
+                    // T49：变更清单卡片悬停 → 高亮画布节点（复用既有 data-highlighted 链路）
+                    onHighlightNodes={(ids) => setHighlightIds(new Set(ids))}
+                    onRevertChange={(item) => {
+                      // T49：撤回单条变更。差量**只含一个分量**，所以 applyAiDiff 内部的
+                      // 那一次 store 调用就是一个撤销步（Ctrl+Z 可退回撤回前）。
+                      // 同时pushSnapshot：与 AI 落地保持同一范式，面板「撤销」按钮也能回退。
+                      store.pushSnapshot()
+                      setUndoCount((c) => c + 1)
+                      store.applyAiDiff(item.revert)
+                      setSelectedIds(new Set([item.id]))
+                      setHighlightIds(new Set([item.id]))
                     }}
                   />
                     </div>
@@ -1107,6 +1715,7 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
                     selectedNode={selectedNode}
                     baseSnapshot={baseSnapshot}
                     locked={layoutLocked}
+                    readOnly={readOnly}
                     applying={beautifying}
                     error={beautifyError}
                     previewing={effectsPreview}
@@ -1125,10 +1734,17 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
                   <HistoryPanel
                     design={design}
                     savedId={savedMeta.id}
-                    onRestore={(restored: DesignNode) => {
-                      store.resetDesign(restored)
-                      setSelectedIds(new Set())
-                    }}
+                    onRestore={
+                      readOnly
+                        ? () => setLockHint('只读访客：不能恢复历史版本（需要 owner / editor 权限）')
+                        : store.isBeautifyLocked
+                          ? () =>
+                              setLockHint('版面已确认：不能恢复历史版本（会改变布局/尺寸），请先解除版面锁定')
+                          : (restored: DesignNode) => {
+                              store.resetDesign(restored)
+                              setSelectedIds(new Set())
+                            }
+                    }
                     onVersionSaved={() => setSavedMeta((m) => ({ ...m }))}
                   />
                 )}
@@ -1160,6 +1776,23 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
                         }}
                       />
                     </div>
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <div className="text-sm font-medium">AI 生成后自动转为可自由拖拽</div>
+                        <div className="text-xs text-muted-foreground">
+                          生成后自动冻结一次版面（保留当前视觉、子节点可任意摆放）；关掉则保持流式布局、拖动只重排顺序
+                        </div>
+                      </div>
+                      <Switch
+                        data-testid="settings-auto-freeze"
+                        checked={autoFreeze}
+                        onCheckedChange={(v) => {
+                          const on = Boolean(v)
+                          setAutoFreeze(on)
+                          writeAutoFreeze(on)
+                        }}
+                      />
+                    </div>
                     <div className="flex flex-col gap-1">
                       <div className="text-sm font-medium">AI 模型</div>
                       <div className="text-xs text-muted-foreground">在「API 配置」页设置多供应商 Key</div>
@@ -1173,6 +1806,7 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
                 )}
               </div>
             </aside>
+            </>
           )}
           <ActivityBar active={activePanel} onSelect={togglePanel} />
         </div>
@@ -1212,6 +1846,8 @@ function CanvasWithSelection({
   onCanvasContextMenu,
   highlightIds,
   canvasRef,
+  readOnly,
+  onReadOnlyDragAttempt,
 }: {
   design: DesignNode
   store: ReturnType<typeof useDesignStore>['store']
@@ -1222,6 +1858,8 @@ function CanvasWithSelection({
   onCanvasContextMenu?: (nodeId: string | null, x: number, y: number) => void
   highlightIds?: Set<string>
   canvasRef?: React.Ref<DesignCanvasHandle>
+  readOnly?: boolean
+  onReadOnlyDragAttempt?: () => void
 }) {
   return (
     <DesignCanvas
@@ -1234,6 +1872,8 @@ function CanvasWithSelection({
       showGrid={showGrid}
       onContextMenu={onCanvasContextMenu}
       highlightIds={highlightIds}
+      readOnly={readOnly}
+      onReadOnlyDragAttempt={onReadOnlyDragAttempt}
     />
   )
 }

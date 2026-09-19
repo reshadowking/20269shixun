@@ -3,18 +3,28 @@ from dataclasses import asdict
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator
+from sqlalchemy.orm import Session as DbSession
 
+from ..config import get_settings
+from ..db import get_db
 from ..security import get_current_user
+from ..services.ai_gateway import GatewayBusy, GenerationDeadline, run_generation
+from ..services.ai_ledger import quota_exceeded, record_calls, record_capability_gaps
 from ..services.compliance import compliance_rate, enforce_compliance
 from ..services.design_guard import GUARD_REPLY, is_design_request
 from ..services.generate import generate_design
+from ..services.history import recent_turns
 from ..services.questions import FOLLOWUP_MODES, analyze_questions
+from ..services.rate_limit import RateLimited
+from ..services.rate_limit import check as rate_check
 from ..services.templates import TEMPLATE_KEYS
 
 router = APIRouter(tags=["generate"])
 
 
 class GenerateRequest(BaseModel):
+    """生成请求。`assets` 是 2026-09-17 新增的用户资产库图片（可选，向后兼容）。"""
+
     # 上限 8000 字符：超长需求先进长提示词摘要（>400 字符），不再被接口直接拒绝
     prompt: str = Field(min_length=1, max_length=8000)
     design_system: str = Field(default="brand-design-token-23v1", max_length=100)
@@ -25,6 +35,12 @@ class GenerateRequest(BaseModel):
     # design_locks 查表），不读本字段——客户端谎报 locked=false 只会让模型更可能
     # 产出被闸门拒绝的改动（体验变差），不构成绕过锁的安全漏洞。
     locked: bool = False
+    # T24：会话 id（可选，向后兼容）——服务端据此取最近 2 轮历史（含上一轮指令原文）。
+    # 与 T21 的记账复用同一字段；缺省/越权/不存在都会安全降级为"无历史"。
+    session_key: str | None = Field(default=None, max_length=64)
+    # 2026-09-17：用户资产库里的图片（[{id,name,url}]，最多 12 条生效）。
+    # 让模型能引用"我上传过的图"，而不是编外链；不传 = 行为与改造前逐字相同。
+    assets: list[dict] = Field(default_factory=list, max_length=12)
 
 
 class GenerateResponse(BaseModel):
@@ -41,19 +57,64 @@ class GenerateResponse(BaseModel):
     violations_detail: list = []
     # T8：本轮降级明细（["icon@节点id"]）——附加字段，前端聊天面板消费（T8 收尾）
     degraded: list = []
+    # T51 批2：反馈归因字段（取本次最后一次模型调用；**没调模型 → null**，
+    # 覆盖熔断开路 / mock / 填充前失败——汇总脚本把 null 单列成"无模型调用"）
+    llm_model: str | None = None
+    llm_prompt_version: str | None = None
+    api_format: str | None = None
+    profile_id: str | None = None
+    # T52 收尾批：能力缺口统计摘要（{"degraded": n, "unknown_prop": n, "ops_rejected": n}）。
+    # 决策翻转说明：明细（detail/node_id）只进 DB + capability_gap_detail.log，API **只下发计数**
+    # ——满足"用户即时看到发生了什么"，不泄漏模型产物文本。null 口径与归因字段一致；
+    # 结果层判定：result.gaps 为空即 None（mock 与真实无缺口统一，不依赖配置层；
+    # mock 另有 SourceBadge"演示模板稿"专属提示，用户不会把 null 误读为"生成很干净"）。
+    gaps_summary: dict[str, int] | None = None
 
 
 @router.post("/api/generate", response_model=GenerateResponse)
-def generate(req: GenerateRequest, _user: str = Depends(get_current_user)):
-    """自然语言生成设计稿（意图解析 + 模板匹配 + 参数填充 + 合规检查）。"""
+async def generate(req: GenerateRequest, _user: str = Depends(get_current_user), db: DbSession = Depends(get_db)):
+    """自然语言生成设计稿（T20：专用线程池执行 + 并发闸门 + 整链路时间预算）。"""
     # 缺陷 9 + T10：角色边界分级——带 design 的增量修改不调守卫（「有设计稿且提要求」
     # 本来就该放行，§4.9 实测「加高级功能」被误拦）；首轮生成保持原有强度。
     if req.design is None and not is_design_request(req.prompt):
         raise HTTPException(status_code=422, detail=GUARD_REPLY)
     try:
-        result = generate_design(req.prompt, current_design=req.design, locked=req.locked)
+        rate_check(_user)
+    except RateLimited as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    quota_reason = quota_exceeded(_user)
+    if quota_reason:
+        raise HTTPException(status_code=429, detail=quota_reason)
+    history = recent_turns(db, req.session_key, _user)
+    deadline = GenerationDeadline(get_settings().llm_deadline_seconds)
+    try:
+        result = await run_generation(
+            generate_design,
+            req.prompt,
+            current_design=req.design,
+            locked=req.locked,
+            history=history,
+            deadline=deadline,
+            assets=req.assets,
+        )
+    except GatewayBusy as exc:
+        # 取不到槽位 = 没开始干活：503（与"干了但降级"的 200+fallback 语义区分）
+        raise HTTPException(status_code=503, detail="当前生成任务较多，请稍后重试") from exc
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"AI 生成失败：{exc}") from exc
+    record_calls(result.ai_calls, req.session_key, _user)  # T21：记账（内部吞异常，不影响返回）
+    # T52：能力缺口台账（同旁路范式）。有意只接在成功路径——生成链路异常中断（502/503）
+    # 无产物、无 repair，也就没有可记录的缺口；与 ai_calls 现状同口径。
+    record_capability_gaps(result.gaps, req.session_key, _user)
+    # T52：缺口统计摘要（结果层判定：gaps 空即 None）。ops_rejected 计数 = "被拒批次的去重
+    # op 类型数"（记录上限 5——超过 5 类时 N ≤ 实际类数），非拒绝次数；保留它的理由：
+    # error 通道只传达整体拒绝原因，摘要告知用户"被拒几类"。前端文案须用"类"而非"次"。
+    gaps_summary: dict[str, int] | None = None
+    if result.gaps:
+        gaps_summary = {}
+        for gap in result.gaps:
+            gaps_summary[gap["gap_type"]] = gaps_summary.get(gap["gap_type"], 0) + 1
+    last_call = result.ai_calls[-1] if result.ai_calls else {}
     return GenerateResponse(
         design=result.design,
         template=result.template,
@@ -65,6 +126,12 @@ def generate(req: GenerateRequest, _user: str = Depends(get_current_user)):
         error=result.error,
         violations_detail=result.violations_detail,
         degraded=result.degraded,
+        gaps_summary=gaps_summary,
+        # T51 批2：反馈归因字段（**没调模型 → null**，不是空串——汇总脚本按 null 单列分组）
+        llm_model=last_call.get("model") or None,
+        llm_prompt_version=last_call.get("prompt_version") or None,
+        api_format=last_call.get("api_format"),
+        profile_id=last_call.get("profile_id"),
     )
 
 
@@ -150,6 +217,8 @@ class ExploreRequest(BaseModel):
     # 与 GenerateRequest 同约束：超长需求由长提示词摘要兜底
     prompt: str = Field(min_length=1, max_length=8000)
     design_system: str = Field(default="brand-design-token-23v1", max_length=100)
+    # T24：与 /api/generate 一致——可选会话 id，用于取最近 2 轮历史
+    session_key: str | None = Field(default=None, max_length=64)
 
 
 class ExploreOptionModel(BaseModel):
@@ -172,7 +241,7 @@ class ExploreResponse(BaseModel):
 
 
 @router.post("/api/generate/explore", response_model=ExploreResponse)
-async def explore_options(req: ExploreRequest, _user: str = Depends(get_current_user)):
+async def explore_options(req: ExploreRequest, _user: str = Depends(get_current_user), db: DbSession = Depends(get_db)):
     """D3 最小版：并行生成 2 份不同风格方案（复用 /api/generate 单段生成链路，不构成两段式）。
 
     方案二在提示词上附加差异化风格约束；两次调用线程池并行，总耗时接近单次。
@@ -183,6 +252,13 @@ async def explore_options(req: ExploreRequest, _user: str = Depends(get_current_
 
     if not is_design_request(req.prompt):
         raise HTTPException(status_code=422, detail=GUARD_REPLY)
+    try:
+        rate_check(_user, cost=2)  # explore 实际发起两条链路
+    except RateLimited as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    quota_reason = quota_exceeded(_user)
+    if quota_reason:
+        raise HTTPException(status_code=429, detail=quota_reason)
     variants = [
         ("方案一 · 默认风格", req.prompt),
         (
@@ -193,9 +269,22 @@ async def explore_options(req: ExploreRequest, _user: str = Depends(get_current_
             ),
         ),
     ]
-    results = await asyncio.gather(*(asyncio.to_thread(generate_design, prompt) for _, prompt in variants))
+    history = recent_turns(db, req.session_key, _user)
+    deadline = GenerationDeadline(get_settings().llm_deadline_seconds)
+    try:
+        # 两方案各占一个生成槽位（专用池 ≥2 才能真并行；见 config.llm_max_concurrency 默认 4）
+        results = await asyncio.gather(
+            *(run_generation(generate_design, prompt, history=history, deadline=deadline) for _, prompt in variants)
+        )
+    except GatewayBusy as exc:
+        raise HTTPException(status_code=503, detail="当前生成任务较多，请稍后重试") from exc
     options = []
     degraded = False
+    for result in results:
+        record_calls(result.ai_calls, req.session_key, _user)  # T21：两方案各自记账
+        # T52：explore 复用同一 generate_design（经过 repair/降级/契约对比），缺口同样成立
+        record_capability_gaps(result.gaps, req.session_key, _user)
+        # TODO(L2-panel): explore 路径暂不下发 gaps_summary（缺口已入台账），与主路径统一时再加。
     for (label, _), result in zip(variants, results):
         if result.fallback:
             degraded = True

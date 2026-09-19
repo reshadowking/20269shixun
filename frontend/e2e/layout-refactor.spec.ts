@@ -140,3 +140,51 @@ test('P4b 画布尺寸最小限制与自由布局落点拖入', async ({ page })
   const sheet = await page.getByTestId('canvas-sheet').boundingBox()
   expect(sheet.width).toBeGreaterThanOrEqual(320) // 最小 320
 })
+
+/**
+ * 2026-09-17：**容器自己的盒子必须一起冻**。
+ *
+ * 子节点改成绝对定位后不再撑高父容器，而模板/AI 产物的容器只有 width（高度 auto），
+ * 于是"转自由画布"会把容器塌成只剩 padding 的一条，背景/圆角消失、子节点浮在容器外
+ * —— 这正是验收反馈的"有时候排版错乱"。实测（改前）：demo 根节点 276 → 64。
+ *
+ * 量的是**相对画布纸张**的坐标：纸张高度取自根节点，修好后纸张会从占位 600 变成真实
+ * 内容高度并因此重新居中，绝对屏幕坐标会整体平移，那不是排版变化。
+ */
+test('P3b 转自由画布：容器盒子不塌、子节点相对位置分毫不动', async ({ page }) => {
+  ROOM = 'e2e-' + Math.random().toString(36).slice(2, 10)
+  await login(page)
+  await page.goto('/workspace?from=demo&demo=coupon-root&room=' + ROOM)
+  await expect(page.getByTestId('node-coupon-title')).toBeVisible()
+  await page.waitForTimeout(300)
+
+  const rel = (nodeId: string) =>
+    page.evaluate((id: string) => {
+      const el = document.querySelector(`[data-node-id="${id}"]`)
+      const sheet = document.querySelector('[data-testid="canvas-sheet"]')
+      if (!el || !sheet) return null
+      const a = el.getBoundingClientRect()
+      const s = sheet.getBoundingClientRect()
+      return {
+        dx: Math.round(a.left - s.left),
+        dy: Math.round(a.top - s.top),
+        w: Math.round(a.width),
+        h: Math.round(a.height),
+      }
+    }, nodeId)
+
+  const ids = ['coupon-root', 'coupon-title', 'coupon-row', 'coupon-note']
+  const before: Record<string, { dx: number; dy: number; w: number; h: number }> = {}
+  for (const id of ids) before[id] = (await rel(id))!
+
+  await page.getByTestId('convert-free').click()
+  await page.waitForTimeout(600)
+
+  for (const id of ids) {
+    const after = (await rel(id))!
+    expect(Math.abs(after.dx - before[id].dx), `${id} 水平位置`).toBeLessThanOrEqual(1)
+    expect(Math.abs(after.dy - before[id].dy), `${id} 垂直位置`).toBeLessThanOrEqual(1)
+    expect(Math.abs(after.w - before[id].w), `${id} 宽度`).toBeLessThanOrEqual(1)
+    expect(Math.abs(after.h - before[id].h), `${id} 高度`).toBeLessThanOrEqual(1)
+  }
+})

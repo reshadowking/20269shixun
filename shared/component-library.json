@@ -70,7 +70,7 @@
         "width": 240,
         "height": 160,
         "radius": 12,
-        "background": "card",
+        "background": "#FFFFFF",
         "padding": 16
       }
     },
@@ -171,7 +171,7 @@
       "default_style": {
         "width": 640,
         "radius": 8,
-        "background": "card"
+        "background": "#FFFFFF"
       }
     },
     {
@@ -215,7 +215,7 @@
         "width": 480,
         "height": 240,
         "radius": 12,
-        "background": "card",
+        "background": "#FFFFFF",
         "padding": 16
       }
     },
@@ -244,7 +244,7 @@
         "width": 180,
         "height": 96,
         "radius": 12,
-        "background": "card",
+        "background": "#FFFFFF",
         "padding": 16
       }
     },
@@ -465,6 +465,7 @@
       "type": "icon",
       "name": "图标",
       "description": "线性图标（lucide 图标数据内联，name 从 shared/icon-library.json 白名单选）",
+      "_note": "props.name 默认 star 为通用插入场景；推荐系统（recommender.py）按场景覆盖为 home，不修改 library——本字段为人类可读说明，加载器与契约均忽略",
       "props": {
         "name": {
           "type": "string",

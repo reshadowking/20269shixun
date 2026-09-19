@@ -35,6 +35,10 @@ class Design(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(200), default="未命名设计稿")
     owner_id: Mapped[int] = mapped_column(Integer, index=True)
+    # T46a：归属工作区（NULL = 兼容期，读作创建人的个人工作区）
+    workspace_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    # T46a-3：协作房间名（服务端签发、不可猜；首次访问 /collab 时生成并持久化，保证多人拿到同一个）
+    collab_room: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     # 设计 JSON（toJSON 后的 DesignNode 树）
     design_json: Mapped[str] = mapped_column(Text, default="{}")
     # Yjs 实时文档状态由 y-websocket + leveldb 承担（B3-2 决策：实时状态与 PG 整树快照职责分离）；
@@ -62,10 +66,40 @@ class Image(Base):
     __tablename__ = "images"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # T38：资产归属（此前 images 表没有 owner：任何登录用户都能看到全部图片；资产库必须先补这一列）
+    owner_id: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    # T46a：归属工作区（与 designs 同口径）
+    workspace_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    # T46b：资产可见性——private(仅自己) / workspace(工作区成员) / public-link(凭链接任何人)
+    visibility: Mapped[str] = mapped_column(String(16), default="private", index=True)
+    # T44：所属资产文件夹（NULL = 根目录/未分组；删除文件夹时回落 NULL，不删资产）
+    folder_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    # 2026-09-16：文件夹内手工排序（拖拽）；同值时按 id 兜底，顺序始终确定
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, index=True)
     filename: Mapped[str] = mapped_column(String(255))
     path: Mapped[str] = mapped_column(String(512))  # 相对 volume 路径
     design_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     size: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class AssetFolder(Base):
+    """T44：资产文件夹（按账号组织素材，类似文件管理器的目录）。
+
+    不做嵌套（一期只一层）：演示规模下"一层目录 + 未分组"已经够用，
+    嵌套会把权限/移动/计数的复杂度放大好几倍。
+    """
+
+    __tablename__ = "asset_folders"
+    __table_args__ = (UniqueConstraint("owner_id", "name", name="uq_asset_folders_owner_name"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    owner_id: Mapped[int] = mapped_column(Integer, index=True)
+    name: Mapped[str] = mapped_column(String(64))
+    # 2026-09-16：多层目录（NULL = 顶层）。深度上限与"防环"在路由层校验。
+    parent_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    # 2026-09-16：文件夹自身的拖拽排序
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
@@ -115,6 +149,44 @@ class SessionToolCall(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
+class Workspace(Base):
+    """T46a：工作区——设计稿与资产的归属单位（替代"单用户拥有"）。"""
+
+    __tablename__ = "workspaces"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(120))
+    owner_id: Mapped[int] = mapped_column(Integer, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class WorkspaceMember(Base):
+    """T46a：成员与角色（owner / editor / viewer）。"""
+
+    __tablename__ = "workspace_members"
+    __table_args__ = (UniqueConstraint("workspace_id", "user_id", name="uq_workspace_members"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(Integer, ForeignKey("workspaces.id"), index=True)
+    user_id: Mapped[int] = mapped_column(Integer, index=True)
+    role: Mapped[str] = mapped_column(String(16), default="editor")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class WorkspaceInvite(Base):
+    """T46a：一次性邀请（token 用后失效；可设过期）。"""
+
+    __tablename__ = "workspace_invites"
+
+    token: Mapped[str] = mapped_column(String(64), primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(Integer, ForeignKey("workspaces.id"), index=True)
+    role: Mapped[str] = mapped_column(String(16), default="editor")
+    created_by: Mapped[int] = mapped_column(Integer)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    used_by: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
 class DesignLock(Base):
     """版面锁定状态（T4 批1，B2 决策：独立小表）。
 
@@ -129,3 +201,82 @@ class DesignLock(Base):
     session_key: Mapped[str] = mapped_column(String(64), primary_key=True)
     locked: Mapped[bool] = mapped_column(Boolean, default=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+
+class AiCall(Base):
+    """T21：AI 调用记账（**不含任何用户文本**，宪法 §二.3）。
+
+    一次生成会产生多条（意图解析 / 摘要 / 填充，含重试与备用模型切换），按 kind 区分。
+    prompt_version 由 system 文本的 sha256 前 12 位自动生成（防"忘改版本号"）。
+    """
+
+    __tablename__ = "ai_calls"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    session_key: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    user: Mapped[str] = mapped_column(String(64), default="", index=True)  # T22：按用户统计日配额
+    kind: Mapped[str] = mapped_column(String(16), default="")
+    model: Mapped[str] = mapped_column(String(64), default="")
+    prompt_version: Mapped[str] = mapped_column(String(16), default="")
+    tokens_in: Mapped[int] = mapped_column(Integer, default=0)
+    tokens_out: Mapped[int] = mapped_column(Integer, default=0)
+    latency_ms: Mapped[int] = mapped_column(Integer, default=0)
+    ok: Mapped[bool] = mapped_column(Boolean, default=True)
+    error_code: Mapped[str] = mapped_column(String(64), default="")
+    fallback: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
+
+
+class AiFeedback(Base):
+    """T51：AI 效果反馈（变更清单卡片的 👍/👎，**卡片级**——逐行粒度太细且易误判归因）。
+
+    category **单选**（structure/style/aesthetic/not_applied/worse）：一条反馈一个主因，
+    细节进 note；多选会让"哪类问题最多"的归因变模糊。
+    model / prompt_version / profile_id / api_format 是**归因字段**（那次生成用的什么），
+    没调过模型（熔断/mock/前置失败）时为空串——汇总脚本会把这一组单列成"无模型调用"。
+    """
+
+    __tablename__ = "ai_feedback"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user: Mapped[str] = mapped_column(String(64), default="", index=True)
+    session_key: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    rating: Mapped[int] = mapped_column(Integer)  # +1 = 👍；-1 = 👎
+    category: Mapped[str] = mapped_column(String(16), default="")
+    note: Mapped[str] = mapped_column(String(500), default="")
+    llm_model: Mapped[str] = mapped_column(String(64), default="")
+    prompt_version: Mapped[str] = mapped_column(String(16), default="")
+    profile_id: Mapped[str] = mapped_column(String(32), default="")
+    api_format: Mapped[str] = mapped_column(String(16), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
+
+
+class AiCapabilityGap(Base):
+    """T52：能力缺口台账（模型想要但链路表达不了的东西，逐条落库）。
+
+    三类 gap_type：degraded（未知组件/类型被降级 frame）、ops_rejected（ops 整批落地被拒）、
+    unknown_prop（节点级未知键被裁剪 / 组件契约外的 props 字段——渲染时静默回退默认值）。
+    report_ai_gaps.py 按 detail 聚合 Top N——"该加什么组件/补哪个字段"由这张表回答。
+
+    detail 只存能力名/字段名（模型产物），**经 `_sanitize_detail` 净化后入库**（非标识符
+    字符折叠为 <non-ascii>）——AI 自创键名可能夹带用户意图文本（如 props.用户备注），
+    隐私红线靠函数保证，不靠约定；完整原文只在本地 generate.log（无第三方流向）。
+    node_id 同经净化入库——DB 里的 node_id 与 degraded 字符串里的原文可能不同，**这是设计
+    不是 bug**：DB 防泄漏、字符串供前端展示。与 ai_calls 同一隐私红线：不含用户文本。
+    与 ai_feedback 不做强关联：靠 session_key + created_at 人工对齐；归因四字段与 AiFeedback
+    同源（那次生成用的什么；没调模型时为空串）。
+    """
+
+    __tablename__ = "ai_capability_gaps"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user: Mapped[str] = mapped_column(String(64), default="", index=True)
+    session_key: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    gap_type: Mapped[str] = mapped_column(String(16), default="")  # degraded | ops_rejected | unknown_prop
+    detail: Mapped[str] = mapped_column(String(120), default="")  # 能力名（pagination）或 props.<字段名>（props.glass）
+    node_id: Mapped[str] = mapped_column(String(64), default="")  # 净化后入库；原文仅在 degraded 字符串与本地日志
+    llm_model: Mapped[str] = mapped_column(String(64), default="")
+    prompt_version: Mapped[str] = mapped_column(String(16), default="")
+    profile_id: Mapped[str] = mapped_column(String(32), default="")
+    api_format: Mapped[str] = mapped_column(String(16), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)

@@ -58,10 +58,18 @@ describe('组件画布渲染', () => {
     expect(Object.keys(componentRegistry).sort()).toEqual([...COMPONENT_TYPES].sort())
     expect(componentPalette.length).toBe(LIB.components.length)
     for (const [type, def] of Object.entries(componentRegistry)) {
-      expect(typeof def.Canvas).toBe('function'), `${type} 缺画布渲染`
-      expect(typeof def.buildExport).toBe('function'), `${type} 缺导出语义描述 buildExport`
-      expect(Array.isArray(def.schema)), `${type} 缺属性配置`
-      expect(def.label).toBeTruthy(), `${type} 缺中文名`
+      /**
+       * 2026-09-17 修（oxlint 扫出来的）：这四行原来写成
+       *   `expect(typeof def.Canvas).toBe('function'), \`${type} 缺画布渲染\``
+       * —— 逗号运算符把后半句变成"没有 matcher 的 expect" + 一个未使用表达式，
+       * **前三条实际什么都没断言**（第 4 条断言跑了，但它的提示文案被丢了）。
+       * 也就是说"四件套齐备"这条用例此前抓不住"组件少了 Canvas/buildExport/schema"。
+       * 改成 vitest 的消息参数写法（`expect(value, message).matcher(...)`）。
+       */
+      expect(typeof def.Canvas, `${type} 缺画布渲染`).toBe('function')
+      expect(typeof def.buildExport, `${type} 缺导出语义描述 buildExport`).toBe('function')
+      expect(Array.isArray(def.schema), `${type} 缺属性配置`).toBe(true)
+      expect(def.label, `${type} 缺中文名`).toBeTruthy()
     }
   })
 

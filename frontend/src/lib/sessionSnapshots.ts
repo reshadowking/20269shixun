@@ -33,8 +33,18 @@ export function loadSnapshots(sessionKey: string): SessionSnapshot[] {
   return list ? [...list].sort((a, b) => b.at - a.at) : []
 }
 
-/** 保存快照（深拷贝隔离）；返回新列表（最新在前） */
-export function saveSnapshot(sessionKey: string, design: DesignNode, label = ''): SessionSnapshot[] {
+/**
+ * 保存快照（深拷贝隔离）。
+ *
+ * 返回 `{ ok, list }`：`ok=false` 表示**本地存储写失败**（配额满/被禁用）——
+ * 2026-09-17 起显式上报，调用方据此提示；此前静默失败，用户在列表里看到"已保存"、
+ * 刷新后却什么都没有。
+ */
+export function saveSnapshot(
+  sessionKey: string,
+  design: DesignNode,
+  label = '',
+): { ok: boolean; list: SessionSnapshot[] } {
   const snapshot: SessionSnapshot = {
     id: `snap-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
     at: Date.now(),
@@ -42,8 +52,8 @@ export function saveSnapshot(sessionKey: string, design: DesignNode, label = '')
     design: JSON.parse(JSON.stringify(design)) as DesignNode,
   }
   const next = [snapshot, ...loadSnapshots(sessionKey)].slice(0, MAX_SESSION_SNAPSHOTS)
-  saveJson(snapshotsKey(sessionKey), next)
-  return next
+  const ok = saveJson(snapshotsKey(sessionKey), next)
+  return { ok, list: next }
 }
 
 export function deleteSnapshot(sessionKey: string, id: string): SessionSnapshot[] {

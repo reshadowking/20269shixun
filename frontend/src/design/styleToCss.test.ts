@@ -3,9 +3,43 @@
  * 背景：schema 旧键为 spacing，但模板/组件库/优化器/LLM 输出实际使用 padding，
  * 此前 padding 落入 rest 后被静默丢弃（画布与导出内边距失效）。此处钉死双键语义。
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
-import { styleToCss } from './styleToCss'
+import { isAllowedColor } from './tokens.generated'
+import { styleToCss, resolveColor, isCssColorKeyword } from './styleToCss'
+
+describe('resolveColor 未知值分流（T52 批2：静默失效修复）', () => {
+  it('CSS 关键词：可渲染（resolveColor 放行）但被 isAllowedColor 拒——两个函数的有意分歧', () => {
+    // 分歧是设计：PropertyPanel 提示管"规范策略"（isAllowedColor），resolveColor 管"可渲染性"。
+    // 提示已按 isCssColorKeyword 豁免；此断言钉住分歧本身，防止有人"顺手统一"两个函数。
+    for (const kw of ['transparent', 'none', 'inherit', 'currentcolor']) {
+      expect(isCssColorKeyword(kw)).toBe(true)
+      expect(isAllowedColor('default', kw)).toBe(false)
+    }
+  })
+
+  it('未知裸词（想写令牌但拼错）→ undefined + dev 警告，不再原样放行成非法 CSS', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      expect(resolveColor('card')).toBeUndefined()
+      expect(warn).toHaveBeenCalledOnce()
+      expect(warn.mock.calls[0][0]).toContain('card')
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('hex / 函数值（渐变）/ CSS 关键词原样放行（合法 CSS，不误伤）', () => {
+    expect(resolveColor('#FFFFFF')).toBe('#FFFFFF')
+    expect(resolveColor('linear-gradient(135deg, #0052D9 0%, #7C4DFF 100%)')).toContain('linear-gradient')
+    expect(resolveColor('transparent')).toBe('transparent')
+  })
+
+  it('令牌名照常解析', () => {
+    expect(resolveColor('primary')).toBe('#0052D9')
+    expect(resolveColor('text-light')).toBe('#5F6B7A')
+  })
+})
 
 describe('内边距双键契约（padding 优先，spacing 回退）', () => {
   it('padding 生效', () => {

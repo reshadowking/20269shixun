@@ -58,10 +58,38 @@ services:
       PORT: "1234"
       ROOM: "design-room"
       YPERSISTENCE: "./storage"   # leveldb 持久化，容器重启不丢（与 PG 双保险）
-    ports:
-      - "1234:1234"
+    # 2026-09-16 收紧（§四）：**不再映射到宿主机**。
+    # 原因：它没有鉴权——端口一对外，知道房间名的人就能绕过网关直连写入，"只读访客"形同虚设。
+    # 现在浏览器一律走 collab-gateway（1235，需 JWT），y-websocket 只在 compose 内网可达。
+    # 需要直连（跑 Playwright E2E / 老前端）时叠加开发 override：
+    #   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d y-websocket
+    expose:
+      - "1234"
     volumes:
       - yjsdata:/app/storage
+
+  # T46a-3：协作鉴权网关（需要显式 profile 才拉起）
+  #   启用：docker compose --profile collab-auth up -d collab-gateway
+  #   前端指向它：VITE_WS_GATEWAY_URL=ws://localhost:1235（配了它=所有协作流量都过网关）
+  collab-gateway:
+    build: ./collab-gateway
+    container_name: design-collab-gateway
+    profiles: ["collab-auth"]
+    environment:
+      PORT: "1235"
+      UPSTREAM_WS: "ws://y-websocket:1234"
+      BACKEND_URL: "http://backend:8000"
+      # 必须与后端一致（后端 .env 的 JWT_SECRET / COLLAB_INTERNAL_TOKEN）
+      JWT_SECRET: "${JWT_SECRET:-dev-secret-change-me-please-32bytes-minimum}"
+      # 2026-09-17：这里原来默认**空**，而后端 `authorize` 在没配 token 时直接 503
+      # → 容器里就算起了网关、前端也指向它，**协作依然完全不可用**（实测两次 authorize 都 503，
+      # 两个标签页谁都没真正进房）。给一个与 JWT_SECRET 同口径的 dev 默认值，开箱即用；
+      # 生产部署务必在 .env 里换成随机值（.env.template 有说明）。
+      COLLAB_INTERNAL_TOKEN: "${COLLAB_INTERNAL_TOKEN:-dev-collab-internal-token-change-me}"
+    ports:
+      - "1235:1235"
+    depends_on:
+      - y-websocket
 
   backend:
     build:
@@ -70,6 +98,8 @@ services:
     container_name: design-backend
     env_file: .env
     environment:
+      # 与 collab-gateway 必须一致；不配时后端 authorize 直接 503（见上面的说明）
+      COLLAB_INTERNAL_TOKEN: "${COLLAB_INTERNAL_TOKEN:-dev-collab-internal-token-change-me}"
       PG_URL: postgresql+psycopg://postgres:postgres@postgres:5432/design
       REDIS_URL: redis://redis:6379/0
       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
@@ -88,6 +118,13 @@ services:
     build:
       context: ..
       dockerfile: frontend/Dockerfile
+      # 2026-09-17：协作端点是**构建期**常量（Vite 编译时把 VITE_* 替换进产物），
+      # 所以必须在这里传进去；不传 = 用源码兜底 ws://localhost:1234（与改造前一致）。
+      # 要在容器里启用协作：先 `--profile collab-auth up -d collab-gateway`，
+      # 再把 VITE_WS_GATEWAY_URL 设成 ws://localhost:1235（写进 .env）后重建前端镜像。
+      args:
+        VITE_WS_URL: ${VITE_WS_URL:-}
+        VITE_WS_GATEWAY_URL: ${VITE_WS_GATEWAY_URL:-}
     container_name: design-frontend
     ports:
       - "8080:80"            # 本机 80 被占用，映射 8080

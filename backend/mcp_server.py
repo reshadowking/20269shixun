@@ -2,7 +2,7 @@
 
 工具：
 - get_design_tokens：完整设计令牌 JSON（colors/typography/spacing/radius/shadow/motion/opacity）
-- get_component_library：15 个组件定义数组（type/name/props 定义/default_style）
+- get_component_library：组件定义数组（type/name/props 定义/default_style）
 - apply_design_edit（B2-3 轻量过渡版）：自然语言指令 + 当前设计 → 增量编辑后的合法设计树；
   复用生成链路全部后处理（宽容修复/Schema/令牌合规）。P1-6 正式 patch 版二期，本工具不构成 P1-6 交付。
 
@@ -32,8 +32,8 @@ def get_design_tokens_tool(session_id: str | None = None) -> dict:
 
 @mcp.tool()
 def get_component_library_tool(session_id: str | None = None) -> dict:
-    """获取组件库：15 个组件定义数组（type / name / props 定义 / default_style）。
-    生成界面代码时只能使用这 15 种组件类型，禁止发明新组件。
+    """获取组件库：组件定义数组（type / name / props 定义 / default_style），以返回值为准。
+    生成界面代码时只能使用返回数组里的组件类型，禁止发明新组件。
     session_id 可选：传入时会校验会话存在并记入该会话的工具调用记录（缺陷 4）。"""
     return get_component_library(session_id=session_id)
 

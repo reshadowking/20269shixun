@@ -10,7 +10,7 @@ import copy
 from app.design.validator import validate_design
 from app.services.beautify import EFFECT_VALUES, preset_value
 from app.services.compliance import enforce_compliance
-from app.services.generate import MOCK_EDIT_TEXT, generate_design
+from app.services.generate import MOCK_DEFAULT_SHADOW_LABEL, MOCK_EDIT_TEXT, generate_design
 from app.services.templates import TEMPLATES
 
 
@@ -105,6 +105,28 @@ def test_效果值命中单一来源预置集合_防写死():
     for value in applied:
         assert value in EFFECT_VALUES["shadow"]
     assert applied[0] == preset_value("shadow", "轻")  # 与 beautify-effects.json「轻」一致
+
+
+def test_兜底默认效果_可见且不等于组件内置默认阴影():
+    """2026-09-18：兜底默认从前用的「极轻」与 card 内置默认阴影**逐字相同**
+    （前端 `styleTokens.ts` 的 CARD_SHADOW 就取 shadow 预置第 0 档）→ 演示模式下
+    "点一次美化 → 已应用修改 ✓ → 画面完全没变"，用户会合理怀疑功能没生效。
+
+    这里锁住两件事：兜底分支确实施加了效果，且**不等于**组件内置默认值。
+    """
+    original = base_tree()
+    # 这句不含任何效果/文案关键词 → 走兜底分支
+    result = generate_design("随便看看有没有问题", current_design=copy.deepcopy(original))
+    before = {n["id"]: n for n in _walk_nodes(original)}
+    applied = [
+        (n.get("style") or {}).get("shadow")
+        for n in _walk_nodes(result.design)
+        if (n.get("style") or {}).get("shadow") is not None
+        and (n.get("style") or {}).get("shadow") != (before[n["id"]].get("style") or {}).get("shadow")
+    ]
+    assert applied, "兜底分支应至少施加一个阴影"
+    assert applied[0] == preset_value("shadow", MOCK_DEFAULT_SHADOW_LABEL), "兜底值必须取自预置单一来源"
+    assert applied[0] != preset_value("shadow", "极轻"), "兜底默认不能等于组件内置默认阴影（等于没改）"
 
 
 def test_效果关键词映射齐全_取值均命中预置():

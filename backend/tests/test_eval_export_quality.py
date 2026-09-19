@@ -51,6 +51,32 @@ class TestExtract:
         c = extract_from_code("<div>&lt;script&gt;</div>")
         assert "<script>" in c["texts"]
 
+    def test_code_extract_includes_visible_attribute_text(self):
+        """属性里的用户可见文本也要算（2026-09-17 修）。
+
+        实测：login 样稿的两条 placeholder 在产物 `<input placeholder="…">` 里，
+        旧实现只看标签间文本 → 文本一致率 0.750（实为 1.000），聚合还原度少 3.3pp。
+        """
+        c = extract_from_code('<input placeholder="请输入密码" /><img alt="配图" title="提示" />')
+        assert "请输入密码" in c["texts"]
+        assert "配图" in c["texts"]
+        assert "提示" in c["texts"]
+
+    def test_placeholder_text_counts_as_matched(self):
+        design_texts = ["请输入邮箱或手机号", "请输入密码"]
+        code = python_generate_code(
+            {
+                "id": "root",
+                "type": "frame",
+                "style": {"layout": "column"},
+                "children": [
+                    {"id": "i1", "type": "component", "componentType": "input", "props": {"placeholder": "请输入邮箱或手机号"}},
+                    {"id": "i2", "type": "component", "componentType": "input", "props": {"placeholder": "请输入密码"}},
+                ],
+            }
+        )
+        assert text_rate(design_texts, extract_from_code(code)["texts"]) == 1.0
+
 
 class TestRates:
     def test_component_rate_perfect(self):

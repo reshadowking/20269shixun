@@ -83,10 +83,19 @@ def apply_design_edit(design: dict, instruction: str, session_id: str | None = N
     （结构化 patch / max_modify_nodes=5 / 禁 LLM 整树替换 / post_processor 统一入口）二期实现。
     Mock/无 Key 模式下 LLM 不可用，返回原树（fallback=True），与 /api/generate 语义一致。
     """
+    from .config import get_settings
+    from .services.ai_gateway import GenerationDeadline
+    from .services.ai_ledger import record_calls
     from .services.generate import generate_design
 
     def _run() -> dict:
-        result = generate_design(instruction, current_design=design)
+        # T20/T21：MCP 路径同样受时间预算约束，并落调用记录（无会话上下文 → session_key=None）
+        result = generate_design(
+            instruction,
+            current_design=design,
+            deadline=GenerationDeadline(get_settings().llm_deadline_seconds),
+        )
+        record_calls(result.ai_calls, None)
         return {
             "design": result.design,
             "template": result.template,

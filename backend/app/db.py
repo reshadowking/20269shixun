@@ -38,6 +38,134 @@ def init_db() -> None:
 
     Base.metadata.create_all(bind=engine)
     _ensure_version_unique_index()
+    _ensure_image_owner_column()
+    _ensure_image_visibility_column()
+    _ensure_image_folder_column()
+    _ensure_asset_sort_columns()
+    _ensure_asset_folder_parent_column()
+    _ensure_workspace_columns()
+    _ensure_collab_room_column()
+    _seed_personal_workspaces()
+
+
+def _is_duplicate_column(exc: Exception) -> bool:
+    """补列是否"已存在"——**两个数据库的文案不同，必须都认**：
+
+    - SQLite：`duplicate column name: owner_id`
+    - Postgres：`column "owner_id" of relation "images" already exists`
+
+    历史教训（P0）：只匹配 SQLite 文案时，Postgres 上**第二次启动必崩**（首次补列成功、
+    第二次 ADD COLUMN 撞已存在 → 守卫没认出来 → raise → 应用启动失败）；而单测跑 SQLite，
+    永远抓不到这类"只在真实库出现"的分支。
+    """
+    message = str(exc).lower()
+    return "duplicate column" in message or "already exists" in message
+
+
+def _add_column(conn, table: str, column: str, ddl: str) -> None:
+    """补列（幂等）：ALTER 必须包在 SAVEPOINT 里，光认报错文案不够。
+
+    P0（2026-09-15 实测）：Postgres 上失败的 DDL 会把**整个事务**打成 aborted；
+    异常被守卫吞掉也没用——同一事务里紧随其后的 `CREATE INDEX` 会抛
+    `InFailedSqlTransaction` → 启动照样崩（全新库第一次就崩，老库第二次崩）。
+    SAVEPOINT 让失败只回滚这一条语句，外层事务继续可用；SQLite 同样支持，
+    所以这层保护在两个库上都能跑（`ADD COLUMN IF NOT EXISTS` 是 Postgres 专有，会挂 SQLite 单测）。
+    """
+    try:
+        with conn.begin_nested():
+            conn.execute(text(ddl))
+    except Exception as exc:
+        if not _is_duplicate_column(exc):
+            logger.error("%s.%s 迁移失败：%s", table, column, exc)
+            raise
+
+
+def _ensure_collab_room_column() -> None:
+    """T46a-3：给既有库的 designs 补 collab_room（幂等）。"""
+    with engine.begin() as conn:
+        _add_column(conn, "designs", "collab_room", "ALTER TABLE designs ADD COLUMN collab_room VARCHAR(64)")
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_designs_collab_room ON designs (collab_room)"))
+
+
+def _ensure_workspace_columns() -> None:
+    """T46a：给既有库的 designs/images 补 workspace_id（幂等）。"""
+    with engine.begin() as conn:
+        for table in ("designs", "images"):
+            _add_column(conn, table, "workspace_id", f"ALTER TABLE {table} ADD COLUMN workspace_id INTEGER")
+            conn.execute(text(f"CREATE INDEX IF NOT EXISTS ix_{table}_workspace_id ON {table} (workspace_id)"))
+
+
+def _seed_personal_workspaces() -> None:
+    """T46a：启动时补齐个人工作区并把无归属老数据迁进去（幂等，失败不阻塞启动）。"""
+    from .services.workspaces import ensure_personal_workspaces
+
+    session = SessionLocal()
+    try:
+        migrated = ensure_personal_workspaces(session)
+        if migrated:
+            logger.info("工作区迁移：%s 个设计稿归入个人工作区", migrated)
+    except Exception as exc:  # noqa: BLE001 - 迁移失败要让服务能起来，但错误必须可见
+        logger.error("个人工作区初始化失败：%s", exc)
+    finally:
+        session.close()
+
+
+def _ensure_image_owner_column() -> None:
+    """T38：给既有库的 images 表补 owner_id（create_all 不会改已存在的表）。
+
+    幂等：列已存在的报错被吞掉；其它错误显式暴露（不静默失守）。
+    """
+    with engine.begin() as conn:
+        _add_column(conn, "images", "owner_id", "ALTER TABLE images ADD COLUMN owner_id INTEGER DEFAULT 0")
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_images_owner_id ON images (owner_id)"))
+
+
+def _ensure_image_visibility_column() -> None:
+    """T46b：给既有库的 images 补 visibility（幂等）。
+
+    老资产一律落到 `private`（最保守），但"被某份我看得见的稿件引用"仍然可读
+    （见 `routers/images.py` 的读取判定），所以升级后协作方不会突然缺图。
+    """
+    with engine.begin() as conn:
+        _add_column(
+            conn,
+            "images",
+            "visibility",
+            "ALTER TABLE images ADD COLUMN visibility VARCHAR(16) DEFAULT 'private'",
+        )
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_images_visibility ON images (visibility)"))
+
+
+def _ensure_image_folder_column() -> None:
+    """T44：给既有库的 images 补 folder_id（幂等）。
+
+    `asset_folders` 表本身由 `create_all` 建出（新表不需要补列）；老资产落 NULL = 未分组。
+    """
+    with engine.begin() as conn:
+        _add_column(conn, "images", "folder_id", "ALTER TABLE images ADD COLUMN folder_id INTEGER")
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_images_folder_id ON images (folder_id)"))
+
+
+def _ensure_asset_sort_columns() -> None:
+    """2026-09-16：给既有库补拖拽排序用的 sort_order（images / asset_folders，幂等）。
+
+    `asset_folders` 表本身由 create_all 建出（新表自带该列）；老库只补列，默认 0——
+    全 0 时列表按 (sort_order, id) 排，等价于原来的"按 id 升序"，行为不变。
+    """
+    with engine.begin() as conn:
+        for table in ("images", "asset_folders"):
+            _add_column(conn, table, "sort_order", f"ALTER TABLE {table} ADD COLUMN sort_order INTEGER DEFAULT 0")
+            conn.execute(text(f"CREATE INDEX IF NOT EXISTS ix_{table}_sort_order ON {table} (sort_order)"))
+
+
+def _ensure_asset_folder_parent_column() -> None:
+    """2026-09-16：给既有库的 asset_folders 补 parent_id（多层目录；幂等）。
+
+    老文件夹一律是顶层（NULL），行为不变。
+    """
+    with engine.begin() as conn:
+        _add_column(conn, "asset_folders", "parent_id", "ALTER TABLE asset_folders ADD COLUMN parent_id INTEGER")
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_asset_folders_parent_id ON asset_folders (parent_id)"))
 
 
 def _ensure_version_unique_index() -> None:

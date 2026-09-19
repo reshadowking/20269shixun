@@ -16,6 +16,8 @@ interface Meta {
   node_count: number
   width: number
   height: number
+  workspace_name?: string | null
+  my_role?: string | null
 }
 
 function makeDesigns(n: number): Meta[] {
@@ -111,7 +113,8 @@ describe('HomePage 最近设计分页（缺陷 2）', () => {
 
     await waitFor(() => expect(cards()).toHaveLength(8))
     expect(screen.getByTestId('home-load-more')).toBeInTheDocument()
-    expect(calls[0]).toBe('/api/designs?limit=8&offset=0') // 首屏只取 8 条
+    // T36：首屏仍只取 8 条，但追加 with_preview=true（用于缩略图渲染）
+    expect(calls[0]).toBe('/api/designs?limit=8&offset=0&with_preview=true')
 
     await userEvent.click(screen.getByTestId('home-load-more'))
     await waitFor(() => expect(cards()).toHaveLength(9)) // 剩余 1 条已加载并展开
@@ -244,5 +247,17 @@ describe('HomePage 最近设计分页（缺陷 2）', () => {
     // 删掉已加载的 1 条后，第 9 条应补位显示（仍为 8 条），总数 8 → 按钮消失
     await waitFor(() => expect(cards()).toHaveLength(8))
     await waitFor(() => expect(screen.queryByTestId('home-load-more')).not.toBeInTheDocument())
+  })
+
+  it('共享给我的稿件：卡片标工作区与角色，viewer 不给删除入口', async () => {
+    const shared: Meta[] = [
+      { ...makeDesigns(1)[0], workspace_name: '别人的工作区', my_role: 'viewer' },
+    ]
+    vi.stubGlobal('fetch', serveDesigns(shared).fetchMock)
+    renderHome()
+
+    expect(await screen.findByTestId('home-design-1-workspace')).toHaveTextContent('别人的工作区')
+    expect(screen.getByTestId('home-design-1-role')).toHaveTextContent('只读')
+    expect(screen.queryByTestId('home-design-delete-1')).not.toBeInTheDocument()
   })
 })

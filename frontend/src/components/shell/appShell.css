@@ -1,0 +1,152 @@
+/* T36：AppShell 外壳样式。全部走主题令牌（--background/--card/--border/--primary…），
+   所以深色科技感主题生效时自动跟随，浅色主题下也成立。 */
+.app-shell {
+  position: relative;
+  display: flex;
+  min-height: 100vh;
+  background: var(--background);
+  color: var(--foreground);
+}
+
+.app-shell__wallpaper {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  background-size: cover;
+  background-position: center;
+  opacity: 0.26;
+  filter: brightness(0.85);
+  pointer-events: none;
+}
+
+.app-shell__side {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 232px;
+  flex: 0 0 232px;
+  height: 100vh;
+  position: sticky;
+  top: 0;
+  padding: 16px 12px;
+  border-right: 1px solid var(--border);
+  background: color-mix(in srgb, var(--card) 92%, transparent);
+  backdrop-filter: blur(14px);
+  transition: width 0.18s ease, flex-basis 0.18s ease;
+}
+
+.app-shell--rail .app-shell__side {
+  width: 68px;
+  flex-basis: 68px;
+}
+
+.app-shell__brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 6px 12px;
+}
+
+.app-shell__logo {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  border-radius: 9px;
+  font-weight: 700;
+  color: #04121f;
+  background: linear-gradient(135deg, var(--primary), var(--secondary));
+}
+
+.app-shell__brand-text {
+  font-weight: 620;
+  white-space: nowrap;
+}
+
+.app-shell__brand-text small {
+  display: block;
+  font-size: 10.5px;
+  font-weight: 400;
+  color: var(--muted-foreground);
+}
+
+.app-shell__cta {
+  padding: 10px 14px;
+  border: 0;
+  border-radius: 10px;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--primary-foreground);
+  background: linear-gradient(135deg, var(--primary), var(--secondary));
+  cursor: pointer;
+  white-space: nowrap;
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--primary) 35%, transparent);
+}
+
+.app-shell__nav {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.app-shell__nav-item,
+.app-shell__foot-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  font-size: 13px;
+  color: var(--muted-foreground);
+  background: transparent;
+  cursor: pointer;
+  white-space: nowrap;
+  text-align: left;
+}
+
+.app-shell__nav-icon {
+  width: 18px;
+  text-align: center;
+}
+
+.app-shell__nav-item:hover,
+.app-shell__foot-btn:hover {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 8%, transparent);
+}
+
+.app-shell__nav-item.is-active {
+  color: var(--primary-foreground);
+  font-weight: 600;
+  background: linear-gradient(135deg, var(--primary), var(--secondary));
+}
+
+.app-shell__grow {
+  flex: 1;
+}
+
+.app-shell__foot {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.app-shell__foot-btn {
+  font-size: 12.5px;
+  border-color: var(--border);
+  background: color-mix(in srgb, var(--foreground) 4%, transparent);
+}
+
+.app-shell__main {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  min-width: 0;
+}

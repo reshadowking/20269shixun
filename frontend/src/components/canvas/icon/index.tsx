@@ -45,6 +45,25 @@ export function resolveIcon(name: unknown): IconDef {
   return ICON_LIBRARY.icons.find((i) => i.name === DEFAULT_ICON_NAME) ?? ICON_LIBRARY.icons[0]
 }
 
+/**
+ * 名字是否在库内（2026-09-16）。
+ *
+ * 空值/非字符串 = "没提供"，按缺省图标处理、**不算未知**；非空但不在白名单 = 未知 →
+ * 渲染兜底图标的同时，在节点上打 `data-icon-fallback="<原名字>"`。
+ *
+ * 为什么要有这个可见标记：以前未知名字只在 console 里 warn，导出产物里看到的是一个
+ * 正常的问号图标，**没人能发现模型编造过名字**（排查时只能靠翻日志）。
+ */
+export function isKnownIconName(name: unknown): boolean {
+  return typeof name === 'string' && ICON_LIBRARY.icons.some((i) => i.name === name)
+}
+
+/** 未知名（非空且在库外）→ 返回原名字用于打标记；否则 undefined */
+function unknownIconName(name: unknown): string | undefined {
+  if (typeof name !== 'string' || name === '') return undefined
+  return isKnownIconName(name) ? undefined : name
+}
+
 /** ① 画布渲染：静态图标，无交互态（无 onPropsChange——状态断言见 icon.test.tsx 说明）。
  * 画布选中态由选中框表达、不导出（与 button 的 hover 同口径）。 */
 export function CanvasIcon({ props, style }: { props: Record<string, unknown>; style?: React.CSSProperties }) {
@@ -52,9 +71,14 @@ export function CanvasIcon({ props, style }: { props: Record<string, unknown>; s
   const size = typeof props.size === 'string' ? props.size : 'default'
   const px = ICON_SIZE_PX[size] ?? ICON_SIZE_PX.default
   const color = resolveColor(typeof props.color === 'string' && props.color ? props.color : DEFAULT_ICON_COLOR)
+  const unknown = unknownIconName(props.name)
   return (
     // display 内联（jsdom 可测、导出同步）；画布选中态由选中框表达、不导出
-    <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', color, ...(style as object) }} data-testid="canvas-icon">
+    <span
+      style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', color, ...(style as object) }}
+      data-testid="canvas-icon"
+      data-icon-fallback={unknown}
+    >
       <svg
         viewBox="0 0 24 24"
         width={px}
@@ -85,9 +109,11 @@ export const buildIconExport = (node: DesignNode): ExportElement => {
   const size = typeof props.size === 'string' ? props.size : 'default'
   const px = ICON_SIZE_PX[size] ?? ICON_SIZE_PX.default
   const color = resolveColor(typeof props.color === 'string' && props.color ? props.color : DEFAULT_ICON_COLOR)
+  const unknown = unknownIconName(props.name)
   return {
     tag: 'span',
-    attrs: {},
+    // 未知名在**两个通道**都要留下痕迹（同一份语义数据驱动，parity 断言等价）
+    attrs: unknown ? { 'data-icon-fallback': unknown } : {},
     style: { display: 'inline-flex', color, ...styleToCss(node.style) },
     children: [
       {

@@ -58,14 +58,21 @@ async function assertMockBackend(): Promise<void> {
 
 export default async function globalSetup() {
   const run = (cmd: string) => execSync(cmd, { stdio: 'pipe', timeout: 60_000 })
-  try {
-    run('docker stop design-y-websocket')
-    // leveldb 持久化在 /data 根目录（非 /data/storage——旧路径从未生效，导致 room 残留）
-    run('docker run --rm -v docker_yjsdata:/data node:22-alpine sh -c "rm -rf /data/*"')
-    run('docker start design-y-websocket')
-    console.log('[globalSetup] y-websocket 状态已清空并重启')
-  } catch (err) {
-    console.warn('[globalSetup] 无法重置 y-websocket：', (err as Error).message.split('\n')[0])
+  // 2026-09-17：这一步是**破坏性**的——它会清掉所有协作房间的持久化状态（含你手动验证时
+  // 正在用的房间）。默认保留原有行为（E2E 需要干净状态），但给一个显式退出口：
+  //   E2E_KEEP_YJS=1 npx playwright test ...
+  if (process.env.E2E_KEEP_YJS === '1') {
+    console.log('[globalSetup] E2E_KEEP_YJS=1：跳过清空 y-websocket 房间状态（房间残留可能导致用例互相污染）')
+  } else {
+    try {
+      run('docker stop design-y-websocket')
+      // leveldb 持久化在 /data 根目录（非 /data/storage——旧路径从未生效，导致 room 残留）
+      run('docker run --rm -v docker_yjsdata:/data node:22-alpine sh -c "rm -rf /data/*"')
+      run('docker start design-y-websocket')
+      console.log('[globalSetup] y-websocket 状态已清空并重启')
+    } catch (err) {
+      console.warn('[globalSetup] 无法重置 y-websocket：', (err as Error).message.split('\n')[0])
+    }
   }
   await assertMockBackend()
 }

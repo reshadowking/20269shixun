@@ -99,3 +99,26 @@ describe('属性面板 JSON 控件（#21）', () => {
     }
   })
 })
+
+/**
+ * 数字控件（2026-09-17 补）：`Number('') === 0` 的坑。
+ * 用户清空"宽度/字号"准备重打时，旧实现会把值写成 **0**（节点直接塌掉/文字消失）。
+ */
+describe('属性面板数字控件', () => {
+  function frameNode(): DesignNode {
+    return { id: 'f', type: 'frame', style: { layout: 'column', width: 200, height: 100 }, props: {} }
+  }
+
+  it('清空输入不写 0：保留原值，等用户真正输入', () => {
+    const { onUpdate, getWritten } = renderPanel(frameNode())
+    fireEvent.change(screen.getByTestId('prop-width'), { target: { value: '' } })
+    expect(onUpdate, '清空不该触发写入').not.toHaveBeenCalled()
+    expect(getWritten()).toBeNull()
+  })
+
+  it('正常输入仍然写数字', () => {
+    const { getWritten } = renderPanel(frameNode())
+    fireEvent.change(screen.getByTestId('prop-width'), { target: { value: '320' } })
+    expect(getWritten()?.style?.width).toBe(320)
+  })
+})

@@ -82,6 +82,44 @@ class TestOptimizer:
         assert original == snapshot  # 输入不被修改（前端保留撤销快照依赖此语义）
 
 
+    def test_non_scalar_layout_values_do_not_crash(self):
+        """异常值形状（dict）不能让优化器崩——2026-09-17 实测过 `TypeError: unhashable type: 'dict'`。
+
+        该端点（POST /api/optimize-layout）**不校验入参 Schema**，而 `_unify_group` 里用了
+        `set(values)` / `Counter(values)`；只要同类型兄弟里出现一个 dict/list 形状的
+        width/padding/align/height，就会一路抛到接口层变成 500。
+        口径：这种组**整组跳过**（宁可少优化，也不要 500 或瞎改），其它组照旧。
+        """
+        design = {
+            "id": "root", "type": "frame",
+            "children": [
+                {"id": "a", "type": "text", "props": {"text": "a"}, "style": {"width": {"bad": 1}}},
+                {"id": "b", "type": "text", "props": {"text": "b"}, "style": {"width": 100}},
+                {"id": "c", "type": "text", "props": {"text": "c"}, "style": {"width": 160}},
+            ],
+        }
+        optimized, report = optimize_layout(design)
+        assert [c["style"]["width"] for c in optimized["children"]] == [{"bad": 1}, 100, 160]
+        assert report["size"] == 0
+
+    def test_broken_group_does_not_block_other_groups(self):
+        """一组异常只影响它自己：异常组跳过，正常组照旧统一。"""
+        design = {
+            "id": "root", "type": "frame",
+            "children": [
+                {"id": "f1", "type": "frame", "style": {"padding": [1, 2]}},
+                {"id": "f2", "type": "frame", "style": {"padding": 16}},
+                {"id": "b1", "type": "component", "componentType": "button", "props": {"text": "1"}, "style": {"padding": 12}},
+                {"id": "b2", "type": "component", "componentType": "button", "props": {"text": "2"}, "style": {"padding": 20}},
+            ],
+        }
+        optimized, report = optimize_layout(design)
+        by_id = {c["id"]: c for c in optimized["children"]}
+        assert by_id["f1"]["style"]["padding"] == [1, 2]  # 异常组原样
+        assert by_id["b1"]["style"]["padding"] == by_id["b2"]["style"]["padding"] == 12
+        assert report["spacing"] == 1
+
+
 class TestRecommender:
     def test_empty_container_recommends_text_image_button(self):
         """验收：选中空卡片 → 推荐文本 + 按钮 + 图片等。"""
@@ -136,6 +174,49 @@ class TestRecommender:
         assert recs[-1]["component_type"] == "switch"
         assert recs[0]["component_type"] == "button"  # 既有首条不回退
 
+    def test_nav_container_recommends_icon(self):
+        """批次 5：导航容器追加 icon 推荐（3→4 条，图标点缀导航项）。"""
+        design = {
+            "id": "root", "type": "frame",
+            "children": [
+                {"id": "nav", "type": "component", "componentType": "navbar", "props": {"title": "商城"}},
+                {"id": "content", "type": "frame"},
+            ],
+        }
+        recs = recommend_components(design, "root")  # 选中含 navbar 的容器
+        assert len(recs) == 4
+        assert "icon" in [r["component_type"] for r in recs]
+        # 精确匹配是刻意收紧：推荐 props 应仅含场景默认值。
+        # 若要新增推荐默认字段，需先更新此断言并评估所有分支。
+        icon_rec = next(r for r in recs if r["component_type"] == "icon")
+        assert icon_rec["default_props"] == {"name": "home"}  # 导航场景适配（覆盖 library 的 star）
+
+    def test_hero_container_recommends_navbar_only(self):
+        """批次 5：容器含营销大图而缺导航 → 只推 navbar 一条（结构缺陷补齐，不凑数）。"""
+        design = {
+            "id": "root", "type": "frame",
+            "children": [{"id": "hero", "type": "component", "componentType": "hero", "props": {}}],
+        }
+        recs = recommend_components(design, "root")
+        assert len(recs) == 1
+        assert recs[0]["component_type"] == "navbar"
+        assert recs[0]["default_props"]["title"] == "品牌名"
+
+    def test_hero_branch_skipped_when_navbar_present(self):
+        """批次 5：navbar+hero 同存 → 走导航分支（4 条含 icon），navbar 不重复出现。
+        ⚠️ 分支顺序是隐式 pre-check：调整 recommender 分支顺序会让本用例红。"""
+        design = {
+            "id": "root", "type": "frame",
+            "children": [
+                {"id": "nav", "type": "component", "componentType": "navbar", "props": {"title": "商城"}},
+                {"id": "hero", "type": "component", "componentType": "hero", "props": {}},
+            ],
+        }
+        recs = recommend_components(design, "root")
+        assert len(recs) == 4
+        assert [r["component_type"] for r in recs] == ["input", "avatar", "tag", "icon"]
+        assert sum(1 for r in recs if r["component_type"] == "navbar") == 0
+
     def test_product_container_recommends_tabs(self):
         """T9：详情/商品容器追加 tabs 推荐（详情/评价分组）。"""
         design = {
@@ -169,15 +250,37 @@ class TestRecommender:
         assert recommend_components(design, "nope") == []
 
     def test_recommended_types_all_in_whitelist(self):
-        # 与 FREE_SYSTEM 组件白名单一致（15 种）
-        whitelist = {
-            "button", "card", "input", "select", "table", "chart", "stat-block",
-            "navbar", "sidebar", "avatar", "tag", "divider", "title-text", "hero", "image",
-        }
-        design = {"id": "root", "type": "frame", "children": [{"id": "c", "type": "frame"}]}
-        for container in ["c", "root"]:
-            for r in recommend_components(design, container):
-                assert r["component_type"] in whitelist
+        """推荐结果必须全部落在组件白名单内，且用例要真正走到每个推荐分支。
+
+        T25 修正：原用例硬编码 15 种（缺 icon/switch/tabs）且只走"空容器"分支——
+        `switch`/`tabs` 早已被推荐，但断言集合里没有它们，改动推荐分支也不会红（静默失效）。
+        现在改为引用唯一来源 `COMPONENT_TYPE_NAMES`，并逐分支覆盖 + 断言新组件确实被推荐过。
+        """
+        from app.services.generate import COMPONENT_TYPE_NAMES
+
+        def comp(cid: str, ctype: str) -> dict:
+            return {"id": cid, "type": "component", "componentType": ctype, "props": {}}
+
+        def frame(cid: str, children: list[dict]) -> dict:
+            return {"id": cid, "type": "frame", "children": children}
+
+        cases = [
+            ("空容器", frame("root", [frame("c", [])]), "c"),
+            ("导航容器", frame("root", [frame("nav", [comp("nb", "navbar")])]), "nav"),
+            ("表单容器", frame("root", [frame("form", [comp("in", "input")])]), "form"),
+            ("数据容器", frame("root", [frame("data", [comp("sb", "stat-block")])]), "data"),
+            ("图文容器", frame("root", [frame("cardbox", [comp("im", "image"), comp("bt", "button")])]), "cardbox"),
+            ("组件自身（配套推荐）", frame("root", [comp("nav2", "navbar")]), "nav2"),
+        ]
+        seen: set[str] = set()
+        for label, design, container in cases:
+            recs = recommend_components(design, container)
+            assert recs, f"{label} 未产出推荐（分支未被走到）"
+            for item in recs:
+                ctype = item["component_type"]
+                assert ctype in COMPONENT_TYPE_NAMES, f"{label} 推荐了白名单外组件：{ctype}"
+                seen.add(ctype)
+        assert {"switch", "tabs"} <= seen, f"新组件推荐分支未被覆盖，实际覆盖：{sorted(seen)}"
 
 
 class TestAssistApi:
@@ -188,6 +291,25 @@ class TestAssistApi:
         assert body["report"]["total"] > 0
         p = [c["style"]["padding"] for c in body["design"]["children"] if c["id"].startswith("b")]
         assert len(set(p)) == 1
+
+    def test_optimize_endpoint_tolerates_broken_style_values(self, client, auth_headers):
+        """接口层守门：异常值形状不能打成 500（该端点不校验入参 Schema）。
+
+        2026-09-17 实测：`{"width": {"bad": 1}}` → `TypeError: unhashable type: 'dict'`
+        → 未捕获 → HTTP 500。修法见 services/optimizer.py 的"值形状体检"。
+        """
+        design = {
+            "id": "root", "type": "frame",
+            "children": [
+                {"id": "a", "type": "text", "props": {"text": "a"}, "style": {"width": {"bad": 1}}},
+                {"id": "b", "type": "text", "props": {"text": "b"}, "style": {"width": 100}},
+            ],
+        }
+        resp = client.post("/api/optimize-layout", json={"design": design}, headers=auth_headers)
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert [c["style"]["width"] for c in body["design"]["children"]] == [{"bad": 1}, 100]
+        assert body["report"]["total"] == 0
 
     def test_recommend_endpoint(self, client, auth_headers):
         design = {"id": "root", "type": "frame", "children": [{"id": "card", "type": "frame"}]}

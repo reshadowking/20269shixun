@@ -27,25 +27,26 @@
 }
 
 .dark {
-  --background: #14161a;
-  --foreground: #e6e8eb;
-  --card: #1a1d23;
-  --card-foreground: #e6e8eb;
-  --popover: #1a1d23;
-  --popover-foreground: #e6e8eb;
-  --primary: #3d7fff;
-  --primary-foreground: #ffffff;
-  --secondary: #9578ff;
+  /* T36：深色科技感主题令牌（与样张 v2 一致；浅色仍走上面的 :root） */
+  --background: #0b0e14;
+  --foreground: #e8edf7;
+  --card: #111725;
+  --card-foreground: #e8edf7;
+  --popover: #111725;
+  --popover-foreground: #e8edf7;
+  --primary: #4c8dff;
+  --primary-foreground: #04121f;
+  --secondary: #22d3ee;
   --secondary-foreground: #ffffff;
-  --muted: #23272e;
-  --muted-foreground: #a8b0bc;
-  --accent: #1d2533;
-  --accent-foreground: #3d7fff;
+  --muted: #161d2c;
+  --muted-foreground: #9aa7bd;
+  --accent: #172238;
+  --accent-foreground: #6fe7f5;
   --destructive: #f2645a;
   --destructive-foreground: #ffffff;
-  --border: #2a2e36;
-  --input: #2a2e36;
-  --ring: #3d7fff;
+  --border: #1f2937;
+  --input: #1f2937;
+  --ring: #4c8dff;
 }
 
 @theme inline {

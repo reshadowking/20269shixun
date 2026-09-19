@@ -60,7 +60,9 @@ test('新建→保存→room 迁移→另一标签打开同一设计实时同步
   const textInput = page.getByTestId('prop-text')
   await expect(textInput).toBeVisible()
   await textInput.fill('跨房间同步文本')
-  await expect(pageB.getByText('跨房间同步文本')).toBeVisible({ timeout: 10_000 })
+  // 断言要落到**画布节点**上：`getByText` 会连"队友 presence 标签"（· button「跨房间同步文本」）
+  // 一起匹配到，strict mode 下算两个元素（实测报错即此）——那是光标级 presence 的正常表现。
+  await expect(pageB.locator('[data-node-id]').getByText('跨房间同步文本')).toBeVisible({ timeout: 10_000 })
 
   // B3-3：A 改动后出现"未保存"提示
   await expect(page.getByTestId('unsaved-indicator')).toBeVisible({ timeout: 10_000 })

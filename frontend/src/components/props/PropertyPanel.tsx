@@ -8,6 +8,7 @@ import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { displayLabel } from '@/design/labels'
+import { DESIGN_TOKEN_NAMES, isCssColorKeyword } from '@/design/styleToCss'
 import { isAllowedColor, nearestToken } from '@/design/tokens.generated'
 import type { DesignNode } from '@/design/types'
 import ComponentRecommend, { type RecommendItem } from '@/components/props/ComponentRecommend'
@@ -164,6 +165,8 @@ interface PropertyPanelProps {
   onAddRecommend?: (targetId: string, item: RecommendItem) => void
   /** 缺陷 3：版面已确认（美化阶段）——只放行颜色/背景/圆角等样式类字段，布局/文本/尺寸锁定 */
   locked?: boolean
+  /** T46a-3e：只读访客——属性面板整块只读（连 locked 允许的效果字段也不放行） */
+  readOnly?: boolean
 }
 
 /** 锁定（版面已确认）阶段仍可编辑的样式字段：颜色、背景、圆角（样式类属性） */
@@ -183,10 +186,10 @@ const STYLE_FIELDS: PropField[] = [
 
 const THEME = 'default' as const
 
-export default function PropertyPanel({ node, onUpdate, onDelete, onMoveLayer, onSwitchToFree, design, onAddRecommend, locked = false }: PropertyPanelProps) {
+export default function PropertyPanel({ node, onUpdate, onDelete, onMoveLayer, onSwitchToFree, design, onAddRecommend, locked = false, readOnly = false }: PropertyPanelProps) {
   const def = node.componentType ? componentRegistry[node.componentType] : undefined
 
-  const canRecommend = design && onAddRecommend && (node.type === 'frame' || node.type === 'group' || node.type === 'component')
+  const canRecommend = !readOnly && design && onAddRecommend && (node.type === 'frame' || node.type === 'group' || node.type === 'component')
 
   const setProp = (key: string, value: unknown) => {
     onUpdate((n) => ({ ...n, props: { ...(n.props ?? {}), [key]: value } }))
@@ -231,6 +234,10 @@ export default function PropertyPanel({ node, onUpdate, onDelete, onMoveLayer, o
             max={field.max}
             value={stringVal}
             onChange={(e) => {
+              // 2026-09-17 修：`Number('') === 0`，而输入框清空（全选删除准备重打）时
+              // `e.target.value` 就是空串 → 旧实现把宽度/字号/间距直接写成 0（节点塌掉、
+              // 文字消失）。空串视为"还没输完"，不落树；等用户输入数字再写。
+              if (e.target.value.trim() === '') return
               const v = Number(e.target.value)
               if (!Number.isNaN(v)) onChange(v)
             }}
@@ -277,10 +284,19 @@ export default function PropertyPanel({ node, onUpdate, onDelete, onMoveLayer, o
                 className="h-8 text-xs"
                 value={stringVal}
                 placeholder="令牌名或 #hex"
+                list={`token-names-${field.key}`}
                 onChange={(e) => onChange(e.target.value)}
               />
+              {/* T52 批2：令牌名自动补全——拼错的令牌名在 resolveColor 已显式失败，入口再给一层提示 */}
+              <datalist id={`token-names-${field.key}`}>
+                {DESIGN_TOKEN_NAMES.map((name) => (
+                  <option key={name} value={name} />
+                ))}
+              </datalist>
             </div>
-            {stringVal && !isAllowedColor(THEME, stringVal) && (
+            {/* 豁免 CSS 关键词：它们可渲染（resolveColor 放行），只是不属于规范令牌体系——
+                不算拼错，不该弹"非令牌色"提示（提示管规范策略，resolveColor 管可渲染性） */}
+            {stringVal && !isAllowedColor(THEME, stringVal) && !isCssColorKeyword(stringVal) && (
               <p className="text-[11px] text-amber-600" data-testid={`hint-${field.key}`}>
                 非令牌色，建议使用「{displayLabel(nearestToken(THEME, stringVal))}」
               </p>
@@ -307,12 +323,17 @@ export default function PropertyPanel({ node, onUpdate, onDelete, onMoveLayer, o
       )}
 
       {/* 组件专属 props（锁定阶段属"文本内容"，禁用） */}
-      {locked && def && def.schema.length > 0 && (
+      {readOnly && (
+        <p className="rounded-md bg-muted/60 px-2 py-1 text-[11px] text-muted-foreground" data-testid="prop-readonly-note">
+          只读访客：属性与图层不可修改（需要 owner / editor 权限）。
+        </p>
+      )}
+      {!readOnly && locked && def && def.schema.length > 0 && (
         <p className="rounded-md bg-muted/60 px-2 py-1 text-[11px] text-muted-foreground" data-testid="prop-locked-note">
           版面已确认：组件参数（文本内容）已锁定，仅颜色 / 背景 / 圆角等样式可改。
         </p>
       )}
-      {!locked && def && def.schema.length > 0 && (
+      {!locked && !readOnly && def && def.schema.length > 0 && (
         <div className="flex flex-col gap-3">
           <div className="text-xs text-muted-foreground">组件参数</div>
           {def.schema.map((field) => (
@@ -325,28 +346,30 @@ export default function PropertyPanel({ node, onUpdate, onDelete, onMoveLayer, o
       )}
 
       {/* 通用样式 */}
-      <div className="flex flex-col gap-3">
-        <div className="text-xs text-muted-foreground">样式（建议使用令牌色）</div>
-        {(locked ? STYLE_FIELDS.filter((f) => LOCKED_ALLOWED_STYLE_KEYS.includes(f.key)) : STYLE_FIELDS).map((field) => (
-          <div key={field.key} className="flex flex-col gap-1">
-            <Label className="text-xs">{field.label}</Label>
-            {renderControl(field, node.style?.[field.key], (v) => setStyle(field.key, v))}
-          </div>
-        ))}
-      </div>
+      {!readOnly && (
+        <div className="flex flex-col gap-3">
+          <div className="text-xs text-muted-foreground">样式（建议使用令牌色）</div>
+          {(locked ? STYLE_FIELDS.filter((f) => LOCKED_ALLOWED_STYLE_KEYS.includes(f.key)) : STYLE_FIELDS).map((field) => (
+            <div key={field.key} className="flex flex-col gap-1">
+              <Label className="text-xs">{field.label}</Label>
+              {renderControl(field, node.style?.[field.key], (v) => setStyle(field.key, v))}
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* 图层层级（解决节点互相覆盖）：锁定阶段属"模块顺序"，禁用 */}
       <div className="flex flex-col gap-2">
         <div className="text-xs text-muted-foreground">图层层级</div>
         <div className="grid grid-cols-4 gap-1">
-          <Button size="sm" variant="outline" className="h-7 px-1 text-xs" data-testid="layer-top" disabled={locked} onClick={() => onMoveLayer('top')}>置顶</Button>
-          <Button size="sm" variant="outline" className="h-7 px-1 text-xs" data-testid="layer-up" disabled={locked} onClick={() => onMoveLayer('up')}>上移</Button>
-          <Button size="sm" variant="outline" className="h-7 px-1 text-xs" data-testid="layer-down" disabled={locked} onClick={() => onMoveLayer('down')}>下移</Button>
-          <Button size="sm" variant="outline" className="h-7 px-1 text-xs" data-testid="layer-bottom" disabled={locked} onClick={() => onMoveLayer('bottom')}>置底</Button>
+          <Button size="sm" variant="outline" className="h-7 px-1 text-xs" data-testid="layer-top" disabled={locked || readOnly} onClick={() => onMoveLayer('top')}>置顶</Button>
+          <Button size="sm" variant="outline" className="h-7 px-1 text-xs" data-testid="layer-up" disabled={locked || readOnly} onClick={() => onMoveLayer('up')}>上移</Button>
+          <Button size="sm" variant="outline" className="h-7 px-1 text-xs" data-testid="layer-down" disabled={locked || readOnly} onClick={() => onMoveLayer('down')}>下移</Button>
+          <Button size="sm" variant="outline" className="h-7 px-1 text-xs" data-testid="layer-bottom" disabled={locked || readOnly} onClick={() => onMoveLayer('bottom')}>置底</Button>
         </div>
       </div>
 
-      <Button variant="destructive" size="sm" data-testid="prop-delete" disabled={locked} onClick={onDelete}>
+      <Button variant="destructive" size="sm" data-testid="prop-delete" disabled={locked || readOnly} onClick={onDelete}>
         删除节点
       </Button>
     </div>

@@ -30,17 +30,23 @@ export default function HistoryPanel({ savedId, onRestore, onVersionSaved }: His
   const [versions, setVersions] = useState<VersionItem[]>([])
   const [note, setNote] = useState('')
   const [msg, setMsg] = useState('')
+  /** 版本列表**加载失败**：与"确实没有版本"必须区分开（否则看起来像版本被删了） */
+  const [loadError, setLoadError] = useState('')
 
   const refresh = useCallback(async () => {
     if (savedId === undefined) {
       setVersions([])
+      setLoadError('')
       return
     }
     try {
       const r = await api<{ versions: VersionItem[] }>(`/api/designs/${savedId}/versions`)
       setVersions(r.versions)
-    } catch {
-      setVersions([])
+      setLoadError('')
+    } catch (err) {
+      // 2026-09-18：加载失败**不许**渲染成"暂无历史版本"——用户会以为版本被删了。
+      // 保留上一次拿到的列表（如果有），并把失败原因说出来。
+      setLoadError(err instanceof Error ? err.message : String(err))
     }
   }, [savedId])
 
@@ -62,7 +68,15 @@ export default function HistoryPanel({ savedId, onRestore, onVersionSaved }: His
   }
 
   const handleRestore = (v: VersionItem) => {
-    if (!window.confirm(`恢复到 v${v.version_no}？将覆盖当前设计（可先保存当前版本）。`)) return
+    // 2026-09-17：明确"恢复只改本地画布"——这一步**不落库**，必须再点一次保存才会写回服务器，
+    // 否则用户以为已经恢复，关掉标签页再打开却发现还是旧内容。
+    if (
+      !window.confirm(
+        `恢复到 v${v.version_no}？将覆盖当前画布（可先点「存版本」保留当前状态）。\n` +
+          '注意：恢复只改本地画布，需再点右上角「💾 保存」才会写回服务器。',
+      )
+    )
+      return
     onRestore(v.design)
     setMsg(`已恢复到 v${v.version_no}`)
   }
@@ -99,7 +113,12 @@ export default function HistoryPanel({ savedId, onRestore, onVersionSaved }: His
       </div>
       {msg && <p className="text-[11px] text-emerald-600" data-testid="history-msg">{msg}</p>}
 
-      {versions.length === 0 ? (
+      {loadError && (
+        <p className="text-[11px] text-amber-600" data-testid="history-load-error">
+          版本列表加载失败：{loadError}（下面显示的可能不是最新）
+        </p>
+      )}
+      {versions.length === 0 && !loadError ? (
         <p className="text-xs text-muted-foreground">暂无历史版本。保存设计时会自动记录。</p>
       ) : (
         <div className="flex flex-col gap-2" data-testid="history-list">

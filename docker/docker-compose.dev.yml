@@ -1,0 +1,12 @@
+# 开发/测试用 override（**只叠加，不替代**）：
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d y-websocket
+#
+# 为什么需要它：2026-09-16 起主 compose **不再把 y-websocket 映射到宿主机**
+# （它没有鉴权，端口一对外就能绕过网关直连写入）。但两类场景仍需要直连：
+#   1) Playwright E2E（`VITE_WS_URL=ws://localhost:1234`，不配置网关）；
+#   2) 老前端/手工调试（不想起网关）。
+# 用这个 override 把端口临时放出来——**仅本机开发**，别用在演示/生产。
+services:
+  y-websocket:
+    ports:
+      - "1234:1234"

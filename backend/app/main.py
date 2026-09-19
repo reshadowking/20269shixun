@@ -6,19 +6,28 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .config import get_settings
 from .db import init_db
-from .logging_config import init_generate_logging
+from .logging_config import init_gap_detail_logging, init_generate_logging
 from .otel import init_otel
 from .routers import (
+    asset_folders,
     assist,
     auth,
+    collab,
     designs,
     export,
+    feedback,
     generate,
     health,
     images,
     llm_config,
     sessions,
     tokens,
+    workspaces,
+)
+from .services.generate import (
+    PROMPT_VERSION_FILL,
+    PROMPT_VERSION_FREE,
+    PROMPT_VERSION_INCREMENTAL,
 )
 
 
@@ -26,6 +35,15 @@ from .routers import (
 async def lifespan(app: FastAPI):
     init_otel()
     init_generate_logging(get_settings().log_dir)
+    init_gap_detail_logging(get_settings().log_dir)  # T52：缺口原文专用日志
+    # T53 收尾批：启动即打印生效提示词版本（12 位 sha，与 golden 报告/台账归因同源）——
+    # 部署核对不用翻代码，排查行为异常先看这里。
+    print(
+        "[startup] prompt_version: "
+        f"FILL={PROMPT_VERSION_FILL} "
+        f"FREE={PROMPT_VERSION_FREE} "
+        f"INCREMENTAL={PROMPT_VERSION_INCREMENTAL}"
+    )
     init_db()
     yield
 
@@ -45,12 +63,16 @@ app.include_router(health.router)
 app.include_router(auth.router)
 app.include_router(tokens.router)
 app.include_router(generate.router)
+app.include_router(feedback.router)
 app.include_router(assist.router)
 app.include_router(llm_config.router)
 app.include_router(export.router)
 app.include_router(designs.router)
 app.include_router(sessions.router)
 app.include_router(images.router)
+app.include_router(asset_folders.router)
+app.include_router(workspaces.router)
+app.include_router(collab.router)
 
 
 @app.get("/")
