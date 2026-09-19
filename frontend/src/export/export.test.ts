@@ -109,7 +109,10 @@ describe('导出安全（P0-1）', () => {
     const evil: DesignNode = {
       id: 'r',
       type: 'frame',
-      style: { color: `red'});globalThis.__pwned=1;//` },
+      // T52 批2 注：payload 放在 shadow（不经 resolveColor 分流的直通键）——color 值如今会被
+      // resolveColor 对未知裸词显式丢弃、到不了 styleLiteral；本测试钉的是"任意 style 值到达
+      // 字面量时必须被 JSON 包裹"的转义性质，因此用不受颜色策略影响的键。
+      style: { shadow: `red'});globalThis.__pwned=1;//` },
       children: [],
     }
     const code = designToReactApp(evil, false)

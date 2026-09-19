@@ -10,7 +10,7 @@ SQLite 的失败 DDL **不污染事务**，所以跑 SQLite 的常规单测永�
 
 跑法::
 
-    TEST_POSTGRES_URL=postgresql+psycopg://design:design@localhost:5432/postgres \
+    TEST_POSTGRES_URL=postgresql+psycopg://postgres:postgres@localhost:5432/postgres \
         .venv/Scripts/python.exe -m pytest tests/test_db_init_postgres.py -q
 
 不设 ``TEST_POSTGRES_URL`` 时整文件 skip，不影响常规 pytest。
@@ -26,7 +26,12 @@ TEST_URL = os.environ.get("TEST_POSTGRES_URL", "")
 
 pytestmark = pytest.mark.skipif(
     not TEST_URL.startswith("postgresql"),
-    reason="需要 TEST_POSTGRES_URL（Postgres 连接串）才能验证 Postgres 专属事务语义",
+    reason=(
+        "P0 事故回归（2026-09-15）：Postgres 上 ALTER 撞「已存在」会把整个事务打成 aborted，"
+        "后续 CREATE INDEX 必崩、应用二次启动失败——SQLite 复现不了，必须打真 Postgres。"
+        "启用：TEST_POSTGRES_URL=postgresql+psycopg://postgres:postgres@localhost:5432/postgres"
+        "（CI 已内置 service，本地需 Docker 的 design-postgres 在跑）"
+    ),
 )
 
 

@@ -64,3 +64,25 @@ test('拖拽到 50% 缩放下的画布：落点按画布坐标换算（不会飘
   expect(inner!.x).toBeLessThanOrEqual(sheet.x + sheet.width + 2)
   expect(inner!.y).toBeLessThanOrEqual(sheet.y + sheet.height + 2)
 })
+
+test('基础元素（文本/色块/容器）：拖拽与点击三个入口都真的进设计树', async ({ page }) => {
+  test.setTimeout(90_000)
+  const tag = Math.random().toString(36).slice(2, 8)
+  await openWorkspace(page, `s-pd3${tag}`)
+
+  const nodes = page.locator('[data-testid="canvas-sheet"] [data-node-id]')
+  const before = await nodes.count()
+
+  // 基元走 primitive: 前缀 payload——拖拽 ×2（text / frame）+ 点击 ×1（rect，未选中 → 插根）
+  await page.dragAndDrop('[data-testid="palette-text"]', '[data-testid="canvas-sheet"]')
+  await page.dragAndDrop('[data-testid="palette-frame"]', '[data-testid="canvas-sheet"]')
+  await page.getByTestId('palette-rect').click()
+
+  await expect(nodes).toHaveCount(before + 3, { timeout: 10_000 })
+  // 与拖组件同款校验：图层树行数同步增长 = 真的进了设计树
+  await page.getByTestId('activity-layers').click()
+  await expect(page.getByTestId('layer-tree')).toBeVisible()
+  await expect(page.getByTestId('layer-tree').locator('div[draggable="true"]')).toHaveCount(before + 3, {
+    timeout: 10_000,
+  })
+})

@@ -77,6 +77,44 @@
         { "value": "translateY(-8px)", "label": "上移 8px" },
         { "value": "rotate(-1deg)", "label": "轻微倾斜" }
       ]
+    },
+    {
+      "key": "backdropFilter",
+      "label": "背景模糊（元素下方有内容时才明显）",
+      "changesSize": false,
+      "values": [
+        { "value": "blur(14px)", "label": "玻璃拟态" },
+        { "value": "blur(24px) saturate(140%)", "label": "磨砂" },
+        { "value": "blur(6px)", "label": "轻模糊" }
+      ]
+    },
+    {
+      "key": "background",
+      "label": "半透明底色（配合背景模糊 = 玻璃拟态）",
+      "changesSize": false,
+      "values": [
+        { "value": "rgba(255,255,255,0.6)", "label": "半透明白" },
+        { "value": "rgba(20,22,26,0.55)", "label": "半透明深色" }
+      ]
+    },
+    {
+      "key": "opacity",
+      "label": "不透明度",
+      "changesSize": false,
+      "values": [
+        { "value": 0.72, "label": "轻透明" },
+        { "value": 0.45, "label": "强透明" }
+      ]
+    },
+    {
+      "key": "filter",
+      "label": "整体滤镜（作用于节点自身及其内容）",
+      "changesSize": false,
+      "values": [
+        { "value": "blur(6px)", "label": "整体虚化" },
+        { "value": "saturate(0.6)", "label": "轻微去饱和" },
+        { "value": "grayscale(1)", "label": "灰阶" }
+      ]
     }
   ]
 }

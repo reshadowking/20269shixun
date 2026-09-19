@@ -225,3 +225,58 @@ class AiCall(Base):
     error_code: Mapped[str] = mapped_column(String(64), default="")
     fallback: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
+
+
+class AiFeedback(Base):
+    """T51：AI 效果反馈（变更清单卡片的 👍/👎，**卡片级**——逐行粒度太细且易误判归因）。
+
+    category **单选**（structure/style/aesthetic/not_applied/worse）：一条反馈一个主因，
+    细节进 note；多选会让"哪类问题最多"的归因变模糊。
+    model / prompt_version / profile_id / api_format 是**归因字段**（那次生成用的什么），
+    没调过模型（熔断/mock/前置失败）时为空串——汇总脚本会把这一组单列成"无模型调用"。
+    """
+
+    __tablename__ = "ai_feedback"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user: Mapped[str] = mapped_column(String(64), default="", index=True)
+    session_key: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    rating: Mapped[int] = mapped_column(Integer)  # +1 = 👍；-1 = 👎
+    category: Mapped[str] = mapped_column(String(16), default="")
+    note: Mapped[str] = mapped_column(String(500), default="")
+    llm_model: Mapped[str] = mapped_column(String(64), default="")
+    prompt_version: Mapped[str] = mapped_column(String(16), default="")
+    profile_id: Mapped[str] = mapped_column(String(32), default="")
+    api_format: Mapped[str] = mapped_column(String(16), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
+
+
+class AiCapabilityGap(Base):
+    """T52：能力缺口台账（模型想要但链路表达不了的东西，逐条落库）。
+
+    三类 gap_type：degraded（未知组件/类型被降级 frame）、ops_rejected（ops 整批落地被拒）、
+    unknown_prop（节点级未知键被裁剪 / 组件契约外的 props 字段——渲染时静默回退默认值）。
+    report_ai_gaps.py 按 detail 聚合 Top N——"该加什么组件/补哪个字段"由这张表回答。
+
+    detail 只存能力名/字段名（模型产物），**经 `_sanitize_detail` 净化后入库**（非标识符
+    字符折叠为 <non-ascii>）——AI 自创键名可能夹带用户意图文本（如 props.用户备注），
+    隐私红线靠函数保证，不靠约定；完整原文只在本地 generate.log（无第三方流向）。
+    node_id 同经净化入库——DB 里的 node_id 与 degraded 字符串里的原文可能不同，**这是设计
+    不是 bug**：DB 防泄漏、字符串供前端展示。与 ai_calls 同一隐私红线：不含用户文本。
+    与 ai_feedback 不做强关联：靠 session_key + created_at 人工对齐；归因四字段与 AiFeedback
+    同源（那次生成用的什么；没调模型时为空串）。
+    """
+
+    __tablename__ = "ai_capability_gaps"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user: Mapped[str] = mapped_column(String(64), default="", index=True)
+    session_key: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    gap_type: Mapped[str] = mapped_column(String(16), default="")  # degraded | ops_rejected | unknown_prop
+    detail: Mapped[str] = mapped_column(String(120), default="")  # 能力名（pagination）或 props.<字段名>（props.glass）
+    node_id: Mapped[str] = mapped_column(String(64), default="")  # 净化后入库；原文仅在 degraded 字符串与本地日志
+    llm_model: Mapped[str] = mapped_column(String(64), default="")
+    prompt_version: Mapped[str] = mapped_column(String(16), default="")
+    profile_id: Mapped[str] = mapped_column(String(32), default="")
+    api_format: Mapped[str] = mapped_column(String(16), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)

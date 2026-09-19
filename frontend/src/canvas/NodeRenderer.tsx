@@ -83,6 +83,8 @@ interface NodeRendererProps {
   /** 缺陷 4/14：组件内部交互写回 props */
   onComponentPropsChange?: (id: string, key: string, value: unknown) => void
   onDragStart?: (e: React.PointerEvent, id: string) => void
+  /** T46a-3e：只读访客在节点上尝试拖动时的反馈（节点自身也上报，不依赖容器捕获/冒泡时序） */
+  onDragMoveAttempt?: (e: React.PointerEvent) => void
   /** 父容器是 free 布局时，子节点以绝对定位渲染（v2.2 §3.2） */
   isFreeChild?: boolean
   /** 选中节点开始缩放（free 子节点显示 8 向手柄） */
@@ -91,18 +93,21 @@ interface NodeRendererProps {
   decorative?: boolean
 }
 
-export function NodeRenderer({ node, selectedIds, highlightIds, onDragStart, isFreeChild = false, onResizeStart, onComponentPropsChange, decorative = false }: NodeRendererProps) {
+export function NodeRenderer({ node, selectedIds, highlightIds, onDragStart, onDragMoveAttempt, isFreeChild = false, onResizeStart, onComponentPropsChange, decorative = false }: NodeRendererProps) {
   const style = node.style ?? {}
   const isSelected = selectedIds.has(node.id)
   const isHighlighted = Boolean(highlightIds?.has(node.id))
 
+  // ⚠️ 这里**不能**放 `animation`：本对象是 `{ ...styleToCss(style), ...common }` 里后展开的，
+  // 一旦写成 `animation: isHighlighted ? '…' : undefined`，非高亮时的那个 `undefined`
+  // 会把 styleToCss 从 `style.animation` 产出的入场动效**覆盖掉**——等于动效永不生效。
+  // 高亮动画改为在拼接处条件覆盖（见下方 style）。
   const common: CSSProperties = {
     position: isFreeChild ? 'absolute' : undefined,
     left: isFreeChild && node.x !== undefined ? node.x : undefined,
     top: isFreeChild && node.y !== undefined ? node.y : undefined,
     outline: isHighlighted ? '2px solid #F59E0B' : isSelected ? '2px solid rgba(0, 82, 217, 0.65)' : undefined,
     outlineOffset: isSelected || isHighlighted ? 2 : undefined,
-    animation: isHighlighted ? 'highlight-pulse 0.55s ease-in-out 3' : undefined,
     cursor: decorative ? 'default' : 'pointer',
     boxSizing: 'border-box',
     minWidth: node.type === 'text' ? undefined : 8,
@@ -119,6 +124,7 @@ export function NodeRenderer({ node, selectedIds, highlightIds, onDragStart, isF
           selectedIds={selectedIds}
           highlightIds={highlightIds}
           onDragStart={onDragStart}
+          onDragMoveAttempt={onDragMoveAttempt}
           onComponentPropsChange={onComponentPropsChange}
           isFreeChild={style.layout === 'free'}
           onResizeStart={onResizeStart}
@@ -135,8 +141,14 @@ export function NodeRenderer({ node, selectedIds, highlightIds, onDragStart, isF
     'data-node-id': decorative ? undefined : node.id,
     'data-highlighted': isHighlighted ? 'true' : undefined,
     'data-testid': decorative ? undefined : `node-${node.id}`,
-    style: { ...styleToCss(style), ...common },
+    style: {
+      ...styleToCss(style),
+      ...common,
+      // 只有高亮时才覆盖节点自己的入场动效（非高亮时**不写该键**，别用 undefined 去覆盖）
+      ...(isHighlighted ? { animation: 'highlight-pulse 0.55s ease-in-out 3' } : {}),
+    },
     onPointerDown: decorative ? undefined : (e: React.PointerEvent) => onDragStart?.(e, node.id),
+    onPointerMove: decorative ? undefined : onDragMoveAttempt,
     onClick: decorative
       ? undefined
       : (e: React.MouseEvent) => {

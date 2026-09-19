@@ -1,6 +1,10 @@
 /**
- * API 配置页（前端直接配置 LLM）：供应商预设 / Key / 模型 / 测试连接 / 保存立即生效。
+ * API 配置页（前端直接配置 LLM）：供应商预设 / API 格式 / Key / 模型 / 测试连接 / 保存立即生效。
  * 配置存后端 backend/data/llm-config.json（不入 git），优先于 .env，无需重启。
+ *
+ * T48：用哪种协议由「供应商预设 + API 格式」共同决定，**请求构造在后端**（协议族 × profile）。
+ * 本页只做三件事：收集表单值、渲染后端下发的预设数据、用后端下发的后缀名单做即时校验。
+ * **不做 URL 归一化/拼接，也不做最终 URL 预览**——权威值在「测试连接」返回的 final_url 里。
  */
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
@@ -11,6 +15,20 @@ import { Input } from '@/components/ui/input'
 import FollowupModeSelect from '@/components/settings/FollowupModeSelect'
 import MembersPanel from '@/components/collab/MembersPanel'
 import { api } from '@/lib/api'
+import {
+  DEFAULT_FORMAT,
+  anthropicV1Warning,
+  baseUrlMatchesPreset,
+  formSignature,
+  formatHint,
+  formatOptions,
+  inferProviderId,
+  supportedFormats,
+  validateBaseUrl,
+  visibleProviders,
+  type ApiFormat,
+  type ProviderPreset,
+} from '@/lib/llmProvider'
 
 interface LLMConfig {
   llm_mode: string
@@ -20,7 +38,14 @@ interface LLMConfig {
   llm_backup_model: string
   llm_timeout_seconds: number
   llm_max_tokens: number
-  providers?: Record<string, { name: string; base_url: string; model: string }>
+  /** T48：供应商预设与 API 格式 */
+  llm_provider?: string
+  llm_api_format?: string
+  providers?: Record<string, ProviderPreset>
+  /** 即时校验用的名单与文案（后端下发，前端不持有规则副本） */
+  reserved_path_suffixes?: string[]
+  reserved_path_message?: string
+  api_format_labels?: Record<string, string>
 }
 
 interface TestResult {
@@ -29,6 +54,13 @@ interface TestResult {
   model?: string
   error?: string
   code?: string
+  /** T48：失败时的排查信息（HTTP 状态码 + 原始 error body + 最终 URL + 实际格式） */
+  status?: number | null
+  body?: string
+  final_url?: string | null
+  api_format?: string
+  mock?: boolean
+  latency_ms?: number
 }
 
 /** T34：接口档案（多套接口互不覆盖；Key 由后端脱敏返回） */
@@ -40,6 +72,8 @@ interface ProfileRow {
   llm_model?: string
   llm_backup_model?: string
   llm_timeout_seconds?: number
+  llm_provider?: string
+  llm_api_format?: string
 }
 
 interface ProfileList {
@@ -64,6 +98,8 @@ function profileRows(data: ProfileList | undefined | null): ProfileRow[] {
 export default function ApiConfigPage({ showMembers = false }: { showMembers?: boolean } = {}) {
   const [cfg, setCfg] = useState<LLMConfig | null>(null)
   const [provider, setProvider] = useState('deepseek')
+  /** T48：API 格式（chat | responses | anthropic），与供应商预设联动 */
+  const [apiFormat, setApiFormat] = useState<string>(DEFAULT_FORMAT)
   const [mode, setMode] = useState('real')
   const [baseUrl, setBaseUrl] = useState('')
   const [apiKey, setApiKey] = useState('')
@@ -81,6 +117,12 @@ export default function ApiConfigPage({ showMembers = false }: { showMembers?: b
   const [activeProfile, setActiveProfile] = useState('')
   const [profileName, setProfileName] = useState('')
   const [profileMsg, setProfileMsg] = useState('')
+  /**
+   * T48：最近一次与**服务端一致**的表单指纹。与当前指纹不同 → 有未保存改动。
+   * 加它的直接原因：用户在面板上点了预设、以为已生效，实际要等「保存配置」才落盘，
+   * 结果是"以为在用 Kimi，实际请求发给了 DeepSeek"。
+   */
+  const [savedSig, setSavedSig] = useState<string | null>(null)
   /** 档案列表加载失败的提示前缀：与"确实没有档案"区分，也便于成功后精准收掉这条消息 */
   const LOAD_ERROR_PREFIX = '档案列表加载失败'
 
@@ -88,13 +130,36 @@ export default function ApiConfigPage({ showMembers = false }: { showMembers?: b
   useEffect(() => {
     api<LLMConfig>('/api/llm-config')
       .then((data) => {
+        const providerId = data.llm_provider ?? inferProviderId(data.llm_base_url ?? '', data.providers)
+        const format = data.llm_api_format ?? DEFAULT_FORMAT
+        const base = data.llm_base_url ?? ''
+        const keyText = data.llm_api_key ?? ''
+        const mainModel = data.llm_model ?? ''
+        const backup = data.llm_backup_model ?? ''
+        const timeout = String(data.llm_timeout_seconds ?? 60)
         setCfg(data)
         setMode(data.llm_mode ?? 'real')
-        setBaseUrl(data.llm_base_url ?? '')
-        setApiKey(data.llm_api_key ?? '')
-        setModel(data.llm_model ?? '')
-        setBackupModel(data.llm_backup_model ?? '')
-        setTimeoutSec(String(data.llm_timeout_seconds ?? 60))
+        setBaseUrl(base)
+        setApiKey(keyText)
+        setModel(mainModel)
+        setBackupModel(backup)
+        setTimeoutSec(timeout)
+        setProvider(providerId)
+        setApiFormat(format)
+        // 与服务端对齐：载入即"无未保存改动"（用刚拿到的值构造，避免读到旧 state）
+        setSavedSig(
+          formSignature({
+            mode: data.llm_mode ?? 'real',
+            baseUrl: base,
+            apiKey: keyText,
+            keyEdited: false,
+            model: mainModel,
+            backupModel: backup,
+            timeoutSec: timeout,
+            provider: providerId,
+            apiFormat: format,
+          }),
+        )
       })
       .catch(() => setCfg(null))
   }, [])
@@ -125,13 +190,38 @@ export default function ApiConfigPage({ showMembers = false }: { showMembers?: b
     const p = profiles.find((item) => item.id === id)
     setActiveProfile(id)
     if (!p) return
+    const base = p.llm_base_url ?? ''
+    const mainModel = p.llm_model ?? ''
+    const backup = p.llm_backup_model ?? ''
+    const timeout = String(p.llm_timeout_seconds ?? 60)
+    // T48：老档案（T48 之前保存的）没有 llm_provider —— 必须按地址反推，
+    // **不能保留上一个值**，否则会造出"Kimi 的地址 + DeepSeek 的 provider"，
+    // 并在下次保存时把这种错配固化进配置。
+    const providerId = p.llm_provider ?? inferProviderId(base, cfg?.providers)
+    const format = p.llm_api_format ?? apiFormat
     setProfileName(p.name)
-    setBaseUrl(p.llm_base_url ?? '')
-    setModel(p.llm_model ?? '')
-    setBackupModel(p.llm_backup_model ?? '')
-    setTimeoutSec(String(p.llm_timeout_seconds ?? 60))
+    setBaseUrl(base)
+    setModel(mainModel)
+    setBackupModel(backup)
+    setTimeoutSec(timeout)
+    setProvider(providerId)
+    setApiFormat(format)
     setApiKey('')
     setKeyEdited(false)
+    // 「载入档案」是已落盘的状态（有自己的提示语），不算未保存改动
+    setSavedSig(
+      formSignature({
+        mode,
+        baseUrl: base,
+        apiKey: '',
+        keyEdited: false,
+        model: mainModel,
+        backupModel: backup,
+        timeoutSec: timeout,
+        provider: providerId,
+        apiFormat: format,
+      }),
+    )
     setProfileMsg(p.llm_api_key ? '该档案已存 Key（脱敏显示），不改就不用重填。' : '该档案还没有 Key，请填写后保存。')
   }
 
@@ -142,8 +232,12 @@ export default function ApiConfigPage({ showMembers = false }: { showMembers?: b
     setBaseUrl('')
     setModel('')
     setBackupModel('')
+    setApiFormat(DEFAULT_FORMAT)
+    // 供应商也要一起重置：清空地址却留着上一个供应商，会写下"空地址 + DeepSeek"这种错配
+    setProvider('custom')
     setApiKey('')
     setKeyEdited(false)
+    setSavedSig(null)
     setProfileMsg('已清空表单，填写新接口后点「保存档案」即可创建一份新配置。')
   }
 
@@ -156,6 +250,8 @@ export default function ApiConfigPage({ showMembers = false }: { showMembers?: b
         llm_model: model.trim(),
         llm_backup_model: backupModel.trim(),
         llm_timeout_seconds: Number(timeoutSec) || 60,
+        llm_provider: provider,
+        llm_api_format: apiFormat,
       }
       if (activeProfile) body.id = activeProfile
       if (keyEdited && apiKey.trim()) body.llm_api_key = apiKey.trim()
@@ -192,15 +288,24 @@ export default function ApiConfigPage({ showMembers = false }: { showMembers?: b
     }
   }
 
-  // 供应商预设快捷填充
+  // 供应商预设快捷填充：BaseURL + 默认 API 格式 + 推荐主/备模型
   const applyProvider = (key: string) => {
     setProvider(key)
     const p = cfg?.providers?.[key]
-    if (p) {
-      setBaseUrl(p.base_url)
-      setModel(p.model)
-      setBackupModel(p.model)
-    }
+    if (!p) return
+    const fmt = p.default_api_format ?? DEFAULT_FORMAT
+    setApiFormat(fmt)
+    setBaseUrl(p.base_url_by_format?.[fmt] ?? p.base_url)
+    setModel(p.models?.primary ?? p.model)
+    setBackupModel(p.models?.fallback ?? p.backup_model ?? p.model)
+  }
+
+  /** 切换 API 格式：该格式在预设里有专属地址时联动 BaseURL（自定义不动用户填的地址） */
+  const handleFormatChange = (next: string) => {
+    setApiFormat(next)
+    if (provider === 'custom') return
+    const nextBase = cfg?.providers?.[provider]?.base_url_by_format?.[next as ApiFormat]
+    if (nextBase) setBaseUrl(nextBase)
   }
 
   const payload = () => ({
@@ -210,6 +315,8 @@ export default function ApiConfigPage({ showMembers = false }: { showMembers?: b
     llm_model: model.trim(),
     llm_backup_model: backupModel.trim(),
     llm_timeout_seconds: Number(timeoutSec) || 60,
+    llm_provider: provider,
+    llm_api_format: apiFormat,
   })
 
   const handleSave = async () => {
@@ -217,9 +324,39 @@ export default function ApiConfigPage({ showMembers = false }: { showMembers?: b
     setSaved(false)
     try {
       const resp = await api<LLMConfig>('/api/llm-config', { method: 'POST', body: JSON.stringify(payload()) })
+      // 用**服务端返回值**回填表单：服务端会做裁剪与归一（去空格、旧 id 归一），
+      // 不回填就会出现"界面值与实际生效值不一致"，且未保存提示会一直亮着
+      const base = resp.llm_base_url ?? ''
+      const mainModel = resp.llm_model ?? ''
+      const backup = resp.llm_backup_model ?? ''
+      const timeout = String(resp.llm_timeout_seconds ?? 60)
+      const keyText = resp.llm_api_key ?? ''
+      const providerId = resp.llm_provider ?? inferProviderId(base, resp.providers)
+      const format = resp.llm_api_format ?? DEFAULT_FORMAT
+      const modeValue = resp.llm_mode ?? mode
       setCfg(resp)
-      setApiKey(resp.llm_api_key) // 回显脱敏值
+      setMode(modeValue)
+      setBaseUrl(base)
+      setModel(mainModel)
+      setBackupModel(backup)
+      setTimeoutSec(timeout)
+      setProvider(providerId)
+      setApiFormat(format)
+      setApiKey(keyText) // 回显脱敏值
       setKeyEdited(false) // 已固化，后续保存不再携带 key 字段
+      setSavedSig(
+        formSignature({
+          mode: modeValue,
+          baseUrl: base,
+          apiKey: keyText,
+          keyEdited: false,
+          model: mainModel,
+          backupModel: backup,
+          timeoutSec: timeout,
+          provider: providerId,
+          apiFormat: format,
+        }),
+      )
       setSaved(true)
       setTestResult(null)
     } catch (err) {
@@ -243,6 +380,20 @@ export default function ApiConfigPage({ showMembers = false }: { showMembers?: b
   }
 
   const inputCls = 'h-9 text-sm'
+  // T48：预设/格式相关派生值——全部来自后端下发的数据，前端不推导任何规则
+  const preset = cfg?.providers?.[provider]
+  const presetList = visibleProviders(cfg?.providers)
+  const allowedFormats = supportedFormats(preset)
+  const formats = formatOptions(cfg?.api_format_labels, preset)
+  const baseUrlError = validateBaseUrl(baseUrl, cfg?.reserved_path_suffixes, cfg?.reserved_path_message)
+  const baseUrlWarning = anthropicV1Warning(baseUrl, apiFormat)
+  const hint = formatHint(preset, apiFormat)
+  // 有未保存改动？（表单指纹 vs 最近一次与服务端一致时的指纹）
+  const sigNow = formSignature({ mode, baseUrl, apiKey, keyEdited, model, backupModel, timeoutSec, provider, apiFormat })
+  const dirty = savedSig !== null && savedSig !== sigNow
+  // 地址与所选预设不匹配（老档案错配 / 手改了地址）：只提示不拦截——地址照用，
+  // 但参数策略仍按该预设生效，用户需要知道这件事
+  const presetMismatch = !!baseUrl.trim() && !baseUrlMatchesPreset(baseUrl, provider, cfg?.providers)
 
   return (
     <div className="flex min-h-screen flex-col items-center bg-muted/40 py-12">
@@ -266,7 +417,7 @@ export default function ApiConfigPage({ showMembers = false }: { showMembers?: b
           <div className="rounded-lg border p-4">
             <div className="mb-2 text-sm font-medium">供应商预设</div>
             <div className="flex flex-wrap gap-2">
-              {Object.entries(cfg?.providers ?? {}).map(([key, p]) => (
+              {presetList.map(([key, p]) => (
                 <button
                   key={key}
                   className={`rounded-full border px-3 py-1 text-xs ${
@@ -278,15 +429,31 @@ export default function ApiConfigPage({ showMembers = false }: { showMembers?: b
                   {p.name}
                 </button>
               ))}
-              <button
-                className={`rounded-full border px-3 py-1 text-xs ${
-                  provider === 'custom' ? 'border-primary bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-accent'
-                }`}
-                data-testid="provider-custom"
-                onClick={() => applyProvider('custom')}
+            </div>
+            {/* T48：API 格式——紧跟预设按钮组之后、BaseURL 之前（唯一新增控件） */}
+            <div className="mt-3 flex flex-col gap-1">
+              <label className="text-xs text-muted-foreground">API 格式</label>
+              <select
+                className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+                data-testid="api-format-select"
+                value={apiFormat}
+                onChange={(e) => handleFormatChange(e.target.value)}
               >
-                自定义
-              </button>
+                {formats.map((f) => {
+                  const supported = allowedFormats.includes(f.value as ApiFormat)
+                  return (
+                    <option key={f.value} value={f.value} disabled={!supported}>
+                      {f.label}
+                      {supported ? '' : '（该预设不支持）'}
+                    </option>
+                  )
+                })}
+              </select>
+              {hint && (
+                <p className="text-[11px] text-muted-foreground" data-testid="api-format-hint">
+                  {hint}
+                </p>
+              )}
             </div>
           </div>
 
@@ -356,6 +523,23 @@ export default function ApiConfigPage({ showMembers = false }: { showMembers?: b
                 )}
               </div>
               <Input className={inputCls} data-testid="cfg-base-url" value={baseUrl} placeholder="https://api.deepseek.com/v1" onChange={(e) => setBaseUrl(e.target.value)} />
+              {/* T48：即时校验（名单与文案都来自后端）——点测试连接之前就拦住 */}
+              {baseUrlError && (
+                <p className="text-[11px] text-red-600" data-testid="cfg-base-url-error">
+                  {baseUrlError}
+                </p>
+              )}
+              {!baseUrlError && baseUrlWarning && (
+                <p className="text-[11px] text-amber-600" data-testid="cfg-base-url-warning">
+                  {baseUrlWarning}
+                </p>
+              )}
+              {!baseUrlError && presetMismatch && (
+                <p className="text-[11px] text-amber-600" data-testid="cfg-base-url-mismatch">
+                  当前 BaseURL 不属于预设「{preset?.name ?? provider}」：请求会发往这个地址，
+                  但参数策略仍按该预设生效。若这是另一家的接口，请切换预设或改用「自定义」。
+                </p>
+              )}
             </div>
             <div className="flex flex-col gap-1 sm:col-span-2">
               <label className="text-xs text-muted-foreground">API Key</label>
@@ -413,14 +597,20 @@ export default function ApiConfigPage({ showMembers = false }: { showMembers?: b
 
           {/* 操作按钮 */}
           <div className="flex items-center gap-2">
-            <Button size="sm" data-testid="cfg-save" disabled={saving} onClick={handleSave}>
+            <Button size="sm" data-testid="cfg-save" disabled={saving || !!baseUrlError} onClick={handleSave}>
               {saving ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : null}
               保存配置
             </Button>
-            <Button size="sm" variant="outline" data-testid="cfg-test" disabled={testing} onClick={handleTest}>
+            <Button size="sm" variant="outline" data-testid="cfg-test" disabled={testing || !!baseUrlError} onClick={handleTest}>
               {testing ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : null}
               测试连接
             </Button>
+            {/* T48：改了字段但没保存时明确说出来 —— "以为改了其实没生效"曾导致真实误判 */}
+            {dirty && (
+              <span className="text-[11px] text-amber-600" data-testid="cfg-dirty">
+                有未保存改动，点「保存配置」才会生效
+              </span>
+            )}
           </div>
 
           {/* 测试结果 */}
@@ -432,14 +622,43 @@ export default function ApiConfigPage({ showMembers = false }: { showMembers?: b
               data-testid="test-result"
             >
               {testResult.ok ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" /> : <XCircle className="mt-0.5 h-4 w-4 shrink-0" />}
-              <div>
+              <div className="min-w-0 flex-1">
                 {testResult.ok ? (
                   <>
-                    <div className="font-medium">连接成功 ✓ 模型回复：{testResult.reply}</div>
-                    <div className="mt-0.5 opacity-80">实际模型：{testResult.model}</div>
+                    <div className="font-medium">
+                      连接成功 ✓{testResult.mock ? '（Mock 模式，未调用远程）' : ''} 模型回复：
+                      {testResult.reply}
+                    </div>
+                    <div className="mt-0.5 opacity-80">
+                      实际模型：{testResult.model}
+                      {typeof testResult.latency_ms === 'number' ? ` · 耗时 ${testResult.latency_ms}ms` : ''}
+                      {testResult.api_format ? ` · API 格式：${testResult.api_format}` : ''}
+                    </div>
                   </>
                 ) : (
-                  <div className="font-medium">连接失败：{testResult.error}</div>
+                  <>
+                    <div className="font-medium">连接失败：{testResult.error}</div>
+                    {(testResult.status || testResult.api_format) && (
+                      <div className="mt-0.5 opacity-80">
+                        {testResult.status ? `HTTP ${testResult.status}` : ''}
+                        {testResult.api_format ? ` · API 格式：${testResult.api_format}` : ''}
+                      </div>
+                    )}
+                    {/* T48：最终请求 URL 与原始 error body 是排查的命根子，必须原样展示 */}
+                    {testResult.final_url && (
+                      <div className="mt-0.5 break-all opacity-80" data-testid="test-final-url">
+                        最终请求 URL：{testResult.final_url}
+                      </div>
+                    )}
+                    {testResult.body && (
+                      <pre
+                        className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-all rounded bg-white/60 p-2 text-[11px]"
+                        data-testid="test-error-body"
+                      >
+                        {testResult.body}
+                      </pre>
+                    )}
+                  </>
                 )}
               </div>
             </div>

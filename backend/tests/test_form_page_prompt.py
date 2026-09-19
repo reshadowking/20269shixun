@@ -4,6 +4,7 @@ from app.services.generate import (
     form_page_section,
     free_system_text,
     incremental_system,
+    needs_form_rules,
 )
 
 
@@ -30,3 +31,45 @@ class TestFormPageSection:
     def test_locked_incremental_still_contains_section(self):
         """锁定阶段只是追加约束段，不能把表单页约束顶掉。"""
         assert form_page_section() in incremental_system(locked=True)
+
+
+class TestNeedsFormRules:
+    """T51：表单段从"无条件注入"改为按判据注入——判据本身必须有测试。"""
+
+    def test_缺省时三个装配函数仍注入表单段(self):
+        """锁住保守默认：万一有人把 needs_form 默认改成 False，这条先红。"""
+        section = form_page_section()
+        for name, text in (
+            ("fill", fill_system_text()),
+            ("free", free_system_text()),
+            ("incremental", incremental_system()),
+        ):
+            assert section in text, name
+
+    def test_树里已有表单组件_注入(self):
+        design = {
+            "id": "root",
+            "type": "frame",
+            "children": [{"id": "i1", "type": "component", "componentType": "input", "children": []}],
+        }
+        assert needs_form_rules(design=design, text="把标题改成红色") is True
+
+    def test_纯卡片页且无关键词_省略(self):
+        design = {
+            "id": "root",
+            "type": "frame",
+            "children": [{"id": "c1", "type": "component", "componentType": "card", "children": []}],
+        }
+        assert needs_form_rules(design=design, text="把标题改成红色") is False
+
+    def test_文本命中关键词_注入(self):
+        assert needs_form_rules(text="给页面加个搜索框") is True
+
+    def test_login_模板_注入(self):
+        assert needs_form_rules(template_name="login", text="优化一下") is True
+
+    def test_意图声明表单组件_注入(self):
+        assert needs_form_rules(intent={"components": ["input"]}, text="优化一下") is True
+
+    def test_完全无素材_保守注入(self):
+        assert needs_form_rules() is True

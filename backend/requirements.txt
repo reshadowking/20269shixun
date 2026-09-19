@@ -18,6 +18,8 @@ pyjwt>=2.10
 
 # LLM（OpenAI 兼容，DeepSeek/Qwen/Moonshot）
 openai>=1.55
+# T48：Anthropic Messages 协议族（Kimi / DeepSeek 的 anthropic 兼容端点）
+anthropic>=0.40
 
 # 可观测
 opentelemetry-sdk>=1.28

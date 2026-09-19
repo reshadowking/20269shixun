@@ -7,6 +7,15 @@ T9.1 #22 口径裁定：表单容器（+switch）与商品/详情容器（+tabs�
 - 容器（有 children 的 frame/group）：推荐"容器内部子组件"，suggested_index 指向容器 children 末尾
 - 组件（navbar 等无 children 的组件）：推荐"配套组件"，target_id 指向父容器、index 指向该组件之后
 返回每条推荐带 target_id，前端据此插入到正确位置。
+
+批次 5 裁定对照表（2026-09-19，"候选覆盖 18 类"的边界——推荐的价值在语境强相关，不为凑数推荐）：
+- 补 icon（导航容器分支）：图标点缀导航项，语境强相关。default 覆盖 library 的 star 为 home——
+  导航场景适配；library 默认面向通用插入场景，分叉是特征不是 bug（见条目旁注释）。
+- 补 navbar（新增 hero 触发分支）：容器含营销大图而缺导航 = 页面结构缺陷，语境强相关。
+- 裁 sidebar：页面结构组件，往任意容器推荐破坏布局语义（正确位置非容器语境可判定）。
+- 裁 hero 本体：hero 已是该分支的触发器，"推荐已有的东西"是噪声；其他分支无营销语境判定依据。
+- 裁基元（text/rect/frame）：空容器"加文本"已由 title-text 覆盖；推荐流是成品组件导向
+  （前端 handleRecommendAdd 固定构造 type:'component' 节点）；基元入口在组件面板「基础元素」分区。
 """
 from typing import Any
 
@@ -89,12 +98,26 @@ def recommend_components(design: dict[str, Any], container_id: str) -> list[dict
             rec("image", "配图让区块更直观", {"alt": "配图"}),
             rec("button", "添加行动按钮引导操作", {"text": "立即开始", "variant": "primary"}),
         ]
+    # ⚠️ 分支顺序是隐式 pre-check：navbar 分支先命中并 return，hero 分支仅在"无 navbar"时
+    # 可达——调整顺序会破坏防重语义（test_hero_branch_skipped_when_navbar_present 守此约束）。
     if "navbar" in types:
-        # 导航容器：搜索 / 头像 / 标签完善导航能力
+        # 导航容器：搜索 / 头像 / 标签 / 图标完善导航能力
         return [
             rec("input", "导航搜索框提升查找效率", {"placeholder": "搜索…"}),
             rec("avatar", "用户头像展示登录状态", {"name": "用户"}),
             rec("tag", "角标标签突出重要状态", {"text": "NEW"}),
+            # 此处覆盖 library 默认 star 为 home——导航场景适配；library 默认面向通用
+            # 插入场景，不修改 library（分叉是特征不是 bug）
+            rec("icon", "图标点缀导航项，强化视觉引导", {"name": "home"}),
+        ]
+    # hero 触发分支：容器含营销大图而缺导航 = 页面结构缺陷，推 navbar 补齐。
+    # 已知边界（均接受，成本 0，与现有全部分支行为一致）：
+    # - 检测基于直接子组件：navbar 在更深层（如子 frame 内）时本分支触发，
+    #   画面可能出现重复导航条；
+    # - 不限容器层级：非页面级容器（如含 hero 图的卡片）触发时，推 navbar 可能语义不符。
+    if "hero" in types:
+        return [
+            rec("navbar", "检测到营销大图，顶部导航完善页面结构", {"title": "品牌名"}),
         ]
     if "input" in types or "select" in types:
         # 表单容器：提交按钮 + 补充字段 + 开关确认项（T9）

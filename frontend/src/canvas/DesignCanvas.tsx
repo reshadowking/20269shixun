@@ -194,7 +194,23 @@ export default function DesignCanvas({ design, store, selectedIds, onSelectionCh
   const handleNodeSelectOnly = useCallback(
     (e: React.PointerEvent, id: string) => {
       e.stopPropagation()
-      readOnlyHintRef.current = { x: e.clientX, y: e.clientY, fired: false }
+      const armed = { x: e.clientX, y: e.clientY, fired: false }
+      readOnlyHintRef.current = armed
+      // 只读路径不 setPointerCapture，节点/容器两处的 move 都可能被时序吃掉（实测偶发漏报）。
+      // 这里挂一个窗口级一次性监听：任何超过 4px 的移动都会给出反馈，pointerup 自清。
+      const onMove = (ev: PointerEvent) => {
+        if (armed.fired) return
+        if (Math.abs(ev.clientX - armed.x) > 4 || Math.abs(ev.clientY - armed.y) > 4) {
+          armed.fired = true
+          onReadOnlyDragAttempt?.()
+        }
+      }
+      const cleanup = () => {
+        window.removeEventListener('pointermove', onMove)
+        window.removeEventListener('pointerup', cleanup)
+      }
+      window.addEventListener('pointermove', onMove)
+      window.addEventListener('pointerup', cleanup)
       if (e.ctrlKey || e.metaKey) {
         const next = new Set(selectedIds)
         if (next.has(id)) next.delete(id)
@@ -204,7 +220,24 @@ export default function DesignCanvas({ design, store, selectedIds, onSelectionCh
       }
       onSelectionChange(new Set([id]))
     },
-    [onSelectionChange, selectedIds],
+    [onSelectionChange, onReadOnlyDragAttempt, selectedIds],
+  )
+
+  /**
+   * T46a-3e：只读访客尝试拖动节点 → 给一次可读反馈（一次手势只提示一次）。
+   * 节点自身与画布容器两处都调用：正常拖拽靠容器 setPointerCapture 保证 move 稳定到达容器，
+   * 只读路径不捕获指针，若只依赖容器这一路，节点上的拖动会“拖了没反应”。
+   */
+  const notifyReadOnlyDragMove = useCallback(
+    (e: React.PointerEvent) => {
+      const hint = readOnlyHintRef.current
+      if (!hint || hint.fired) return
+      if (Math.abs(e.clientX - hint.x) > 4 || Math.abs(e.clientY - hint.y) > 4) {
+        hint.fired = true
+        onReadOnlyDragAttempt?.()
+      }
+    },
+    [onReadOnlyDragAttempt],
   )
 
   const handleNodePointerDown = useCallback(
@@ -304,11 +337,7 @@ export default function DesignCanvas({ design, store, selectedIds, onSelectionCh
       }
 
       // 只读：拖动不生效，但给一次明确反馈（否则"拖了没反应"会被当成卡顿）
-      const hint = readOnlyHintRef.current
-      if (hint && !hint.fired && (Math.abs(e.clientX - hint.x) > 4 || Math.abs(e.clientY - hint.y) > 4)) {
-        hint.fired = true
-        onReadOnlyDragAttempt?.()
-      }
+      notifyReadOnlyDragMove(e)
 
       // 空白平移：先算 delta（闭包内快照），再 setView —— 避免 updater 延迟执行时读到已更新的 ref（白屏根因）
       if (panRef.current) {
@@ -482,6 +511,7 @@ export default function DesignCanvas({ design, store, selectedIds, onSelectionCh
             selectedIds={selectedIds}
             highlightIds={highlightIds}
             onDragStart={readOnly ? handleNodeSelectOnly : handleNodePointerDown}
+            onDragMoveAttempt={readOnly ? notifyReadOnlyDragMove : undefined}
             onResizeStart={readOnly ? undefined : handleResizeStart}
             onComponentPropsChange={
               readOnly

@@ -68,6 +68,20 @@ class TestComponentContractInjection:
         assert "chartType=line|bar|pie" in section
         assert "cta={text}" in section  # hero 的对象字段
 
+    def test_applicable_scene_injected_for_every_component(self):
+        """T51：库里现成的"适用场景"description 必须进契约段。
+
+        模型选组件全靠猜是 A 类"结构不对"最可能的根因之一，而这个数据本来就在
+        （card: "承载图文内容的容器"）——不注入等于白带着不用。
+        """
+        from app.services.generate import COMPONENT_LIBRARY
+
+        for spec in COMPONENT_LIBRARY["components"]:
+            desc = spec.get("description")
+            assert desc, f"{spec['type']} 缺 description（组件库数据完整性）"
+            section = component_contract_section()
+            assert desc in section, f"{spec['type']} 的 description 没进契约段：{desc}"
+
 
 class TestContractViolationLogging:
     """契约外字段只记日志、不改行为（行为改动属另一张卡）。"""
@@ -99,3 +113,10 @@ class TestContractViolationLogging:
         assert component_prop_names("stat-block") == frozenset({"label", "value", "trend"})
         assert component_prop_names("table") == frozenset({"columns", "rows"})
         assert component_prop_names("no-such-type") == frozenset()
+
+    def test_node_type_vs_component_guard_line_present(self):
+        """T51 验收反馈：模型曾写 componentType: "text"（text 是节点类型）→ 三处被降级。
+        契约段必须有这条反例，从源头挡住。"""
+        section = component_contract_section()
+        assert "不要写 componentType" in section
+        assert "节点类型" in section

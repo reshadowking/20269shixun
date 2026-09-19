@@ -170,7 +170,7 @@ class TestDeadline:
         client.runtime = {"llm_mode": "real", "llm_api_key": "sk-test", "llm_timeout_seconds": 60.0}
         calls: list[str] = []
 
-        def fail_main(_client, model, system, user, temperature, history=None, kind=""):
+        def fail_main(_client, model, system, user, temperature, history=None, kind="", **kwargs):
             calls.append(model)
             time.sleep(0.25)  # 把 0.2s 的预算吃光后再失败
             raise APIStatusError("boom", response=type("R", (), {"status_code": 500, "request": None})(), body=None)

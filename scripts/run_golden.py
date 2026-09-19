@@ -20,6 +20,11 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "backend"))
 GOLDEN_DIR = ROOT / "scripts" / "golden"
 
+# T53：门禁预算 30s（v2.2 §11 生成耗时指标）——与 golden 硬顶 max_seconds=45 分层：
+# ≤30s 达标（pass）；30 < seconds ≤ max_seconds 警告（warn，用例不红但报告可见）；
+# > max_seconds 失败（fail，_judge 判红）。
+BUDGET_SECONDS = 30
+
 
 def _ids(node: dict, out: list[str] | None = None) -> list[str]:
     out = [] if out is None else out
@@ -42,6 +47,13 @@ def _run_case(case: dict, initial: dict, client) -> dict:
         result = generate_design(case["instruction"], client)
     elapsed = time.perf_counter() - started
     fill_tokens = sum(c.get("tokens_out", 0) for c in client.calls if c.get("kind") == "fill")
+    # T53：缺口计数随行输出——三率对比的数据源（service 层 result.gaps，与生产同源）。
+    gap_counts: dict[str, int] = {}
+    for gap in getattr(result, "gaps", []):
+        gap_counts[gap["gap_type"]] = gap_counts.get(gap["gap_type"], 0) + 1
+    prompt_version = next(
+        (c.get("prompt_version", "") for c in reversed(client.calls) if c.get("prompt_version")), ""
+    )
     # T16 口径：既有节点 id 保留率 100%，**remove 显式声明的除外**。
     # 2026-09-17 修：原来直接 `before_ids - after_ids`，于是黄金集里「删掉『忘记密码 · 注册账号』那一行」
     # 这种合法删除会被判成"丢了节点"（与文件头写的口径自相矛盾，真实跑必红）。
@@ -54,12 +66,15 @@ def _run_case(case: dict, initial: dict, client) -> dict:
         "id": case["id"],
         "mode": case["mode"],
         "seconds": round(elapsed, 2),
+        "compliance": round(result.compliance, 1),
         "tokens_out": fill_tokens,
         "fallback": result.fallback,
         "error": result.error,
         "ops_touched": len(result.ops_applied),
         "lost_ids": sorted(kept),
         "mock": result.mock,
+        "gaps": gap_counts,
+        "prompt_version": prompt_version,
     }
 
 
@@ -128,15 +143,27 @@ def main() -> int:
             client.runtime = {**client.runtime, "llm_mode": "real", "llm_model": args.model}
         row = _run_case(case, initial, client)
         row["failures"] = _judge(case, row)
+        # T53：三态状态——fail（判红）/ warn（超 30s 预算但未超硬顶，可见不红）/ pass
+        row["status"] = "fail" if row["failures"] else ("warn" if row["seconds"] > BUDGET_SECONDS else "pass")
         rows.append(row)
         failures.extend(f"{row['id']}: {msg}" for msg in row["failures"])
         print(json.dumps(row, ensure_ascii=False))
 
     passed = len(rows) - len({r["id"] for r in rows if r["failures"]})
+    status_counts = {"pass": 0, "warn": 0, "fail": 0}
+    gap_counts: dict[str, int] = {}
+    for r in rows:
+        status_counts[r["status"]] += 1
+        for gt, n in r.get("gaps", {}).items():
+            gap_counts[gt] = gap_counts.get(gt, 0) + n
+    prompt_versions = sorted({r["prompt_version"] for r in rows if r.get("prompt_version")})
     report = {
         "total": len(rows),
         "passed": passed,
         "failed": len(rows) - passed,
+        "status_counts": status_counts,
+        "gap_counts": gap_counts,
+        "prompt_version": prompt_versions,
         "mock": all(r["mock"] for r in rows),
         "rows": rows,
     }

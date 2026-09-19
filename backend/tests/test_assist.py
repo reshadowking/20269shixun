@@ -174,6 +174,49 @@ class TestRecommender:
         assert recs[-1]["component_type"] == "switch"
         assert recs[0]["component_type"] == "button"  # 既有首条不回退
 
+    def test_nav_container_recommends_icon(self):
+        """批次 5：导航容器追加 icon 推荐（3→4 条，图标点缀导航项）。"""
+        design = {
+            "id": "root", "type": "frame",
+            "children": [
+                {"id": "nav", "type": "component", "componentType": "navbar", "props": {"title": "商城"}},
+                {"id": "content", "type": "frame"},
+            ],
+        }
+        recs = recommend_components(design, "root")  # 选中含 navbar 的容器
+        assert len(recs) == 4
+        assert "icon" in [r["component_type"] for r in recs]
+        # 精确匹配是刻意收紧：推荐 props 应仅含场景默认值。
+        # 若要新增推荐默认字段，需先更新此断言并评估所有分支。
+        icon_rec = next(r for r in recs if r["component_type"] == "icon")
+        assert icon_rec["default_props"] == {"name": "home"}  # 导航场景适配（覆盖 library 的 star）
+
+    def test_hero_container_recommends_navbar_only(self):
+        """批次 5：容器含营销大图而缺导航 → 只推 navbar 一条（结构缺陷补齐，不凑数）。"""
+        design = {
+            "id": "root", "type": "frame",
+            "children": [{"id": "hero", "type": "component", "componentType": "hero", "props": {}}],
+        }
+        recs = recommend_components(design, "root")
+        assert len(recs) == 1
+        assert recs[0]["component_type"] == "navbar"
+        assert recs[0]["default_props"]["title"] == "品牌名"
+
+    def test_hero_branch_skipped_when_navbar_present(self):
+        """批次 5：navbar+hero 同存 → 走导航分支（4 条含 icon），navbar 不重复出现。
+        ⚠️ 分支顺序是隐式 pre-check：调整 recommender 分支顺序会让本用例红。"""
+        design = {
+            "id": "root", "type": "frame",
+            "children": [
+                {"id": "nav", "type": "component", "componentType": "navbar", "props": {"title": "商城"}},
+                {"id": "hero", "type": "component", "componentType": "hero", "props": {}},
+            ],
+        }
+        recs = recommend_components(design, "root")
+        assert len(recs) == 4
+        assert [r["component_type"] for r in recs] == ["input", "avatar", "tag", "icon"]
+        assert sum(1 for r in recs if r["component_type"] == "navbar") == 0
+
     def test_product_container_recommends_tabs(self):
         """T9：详情/商品容器追加 tabs 推荐（详情/评价分组）。"""
         design = {

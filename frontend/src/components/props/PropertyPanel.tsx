@@ -8,6 +8,7 @@ import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { displayLabel } from '@/design/labels'
+import { DESIGN_TOKEN_NAMES, isCssColorKeyword } from '@/design/styleToCss'
 import { isAllowedColor, nearestToken } from '@/design/tokens.generated'
 import type { DesignNode } from '@/design/types'
 import ComponentRecommend, { type RecommendItem } from '@/components/props/ComponentRecommend'
@@ -283,10 +284,19 @@ export default function PropertyPanel({ node, onUpdate, onDelete, onMoveLayer, o
                 className="h-8 text-xs"
                 value={stringVal}
                 placeholder="令牌名或 #hex"
+                list={`token-names-${field.key}`}
                 onChange={(e) => onChange(e.target.value)}
               />
+              {/* T52 批2：令牌名自动补全——拼错的令牌名在 resolveColor 已显式失败，入口再给一层提示 */}
+              <datalist id={`token-names-${field.key}`}>
+                {DESIGN_TOKEN_NAMES.map((name) => (
+                  <option key={name} value={name} />
+                ))}
+              </datalist>
             </div>
-            {stringVal && !isAllowedColor(THEME, stringVal) && (
+            {/* 豁免 CSS 关键词：它们可渲染（resolveColor 放行），只是不属于规范令牌体系——
+                不算拼错，不该弹"非令牌色"提示（提示管规范策略，resolveColor 管可渲染性） */}
+            {stringVal && !isAllowedColor(THEME, stringVal) && !isCssColorKeyword(stringVal) && (
               <p className="text-[11px] text-amber-600" data-testid={`hint-${field.key}`}>
                 非令牌色，建议使用「{displayLabel(nearestToken(THEME, stringVal))}」
               </p>

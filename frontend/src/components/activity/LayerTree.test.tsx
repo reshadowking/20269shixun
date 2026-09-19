@@ -42,20 +42,38 @@ describe('LayerTree 右键菜单（P0-5）', () => {
     expect(screen.getByTestId('layer-ctx-duplicate')).toBeInTheDocument()
     expect(screen.getByTestId('layer-ctx-rename')).toBeInTheDocument()
     expect(screen.getByTestId('layer-ctx-delete')).toBeInTheDocument()
-    // 文本节点不是容器 → 无"插入子级"
-    expect(screen.queryByTestId('layer-ctx-insert')).not.toBeInTheDocument()
+    // 文本节点不是容器 → 无任何插入项
+    expect(screen.queryByTestId('layer-ctx-insert-text')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('layer-ctx-insert-rect')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('layer-ctx-insert-frame')).not.toBeInTheDocument()
   })
 
-  it('容器节点右键含"插入子级"，点击后新增子节点', () => {
+  it('容器节点右键含三个插入项，点击"插入文本"新增 text 子节点', () => {
     const store = new DesignStore(undefined, DESIGN)
     renderTree(store)
     rightClickRow('card')
-    expect(screen.getByTestId('layer-ctx-insert')).toBeInTheDocument()
-    fireEvent.click(screen.getByTestId('layer-ctx-insert'))
+    expect(screen.getByTestId('layer-ctx-insert-text')).toBeInTheDocument()
+    expect(screen.getByTestId('layer-ctx-insert-rect')).toBeInTheDocument()
+    expect(screen.getByTestId('layer-ctx-insert-frame')).toBeInTheDocument()
+    fireEvent.click(screen.getByTestId('layer-ctx-insert-text'))
     const children = store.getDesign().children?.find((c) => c.id === 'card')?.children ?? []
     expect(children.length).toBe(2)
     expect(children[1].type).toBe('text')
     expect(screen.queryByTestId('layer-context-menu')).not.toBeInTheDocument()
+  })
+
+  it('插入色块/容器：落入该容器 children 末尾（与组件库面板同一工厂）', () => {
+    const store = new DesignStore(undefined, DESIGN)
+    renderTree(store)
+    rightClickRow('card')
+    fireEvent.click(screen.getByTestId('layer-ctx-insert-rect'))
+    rightClickRow('card')
+    fireEvent.click(screen.getByTestId('layer-ctx-insert-frame'))
+    const children = store.getDesign().children?.find((c) => c.id === 'card')?.children ?? []
+    expect(children.map((c) => c.type)).toEqual(['component', 'rect', 'frame'])
+    // 默认值与面板一致：容器带布局语义、色块带令牌背景
+    expect(children[2].style).toMatchObject({ layout: 'column', background: '#FFFFFF' })
+    expect(children[1].style).toMatchObject({ background: 'primary' })
   })
 
   it('复制节点生成新 id 节点', () => {

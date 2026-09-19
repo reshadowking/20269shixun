@@ -1,8 +1,23 @@
-"""LLM 客户端封装（OpenAI 兼容：DeepSeek/Qwen/Moonshot；v2.2 §2.2/§4.4）。
+"""LLM 客户端封装（v2.2 §2.2/§4.4）。
+
+T48 起按**协议族**适配，而不是"只支持 OpenAI 兼容"：
+
+- `chat` / `responses` → openai 族（同一个 SDK 客户端，请求体形状不同）
+- `anthropic` → anthropic 族（独立 SDK；认证与版本头由 profile 数据决定）
+
+厂商差异（base_url / 认证 / 参数策略 / 模型名）全部写在 `profiles.py`，
+协议差异（system 位置、max token 字段名、temperature 范围）在 `normalizer.py`，
+本模块只负责：预算与超时、失败重试与切备用模型、调用记账。
 
 - mock 模式（LLM_MODE=mock / 无 key）：不调用网络，由调用方注入 mock 响应（断网兜底）
-- real 模式：openai SDK，单次超时 LLM_TIMEOUT_SECONDS，失败重试 1 次后切备用模型
+- real 模式：单次超时 LLM_TIMEOUT_SECONDS，失败重试 1 次后切备用模型
 - chat_json：要求输出 JSON，解析失败重试一次（v2.2 §4.4：非 JSON 重试 1 次）
+
+⚠️ 两条 monkeypatch 契约（改这个文件前先读）：
+① 生成链路的测试替换的是 `app.services.llm.OpenAI`（包命名空间绑定）——`build_client`
+   是 openai 族在本包内的**唯一**构造点，别把 `OpenAI` 挪进子模块，否则 patch 静默失效。
+② 诊断端点（`routers/llm_config.py`）的测试替换的是 `openai.OpenAI`——那条路径靠
+   **函数体内 import**，也不能挪进来。
 """
 import hashlib
 import json
@@ -10,11 +25,15 @@ import logging
 import re
 import time
 from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
+from urllib.parse import urlparse
 
 from openai import APIStatusError, APITimeoutError, OpenAI
 
-from ..config import get_settings
+from ...config import get_settings
+
+if TYPE_CHECKING:  # 仅为类型注解，避免包初始化时的导入耦合
+    from .profiles import ProviderProfile
 
 logger = logging.getLogger(__name__)
 
@@ -144,6 +163,53 @@ def _sanitize_history(history: list[dict] | None) -> list[dict]:
     return clean
 
 
+def build_client(
+    profile: "ProviderProfile",
+    api_format: str,
+    *,
+    api_key: str,
+    base_url: str,
+    timeout: float | None = None,
+    http_client: Any | None = None,
+) -> Any:
+    """按协议族构造 SDK 客户端（**openai 族客户端在本包内的唯一构造点**）。
+
+    两条 monkeypatch 契约（T48）：
+    ① 生成链路 patch 的是 `app.services.llm.OpenAI` —— 这里的 OpenAI 必须保持
+       **包命名空间的模块级绑定**。挪进子模块会让 patch 静默失效（测试改发真网络请求）；
+    ② 诊断端点 patch 的是 `openai.OpenAI` —— 那条路径保持函数体内 import，不走本函数。
+
+    认证方式与 anthropic-version 全部来自 profile 数据，这里没有厂商分支。
+    `http_client` 是测试接缝（注入 httpx.MockTransport 做零网络表驱动测试）。
+    """
+    from .normalizer import merge_headers
+    from .protocols.anthropic_msg import build_anthropic_client
+    from .sdk_options import with_sdk_defaults
+
+    headers = merge_headers(api_format, profile.header_overrides(api_format))
+    if api_format == "anthropic":
+        return build_anthropic_client(
+            api_key=api_key,
+            base_url=base_url,
+            timeout=timeout,
+            auth=profile.auth(api_format),
+            headers=headers,
+            http_client=http_client,
+        )
+    kwargs: dict[str, Any] = {
+        "base_url": base_url,
+        "api_key": api_key,
+        "default_headers": headers,
+    }
+    if timeout is not None:
+        kwargs["timeout"] = timeout
+    if http_client is not None:
+        kwargs["http_client"] = http_client
+    # T50：必须关掉 SDK 内部静默重试——重试策略由 LLMClient 统一负责（带预算感知、会写日志），
+    # SDK 默认 max_retries=2 会把一次逻辑调用放大成 3 倍超时（实测 45s 预算跑出 137s）。
+    return OpenAI(**with_sdk_defaults(kwargs))
+
+
 class LLMClient:
     def __init__(self, mock_responder: Callable[[str, str], str] | None = None):
         self.settings = get_settings()
@@ -153,7 +219,7 @@ class LLMClient:
         # T28：最近一次 JSON 解析失败的定位信息（供上层给出可排查的失败原因）
         self.last_json_error = ""
         # 运行时配置（前端 API 配置页保存）优先于 .env，立即生效
-        from ..llm_runtime import get_runtime_config
+        from ...llm_runtime import get_runtime_config
 
         self.runtime = get_runtime_config()
 
@@ -183,6 +249,42 @@ class LLMClient:
     def is_mock(self) -> bool:
         return self.cfg("llm_mode") != "real" or not self.cfg("llm_api_key")
 
+    @property
+    def target(self) -> tuple["ProviderProfile", str]:
+        """当前生效的 (供应商预设, API 格式)。
+
+        老配置缺这两个字段时，`llm_runtime.get_runtime_config` 已在读侧按 base_url
+        反推补齐（现网 Kimi 档案由此拿到采样参数剔除策略）。
+        """
+        from .profiles import get_profile
+
+        return get_profile(str(self.cfg("llm_provider") or "")), str(
+            self.cfg("llm_api_format") or "chat"
+        )
+
+    def context_hint(self) -> str:
+        """当前生效的「供应商 · 主机 · API 格式」。
+
+        错误信息里带上它：曾经失败提示只有 `HTTP 401 …`，看不出**是哪家的 key 不对**
+        （2026-09-18 实测踩过：地址是 DeepSeek、key 却属于别家，只能靠翻配置文件才定位）。
+        """
+        from .profiles import API_FORMAT_LABELS
+
+        profile, api_format = self.target
+        host = urlparse(str(self.cfg("llm_base_url") or "")).netloc or "未填地址"
+        return f"{profile.label} · {host} · {API_FORMAT_LABELS.get(api_format, api_format)}"
+
+    def _client_for(self, timeout: float | None) -> Any:
+        """按当前预设/格式构造客户端——协议族决定用哪个 SDK（openai / anthropic）。"""
+        profile, api_format = self.target
+        return build_client(
+            profile,
+            api_format,
+            api_key=str(self.cfg("llm_api_key") or ""),
+            base_url=str(self.cfg("llm_base_url") or ""),
+            timeout=timeout,
+        )
+
     def _real_chat(
         self,
         system: str,
@@ -191,6 +293,7 @@ class LLMClient:
         history: list[dict] | None = None,
         deadline: Any | None = None,
         kind: str = "",
+        prompt_version_override: str | None = None,
     ) -> str:
         # T20：单次调用超时不得超过剩余时间预算（预算耗尽则直接抛错，不再发请求）
         timeout = float(self.cfg("llm_timeout_seconds"))
@@ -199,13 +302,9 @@ class LLMClient:
             if left <= 0:
                 raise LLMDeadlineExceeded("时间预算已耗尽")
             timeout = min(timeout, left)
-        client = OpenAI(
-            base_url=self.cfg("llm_base_url"),
-            api_key=self.cfg("llm_api_key"),
-            timeout=timeout,
-        )
+        client = self._client_for(timeout)
         try:
-            return self._create(client, self.cfg("llm_model"), system, user, temperature, history, kind)
+            return self._create(client, self.cfg("llm_model"), system, user, temperature, history, kind, prompt_version_override=prompt_version_override)
         except APITimeoutError as exc:
             # 超时往往是一次性抖动：重试一次主模型，仍失败再切备用（备用超时减半，控制总时长）
             logger.warning("主模型超时（%s），重试一次", describe_api_error(exc))
@@ -213,7 +312,7 @@ class LLMClient:
             # 实测预算只剩 8s 时仍会发起 30s 的备用请求（最坏总耗时 8+8+30≈46s）。
             self._raise_if_expired(deadline)
             try:
-                return self._create(client, self.cfg("llm_model"), system, user, temperature, history, kind)
+                return self._create(client, self.cfg("llm_model"), system, user, temperature, history, kind, prompt_version_override=prompt_version_override)
             except Exception as exc2:  # noqa: BLE001
                 logger.warning("重试仍失败，切备用模型: %s", describe_api_error(exc2))
                 return self._create(
@@ -224,6 +323,7 @@ class LLMClient:
                     temperature,
                     history,
                     kind,
+                    prompt_version_override=prompt_version_override,
                 )
         except Exception as exc:  # noqa: BLE001 - 限流/鉴权等切备用模型
             logger.warning("主模型调用失败（%s），切备用模型", describe_api_error(exc))
@@ -243,7 +343,7 @@ class LLMClient:
         if deadline is not None and deadline.remaining() <= 0:
             raise LLMDeadlineExceeded("时间预算已耗尽")
 
-    def _backup_client(self, deadline: Any | None = None) -> OpenAI:
+    def _backup_client(self, deadline: Any | None = None) -> Any:
         """备用模型客户端：超时减半（如 60s → 30s），且**不得超过剩余预算**。
 
         2026-09-17 修：原来无论剩多少预算都固定用它（实测预算 8s 仍发 30s 的请求），
@@ -254,72 +354,91 @@ class LLMClient:
         timeout = max(15.0, float(self.cfg("llm_timeout_seconds")) / 2)
         if deadline is not None:
             timeout = min(timeout, deadline.remaining())
-        return OpenAI(
-            base_url=self.cfg("llm_base_url"),
-            api_key=self.cfg("llm_api_key"),
-            timeout=timeout,
-        )
+        return self._client_for(timeout)
 
     def _create(
         self,
-        client: OpenAI,
+        client: Any,
         model: str,
         system: str,
         user: str,
         temperature: float,
         history: list[dict] | None = None,
         kind: str = "",
+        *,
+        profile: "ProviderProfile | None" = None,
+        api_format: str | None = None,
+        prompt_version_override: str | None = None,
     ) -> str:
+        """发起一次调用并按当前 API 格式适配协议，成功/失败都记账。
+
+        新增参数是 **keyword-only 带默认值**：既有调用点（含测试替身）的位置参数一字未变，
+        不传时按当前配置解析（`_real_chat` 因此不必改调用点）。
+        T24：多轮 = system + 历史轮次 + 本轮 user（历史为空则与旧行为逐字相同）。
+        """
+        from .dispatcher import resolve
+        from .protocols.base import resolve_method
+
+        if profile is None or api_format is None:
+            resolved_profile, resolved_format = self.target
+            profile = profile or resolved_profile
+            api_format = api_format or resolved_format
+        adapter, effective = resolve(profile, api_format)
+        plan = adapter.build(
+            profile=profile,
+            model=model,
+            system=system,
+            user=user,
+            history=history,
+            temperature=temperature,
+            max_tokens=self.cfg("llm_max_tokens"),  # 防输出截断导致 JSON 解析失败
+        )
         started = time.perf_counter()
-        # T24：多轮 = system + 历史轮次 + 本轮 user（历史为空则与旧行为逐字相同）
         try:
-            resp = client.chat.completions.create(
-                model=model,
-                messages=[
-                    {"role": "system", "content": system},
-                    *(history or []),
-                    {"role": "user", "content": user},
-                ],
-                temperature=temperature,
-                max_tokens=self.cfg("llm_max_tokens"),  # 防输出截断导致 JSON 解析失败
-            )
+            invoke = resolve_method(client, plan.method)
+            response = invoke(**plan.kwargs)
         except Exception as exc:  # 记账后原样抛出，由上层决定兜底/切备用
             self.calls.append(
                 {
                     "kind": kind,
                     "model": model,
-                    "prompt_version": prompt_version(system),
+                    "prompt_version": prompt_version_override or prompt_version(system),
                     "tokens_in": 0,
                     "tokens_out": 0,
                     "latency_ms": int((time.perf_counter() - started) * 1000),
                     "ok": False,
                     "error_code": describe_api_error(exc),
+                    # T48：内存键。三套机制相互独立——DB 写入按 _FIELDS 白名单取键（多余键
+                    # 被忽略）；OTel span 是逐键 set_attribute，需另外显式加行才可见。
+                    "api_format": effective,
+                    "profile_id": profile.id,
                 }
             )
             raise
-        choice = resp.choices[0]
-        usage = getattr(resp, "usage", None)
+        reply = adapter.parse(response)
         gen_logger = logging.getLogger("ai.gen")
         gen_logger.info(
             "LLM 返回 model=%s finish_reason=%s tokens=%s（输出 %d 字符）",
-            getattr(resp, "model", model),
-            choice.finish_reason,
-            {"in": usage.prompt_tokens, "out": usage.completion_tokens} if usage else "-",
-            len(choice.message.content or ""),
+            reply.model or model,
+            reply.finish_reason or "-",
+            {"in": reply.tokens_in, "out": reply.tokens_out},
+            len(reply.text),
         )
         self.calls.append(
             {
                 "kind": kind,
-                "model": getattr(resp, "model", model),
-                "prompt_version": prompt_version(system),
-                "tokens_in": int(getattr(usage, "prompt_tokens", 0) or 0),
-                "tokens_out": int(getattr(usage, "completion_tokens", 0) or 0),
+                "model": reply.model or model,
+                "prompt_version": prompt_version_override or prompt_version(system),
+                "tokens_in": reply.tokens_in,
+                "tokens_out": reply.tokens_out,
                 "latency_ms": int((time.perf_counter() - started) * 1000),
                 "ok": True,
                 "error_code": "",
+                "api_format": effective,
+                "profile_id": profile.id,
             }
         )
-        return choice.message.content or ""
+        return reply.text
 
     def chat_text(
         self,
@@ -329,11 +448,20 @@ class LLMClient:
         history: list[dict] | None = None,
         deadline: Any | None = None,
         kind: str = "",
+        prompt_version_override: str | None = None,
     ) -> str:
         if self.is_mock:
             return self.mock_responder(system, user) if self.mock_responder else ""
         # kind 用关键字传：测试替身只需接住已知参数 + **kwargs 即可，不必跟着改签名
-        return self._real_chat(system, user, temperature or 0.3, _sanitize_history(history), deadline, kind=kind)
+        return self._real_chat(
+            system,
+            user,
+            temperature or 0.3,
+            _sanitize_history(history),
+            deadline,
+            kind=kind,
+            prompt_version_override=prompt_version_override,
+        )
 
     def chat_json(
         self,
@@ -343,12 +471,15 @@ class LLMClient:
         history: list[dict] | None = None,
         deadline: Any | None = None,
         kind: str = "",
+        prompt_version_override: str | None = None,
     ) -> dict | None:
         """输出 JSON；解析失败重试 1 次，重试时把错误定位回传模型让其自纠（v2.2 §4.4）。"""
         clean_history = _sanitize_history(history)
         self.last_json_error = ""
         for attempt in range(2):
-            text = self.chat_text(system, user, temperature, clean_history, deadline, kind)
+            text = self.chat_text(
+                system, user, temperature, clean_history, deadline, kind, prompt_version_override
+            )
             parsed = _extract_json(text)
             if parsed is not None:
                 return parsed

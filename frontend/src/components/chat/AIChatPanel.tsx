@@ -7,8 +7,9 @@ import { optionPositioning, compareOptions } from '@/design/exploreSummary'
 import type { DesignNode } from '@/design/types'
 import { api } from '@/lib/api'
 import { GUARD_HINT, isDesignRequest } from '@/lib/designGuard'
-import { diffDesign } from '@/design/diff'
 import { isFullPageRequest, isNewDesignIntent } from '@/lib/editIntent'
+import ChangeListCard from '@/components/chat/ChangeListCard'
+import { buildChangeList, describeDegraded, summarizeChanges, type ChangeItem } from '@/design/changeList'
 import {
   loadExploreArchive,
   saveExploreArchive,
@@ -33,6 +34,14 @@ import {
  * 缺陷 1：探索的两份方案带预览与关键差异；选定后留档（另一方案仍可查、刷新可还原）。
  */
 
+/** T51 批2：反馈归因字段（那次生成用的什么；没调模型时全为 null） */
+interface LlmMeta {
+  model: string | null
+  prompt_version: string | null
+  api_format: string | null
+  profile_id: string | null
+}
+
 interface ChatMessage {
   role: 'user' | 'assistant'
   text: string
@@ -40,6 +49,19 @@ interface ChatMessage {
   sessionId?: string
   /** 仅本地占位（欢迎语），不落库 */
   ephemeral?: boolean
+  /**
+   * T49：这条消息产生的变更清单（**创建时构建一次并冻结**）。
+   * 撤回只改 `reverted`，绝不重建列表——否则 change-revert-${i} 的索引会错行。
+   * 与合规报告一样不落库（会话只存 role/text），刷新后不显示。
+   */
+  changes?: ChangeItem[]
+  /** 已撤回的变更条目 id（置灰显示，列表不跳动） */
+  reverted?: string[]
+  /**
+   * T51 批2：这次生成用的模型元数据——反馈落库的归因字段。
+   * 与 changes 一样挂在消息上（不落库，刷新即失），但语义一致：反馈评的就是这条消息。
+   */
+  llm?: LlmMeta
 }
 
 /**
@@ -125,6 +147,20 @@ interface GenerateResponse {
   violations_detail?: ComplianceFixItem[]
   /** T8 收尾：本轮降级明细（["icon@节点id"]）——用于向用户明示"近似组件表达" */
   degraded?: string[]
+  /**
+   * T52 收尾批：能力缺口统计摘要（{"degraded":n,"unknown_prop":n,"ops_rejected":n}；null=无缺口，含 mock）。
+   * 只含计数、不含 detail 原文（原文在 DB + 专用日志）。展示只渲染 unknown_prop/ops_rejected——
+   * degraded 另有专属明细行；ops_rejected 是"去重 op 类型数（上限 5）"，文案用"类"不用"次"。
+   */
+  gaps_summary?: Record<string, number> | null
+  /**
+   * T51 批2：反馈归因字段（取本次最后一次模型调用；**没调模型 → null**，
+   * 覆盖熔断开路 / mock / 填充前失败——汇总脚本把 null 单列"无模型调用"）
+   */
+  llm_model?: string | null
+  llm_prompt_version?: string | null
+  api_format?: string | null
+  profile_id?: string | null
 }
 
 /** D3：从设计树抽取少量可见文本作方案摘要（最多 4 段，截断 40 字） */
@@ -206,9 +242,13 @@ interface AIChatPanelProps {
   onComplianceRestore?: (fix: ComplianceFixItem) => void
   /** D3：使用某个探索方案（上层 pushSnapshot + resetDesign，可撤销回原稿） */
   onUseExploreDesign?: (design: DesignNode) => void
+  /** T49：变更清单卡片悬停 → 高亮画布节点（传空数组表示取消高亮） */
+  onHighlightNodes?: (ids: string[]) => void
+  /** T49：撤回单条变更（上层把 item.revert 差量喂给 applyAiDiff；只含一个分量 → 一个撤销步） */
+  onRevertChange?: (item: ChangeItem) => void
 }
 
-export default function AIChatPanel({ onGenerate, onGeneratingChange, design, onIncrementalEdit, onUndo, canUndo, sessionKey, onComplianceRestore, onUseExploreDesign, locked, readOnly = false }: AIChatPanelProps) {
+export default function AIChatPanel({ onGenerate, onGeneratingChange, design, onIncrementalEdit, onUndo, canUndo, sessionKey, onComplianceRestore, onUseExploreDesign, onHighlightNodes, onRevertChange, locked, readOnly = false }: AIChatPanelProps) {
   /** 只读访客：所有"会写画布"的按钮一律禁用（生成 / 应用方案 / 还原修正） */
   const ro = readOnly
   const [input, setInput] = useState('')
@@ -415,24 +455,33 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
       }
       // D1：成功响应携带合规明细时展示逐项报告（生成与增量均适用）
       setComplianceReport(resp.violations_detail && resp.violations_detail.length > 0 ? resp.violations_detail : null)
-      // T24：有稿时不再前置拦截"无编辑动词"的输入（"太丑了""再来一版"这类对话式延续），
-      // 交由模型按 INCREMENTAL_SYSTEM 的兜底指令判定；模型原样返回（零改动）时如实说明，
-      // 不冒充"已应用修改 ✓"，也不产生一次无意义的撤销步。
-      const changedForEdit = isEdit && editDesign ? diffDesign(editDesign, resp.design) : []
-      if (isEdit && editDesign && changedForEdit.length === 0) {
+      // T49：把"前后两棵树"翻成**可逐条撤回的变更清单**（一条 = 节点 × 变更类型）
+      const items = isEdit && editDesign ? buildChangeList(editDesign, resp.design) : []
+      const changes = summarizeChanges(items)
+      // 闸门/高亮/持久化只认**生效**的变更：渲染层不支持的字段不冒充"已改动"
+      const effectiveIds = [...new Set(items.filter((i) => i.hasEffective).map((i) => i.id))]
+      const echo = prompt.length > 20 ? `${prompt.slice(0, 20)}…` : prompt
+      // T51 批2：反馈归因字段（那次生成用的什么；没调模型时全为 null，汇总单列"无模型调用"）
+      const llmMeta: LlmMeta = {
+        model: resp.llm_model ?? null,
+        prompt_version: resp.llm_prompt_version ?? null,
+        api_format: resp.api_format ?? null,
+        profile_id: resp.profile_id ?? null,
+      }
+      // ① 零改动：如实说明，不冒充"已应用修改 ✓"，也不产生一次无意义的撤销步
+      if (isEdit && editDesign && items.length === 0) {
         setMessages((m) => [
           ...m,
           {
             role: 'assistant',
-            text: '这次没有需要改动的地方：没有识别出可执行的界面改动。\n如果这是无关问题，我只处理 UI / 界面设计相关需求；如果想整体重做，请以「重新设计…」开头。',
+            text: `按你说的「${echo}」，这次没有需要改动的地方：没有识别出可执行的界面改动。\n如果这是无关问题，我只处理 UI / 界面设计相关需求；如果想整体重做，请以「重新设计…」开头。`,
           },
         ])
         return
       }
       if (isEdit && editDesign && onIncrementalEdit) {
-        const changed = changedForEdit
         // T4 批1：上层把 AI 结果送服务端闸门（锁状态由服务端判定）后再落地
-        const outcome = await onIncrementalEdit(resp.design, changed)
+        const outcome = await onIncrementalEdit(resp.design, effectiveIds)
         if (outcome && outcome.ok === false) {
           setMessages((m) => [
             ...m,
@@ -444,18 +493,26 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
           return
         }
         const droppedNote = outcome?.dropped?.length ? '\n部分效果为非预置值，已忽略。' : ''
-        // T8 收尾（缺口清单 §4.8）：降级不再静默——明示"近似组件表达"
+        // T8 收尾（缺口清单 §4.8）：降级不再静默——明示"近似组件表达"，并**逐条列出**是哪些能力
+        // （这是完善组件库/效果库的原料：模型想要但链路表达不了的能力清单）
         const degradedNote = resp.degraded?.length
-          ? `\n⚠️ 有 ${resp.degraded.length} 项能力暂不支持，已用近似组件表达。`
+          ? `\n⚠️ 有 ${resp.degraded.length} 项能力暂不支持，已用近似组件表达：${describeDegraded(resp.degraded).join('；')}`
           : ''
-        const echo = prompt.length > 20 ? `${prompt.slice(0, 20)}…` : prompt
-        setMessages((m) => [
-          ...m,
-          {
-            role: 'assistant',
-            text: `按你说的「${echo}」，已应用修改 ✓（仅改动 ${changed.length > 0 ? changed.length : '指定'} 处，其余保持不变）${droppedNote}${degradedNote}\n被修改的节点已高亮提示；输入「撤销」可回到修改前。`,
-          },
-        ])
+        // T52 收尾批：缺口摘要（只渲染 unknown_prop/ops_rejected——降级已有上面的专属明细行）
+        const gapPartsEdit: string[] = []
+        if (resp.gaps_summary?.unknown_prop) gapPartsEdit.push(`契约外字段 ${resp.gaps_summary.unknown_prop}`)
+        if (resp.gaps_summary?.ops_rejected) gapPartsEdit.push(`${resp.gaps_summary.ops_rejected} 类操作被拒`)
+        const gapNoteEdit = gapPartsEdit.length ? `\n⚠ 本次生成存在能力缺口（已记录）：${gapPartsEdit.join('、')}` : ''
+        // ② 全无效：数据写进去了但渲染层都不支持 —— 明说"画布不会有变化"，别让用户对着没动静的画面怀疑功能
+        const text =
+          changes.effective === 0
+            ? `按你说的「${echo}」，已写入 ${changes.total} 条改动，但均未生效（渲染层不支持这些键），画布不会有变化。${droppedNote}${degradedNote}${gapNoteEdit}`
+            : `按你说的「${echo}」，已应用修改 ✓（生效 ${changes.effective} 条，其余保持不变）` +
+              (changes.ineffectiveFields > 0
+                ? `\n其中 ${changes.ineffectiveFields} 个字段渲染层不支持（已在下面标出，可逐条撤回）`
+                : '') +
+              `${droppedNote}${degradedNote}${gapNoteEdit}\n被修改的节点已高亮提示；输入「撤销」可回到修改前。`
+        setMessages((m) => [...m, { role: 'assistant', text, changes: items, llm: llmMeta }])
         return
       }
       onGenerate(resp.design)
@@ -470,13 +527,18 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
       const degradedNote = resp.degraded?.length
         ? `\n⚠️ 有 ${resp.degraded.length} 项能力暂不支持，已用近似组件表达。`
         : ''
+      // T52 收尾批：缺口摘要（同编辑路径——只渲染 unknown_prop/ops_rejected，degraded 有专属行）
+      const gapPartsGen: string[] = []
+      if (resp.gaps_summary?.unknown_prop) gapPartsGen.push(`契约外字段 ${resp.gaps_summary.unknown_prop}`)
+      if (resp.gaps_summary?.ops_rejected) gapPartsGen.push(`${resp.gaps_summary.ops_rejected} 类操作被拒`)
+      const gapNoteGen = gapPartsGen.length ? `\n⚠ 本次生成存在能力缺口（已记录）：${gapPartsGen.join('、')}` : ''
       // T19：合规文案降调——把检查器"自动对齐了几处颜色"说清楚，而不是甩一个"规范兼容率 23.6%"
       const alignmentNote = resp.violations > 0 ? `✓ 已按设计规范自动对齐 ${resp.violations} 处颜色` : '✓'
       setMessages((m) => [
         ...m,
         {
           role: 'assistant',
-          text: `已生成设计稿（模板：${resp.template === 'free' ? '自由生成' : resp.template}）${alignmentNote}${sourceNote}${freeNote}${degradedNote}\n可在右侧属性面板继续编辑，或输入新需求重新生成。`,
+          text: `已生成设计稿（模板：${resp.template === 'free' ? '自由生成' : resp.template}）${alignmentNote}${sourceNote}${freeNote}${degradedNote}${gapNoteGen}\n可在右侧属性面板继续编辑，或输入新需求重新生成。`,
         },
       ])
     } catch (err) {
@@ -517,6 +579,23 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
       const rest = list.filter((f) => f !== fix)
       return rest.length > 0 ? rest : null
     })
+  }
+
+  /**
+   * T51 批2：提交反馈（变更清单卡片底部 👍/👎）。
+   * 返回 true = 已落库；false = 失败。**失败绝不静默**：卡片保留选择并提示可重试，
+   * 否则用户以为记下了、其实没落库——反馈数据就脏了，后面所有汇总都不可信。
+   */
+  const sendFeedback = async (llm: LlmMeta | null, rating: number, category: string): Promise<boolean> => {
+    try {
+      await api('/api/feedback', {
+        method: 'POST',
+        body: JSON.stringify({ rating, category, session_key: sessionKey, ...(llm ?? {}) }),
+      })
+      return true
+    } catch {
+      return false
+    }
   }
 
   /** D3：探索 2 份方案（基于最近一次需求；无需求时提示先描述） */
@@ -717,6 +796,21 @@ export default function AIChatPanel({ onGenerate, onGeneratingChange, design, on
             data-testid={`chat-msg-${msg.role}-${i}`}
           >
             {msg.text}
+            {msg.changes && msg.changes.length > 0 && (
+              <ChangeListCard
+                items={msg.changes}
+                revertedIds={msg.reverted}
+                onRevert={(item) => {
+                  // 只标记 + 交给上层落地；列表本身不重建（索引稳定）
+                  setMessages((m) =>
+                    m.map((x, xi) => (xi === i ? { ...x, reverted: [...(x.reverted ?? []), item.id] } : x)),
+                  )
+                  onRevertChange?.(item)
+                }}
+                onHighlight={onHighlightNodes}
+                onFeedback={({ rating, category }) => sendFeedback(msg.llm ?? null, rating, category)}
+              />
+            )}
           </div>
         ))}
         {generating && (

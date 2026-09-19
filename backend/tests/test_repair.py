@@ -15,9 +15,21 @@ class TestRepairDesign:
         assert fixed["componentType"] == "divider"
 
     def test_known_basic_types_untouched(self):
-        for t in ("frame", "text", "rect", "component", "group"):
+        for t in ("frame", "text", "rect", "component"):
             node = {"id": "x", "type": t}
             assert repair_design(node)["type"] == t
+
+    def test_group_normalized_to_frame(self):
+        """基元开放决策：group 与 frame 渲染同分支（画面零差异），面板只开放 frame——
+        新稿不再产生 group：裸 type:"group" 与 componentType:"group" 两种写法落地时都
+        归一化为 frame，props/children 保留。schema enum 与渲染层的 group 分支保留仅为旧稿兼容。"""
+        bare = repair_design({"id": "g1", "type": "group", "props": {"name": "旧分组"}, "children": [{"id": "c", "type": "text"}]})
+        assert bare["type"] == "frame"
+        assert bare["props"]["name"] == "旧分组"
+        assert bare["children"][0]["id"] == "c"
+        via_ct = repair_design({"id": "g2", "type": "component", "componentType": "group"})
+        assert via_ct["type"] == "frame"
+        assert "componentType" not in via_ct
 
     def test_component_type_without_type(self):
         fixed = repair_design({"id": "b", "componentType": "button"})
@@ -509,3 +521,34 @@ class TestChildrenRepair:
 
         tree = {"id": "root", "type": "frame", "children": [{"id": "a", "type": "text", "props": {"text": "x"}}]}
         assert repair_design(tree) == tree
+
+
+class TestNodeTypeInComponentType:
+    """T51 验收反馈：模型会把"节点类型"写进 componentType（实测 componentType:"text" ×3）。
+
+    此前直接降级成空 frame（props 丢失、白包一层）——而该能力本来就存在
+    （type:"text" 就是它）。与既有"组件名误写进 type → 转正为组件"互为对称。
+    """
+
+    def test_component_type_text_promotes_to_text_node(self):
+        node = {"id": "coupon-sub", "type": "component", "componentType": "text", "props": {"text": "副标题"}}
+        fixed = repair_design(node)
+        assert fixed["type"] == "text"
+        assert "componentType" not in fixed
+        assert fixed["props"]["text"] == "副标题"  # props 不再被降级流程丢掉
+
+    def test_component_type_rect_frame_also_promote(self):
+        for ct in ("rect", "frame"):
+            fixed = repair_design({"id": "n", "type": "component", "componentType": ct})
+            assert fixed["type"] == ct, ct
+        # group 同样转正，但转正后归一化为 frame（见 test_group_normalized_to_frame）
+
+    def test_unknown_component_still_degrades(self):
+        """真缺失的能力（pagination）仍降级进 degraded 清单——缺口信号不能被转正吞掉。"""
+        degraded: list[str] = []
+        fixed = repair_design(
+            {"id": "p1", "type": "component", "componentType": "pagination", "props": {"text": "1 2 3"}},
+            degraded,
+        )
+        assert fixed["type"] == "frame"  # 降级
+        assert "pagination@p1" in degraded

@@ -17,6 +17,7 @@ import HistoryPanel from '@/components/history/HistoryPanel'
 import { SaveNameForm } from '@/components/history/SaveNameForm'
 import ComponentPalette from '@/components/palette/ComponentPalette'
 import ComponentRecommend, { type RecommendItem } from '@/components/props/ComponentRecommend'
+import { createPrimitiveNode, isPrimitiveType, parsePaletteDragPayload } from '@/components/canvas/registry'
 import CanvasSettings from '@/components/props/CanvasSettings'
 import MultiSelectPanel from '@/components/props/MultiSelectPanel'
 import PropertyPanel from '@/components/props/PropertyPanel'
@@ -34,6 +35,8 @@ import { canAutoFreeze, readAutoFreeze, writeAutoFreeze } from '@/lib/autoFreeze
 import type { ComponentType, DesignNode } from '@/design/types'
 import { api } from '@/lib/api'
 import SessionBar from '@/components/chat/SessionBar'
+import PanelResizeHandle from '@/components/shell/PanelResizeHandle'
+import { clampPanelWidth, readPanelWidth } from '@/lib/panelWidth'
 import { deriveCollabRoom, needsSignedRoom, usesGateway } from '@/lib/collabRoom'
 import { clearSnapshots, deleteSnapshot, loadSnapshots, saveSnapshot, type SessionSnapshot } from '@/lib/sessionSnapshots'
 import { sessionApi, type SessionMeta } from '@/lib/sessionApi'
@@ -769,6 +772,17 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
   const [activePanel, setActivePanel] = useState<string | null>('props')
   const togglePanel = (key: string) => setActivePanel((prev) => (prev === key ? null : key))
 
+  // T49：右侧面板宽度可拖拽（所有右侧面板共用同一个宽度；持久化到本地）
+  const [panelWidth, setPanelWidth] = useState(() =>
+    readPanelWidth(typeof window === 'undefined' ? 1280 : window.innerWidth),
+  )
+  // 视口变化时重新夹紧：窄屏下拉宽过的面板不能把画布压没
+  useEffect(() => {
+    const onResize = () => setPanelWidth((w) => clampPanelWidth(w, window.innerWidth))
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
+
   // T6：常驻「代码」面板——当前设计对应的 src/App.tsx（与导出对话框同一产物函数，
   // withComments 同导出默认 true；上传图片在代码里以原始 URL 呈现，导出对话框才做内联）
   const appCode = useMemo(() => designToReactApp(design, true), [design])
@@ -807,14 +821,23 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
     store.insertChild(parentId, node)
   }
 
-  /** 组件库拖入画布：落点在自由布局根容器时设置坐标，否则追加 */
-  const handleDropComponent = (type: string, x: number, y: number) => {
-    const node: DesignNode = {
-      id: genId(type),
-      type: 'component',
-      componentType: type as DesignNode['componentType'],
-      props: {},
-      style: { width: 200 },
+  /** 组件库拖入画布：落点在自由布局根容器时设置坐标，否则追加。
+   *  payload 两类（编解码见 registry）：裸 componentType=组件（历史格式）；primitive: 前缀=排版基元。 */
+  const handleDropComponent = (payload: string, x: number, y: number) => {
+    const parsed = parsePaletteDragPayload(payload)
+    if (!parsed) return
+    let node: DesignNode
+    if (parsed.kind === 'primitive') {
+      if (!isPrimitiveType(parsed.type)) return
+      node = createPrimitiveNode(parsed.type)
+    } else {
+      node = {
+        id: genId(parsed.type),
+        type: 'component',
+        componentType: parsed.type as DesignNode['componentType'],
+        props: {},
+        style: { width: 200 },
+      }
     }
     if (design.style?.layout === 'free') {
       node.x = Math.max(0, Math.round(x))
@@ -1568,7 +1591,15 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
         {/* 右侧：活动面板 + 活动栏（P1） */}
         <div className="flex">
           {activePanel && (
-            <aside className="w-80 shrink-0 overflow-hidden border-l bg-background" data-testid="activity-panel" data-panel={activePanel}>
+            <>
+              {/* T49：分隔条在 aside 左侧（flex 子项，不用绝对定位） */}
+              <PanelResizeHandle width={panelWidth} onWidthChange={setPanelWidth} />
+              <aside
+                className="shrink-0 overflow-hidden border-l bg-background"
+                style={{ width: panelWidth }}
+                data-testid="activity-panel"
+                data-panel={activePanel}
+              >
               <div className="flex h-10 items-center justify-between border-b px-3">
                 <span className="text-sm font-medium">{ACTIVITY_TITLES[activePanel]}</span>
                 <button
@@ -1661,6 +1692,18 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
                       setUndoCount((c) => c + 1)
                       store.resetDesign(placeUnpositionedChildren(explored))
                       setSelectedIds(new Set())
+                    }}
+                    // T49：变更清单卡片悬停 → 高亮画布节点（复用既有 data-highlighted 链路）
+                    onHighlightNodes={(ids) => setHighlightIds(new Set(ids))}
+                    onRevertChange={(item) => {
+                      // T49：撤回单条变更。差量**只含一个分量**，所以 applyAiDiff 内部的
+                      // 那一次 store 调用就是一个撤销步（Ctrl+Z 可退回撤回前）。
+                      // 同时pushSnapshot：与 AI 落地保持同一范式，面板「撤销」按钮也能回退。
+                      store.pushSnapshot()
+                      setUndoCount((c) => c + 1)
+                      store.applyAiDiff(item.revert)
+                      setSelectedIds(new Set([item.id]))
+                      setHighlightIds(new Set([item.id]))
                     }}
                   />
                     </div>
@@ -1763,6 +1806,7 @@ function WorkspaceInner({ sessionKey }: { sessionKey: string }) {
                 )}
               </div>
             </aside>
+            </>
           )}
           <ActivityBar active={activePanel} onSelect={togglePanel} />
         </div>

@@ -52,16 +52,24 @@ class TestLLMConfigApi:
         resp2 = client.post("/api/llm-config", json={"hack": "x"}, headers=auth_headers)
         assert resp2.status_code == 422  # 无白名单字段
 
-    def test_test_connection_no_key(self, client, auth_headers):
+    def test_test_connection_no_key(self, client, auth_headers, monkeypatch):
         # 清掉已保存的 Key，验证"未配置 Key"分支
         from app.llm_runtime import CONFIG_FILE, _load_from_disk
 
         CONFIG_FILE.unlink(missing_ok=True)
         _load_from_disk.cache_clear()
+        # T48：Mock 模式下「测试连接」按 spec 短路返回模拟数据（不调远程），
+        # 本用例测的是**真实探测路径**的 NO_KEY 分支，所以显式置为 real。
+        client.post("/api/llm-config", json={"llm_mode": "real"}, headers=auth_headers)
+        # 同时屏蔽 .env 里的 Key：否则会带着真 Key 去请求 api.example.com（既没测到 NO_KEY，又白跑一次网络）
+        from app.config import get_settings
+
+        monkeypatch.setattr(get_settings(), "llm_api_key", "")
         resp = client.post("/api/llm-config/test", json={"llm_base_url": "https://api.example.com/v1"}, headers=auth_headers)
         assert resp.status_code == 200
         body = resp.json()
         assert body["ok"] is False  # 无 Key 或连接失败均视为不可用
+        assert body["code"] == "NO_KEY"
 
     def test_masked_key_save_ignored(self, client, auth_headers):
         """脱敏 key（含 ****）回写被拒绝：保留磁盘上的真实 Key，其他字段正常保存。"""
@@ -85,7 +93,7 @@ class TestLLMConfigApi:
 
         from openai import APITimeoutError
 
-        client.post("/api/llm-config", json={"llm_api_key": "sk-real-key-777", "llm_model": "m1"}, headers=auth_headers)
+        client.post("/api/llm-config", json={"llm_api_key": "sk-real-key-777", "llm_model": "m1", "llm_mode": "real"}, headers=auth_headers)
         seen: dict = {}
 
         class _FakeCompletions:

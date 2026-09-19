@@ -6,6 +6,7 @@ from typing import ClassVar
 from app.design.validator import validate_design_safe
 from app.mcp_tools import apply_design_edit, get_component_library, get_design_tokens
 from app.services.beautify import preset_value
+from app.services.generate import MOCK_DEFAULT_SHADOW_LABEL
 
 
 class TestDesignTokensTool:
@@ -116,11 +117,14 @@ class TestApplyDesignEditTool:
         assert result["fallback"] is False  # T4 前置：mock 编辑不再兜底
         ok, errors = validate_design_safe(result["design"])
         assert ok, f"返回树不合法: {errors[:3]}"
-        # 结构与用户数据不变（无 text 节点 → "改成"落空 → 默认施加"极轻"阴影）
+        # 结构与用户数据不变（无 text 节点 → "改成"落空 → 默认施加兜底阴影）
         children = result["design"]["children"]
         assert children[0]["id"] == "b1" and children[0]["props"]["text"] == "提交"
         assert result["design"]["style"]["padding"] == 16
-        assert children[0]["style"]["shadow"] == preset_value("shadow", "极轻")
+        # 兜底档位由 MOCK_DEFAULT_SHADOW_LABEL 指定（引用常量，别写死档位名）：
+        # 2026-09-18 从「极轻」提到「中」——「极轻」与 card 内置默认阴影逐字相同，
+        # 演示模式下"点了美化画面没变"，用户会合理怀疑功能没生效。
+        assert children[0]["style"]["shadow"] == preset_value("shadow", MOCK_DEFAULT_SHADOW_LABEL)
 
     def test_result_fields_match_generate_api(self):
         """返回结构包含 /api/generate 同款字段（Agent 可直接保存/继续处理）。"""

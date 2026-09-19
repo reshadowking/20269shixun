@@ -11,6 +11,12 @@ from functools import lru_cache
 from pathlib import Path
 
 from .config import get_settings
+from .services.llm.profiles import (
+    API_FORMAT_LABELS,
+    match_profile,
+    profiles_payload,
+)
+from .services.llm.url_builder import RESERVED_PATH_MESSAGE, RESERVED_PATH_SUFFIXES
 
 logger = logging.getLogger(__name__)
 
@@ -30,11 +36,27 @@ RUNTIME_KEYS = (
     "llm_backup_model",
     "llm_timeout_seconds",
     "llm_max_tokens",
+    # T48：供应商预设与 API 格式（纯新增，老配置缺这两个字段走读侧反推）
+    "llm_provider",
+    "llm_api_format",
 )
 
 # T34：档案（profile）里每个档案可覆盖的字段（不含 llm_mode / llm_max_tokens，它们是全局设置）
-PROFILE_KEYS = ("llm_base_url", "llm_api_key", "llm_model", "llm_backup_model", "llm_timeout_seconds")
+PROFILE_KEYS = (
+    "llm_base_url",
+    "llm_api_key",
+    "llm_model",
+    "llm_backup_model",
+    "llm_timeout_seconds",
+    "llm_provider",
+    "llm_api_format",
+)
 DEFAULT_PROFILE_ID = "default"
+DEFAULT_PROVIDER = "custom"
+DEFAULT_API_FORMAT = "chat"
+
+# 旧键保留为**不渲染的别名**（只增不删：老前端 bundle 读 providers.moonshot 仍然能拿到）
+LEGACY_PROVIDER_ALIASES = {"moonshot": "kimi"}
 
 # 供应商预设（前端下拉快捷填充）
 PROVIDERS = {
@@ -93,6 +115,24 @@ def _normalize(raw: dict) -> dict:
     }
 
 
+def _with_target(flat: dict) -> dict:
+    """补全 llm_provider / llm_api_format（T48 读侧迁移，**不写盘**）。
+
+    老档案没有这两个字段：按归一化 base_url 反推预设与格式——现网 Kimi 档案由此自动
+    拿到参数剔除策略（否则 temperature 400 修不掉）；反推不中就回落 custom + chat。
+
+    只补这两个字段，不动 base_url / model / api_key。写回后下次直读字段，不再反推。
+    """
+    if not flat.get("llm_provider"):
+        matched = match_profile(str(flat.get("llm_base_url") or ""))
+        flat["llm_provider"] = matched[0] if matched else DEFAULT_PROVIDER
+        if matched and not flat.get("llm_api_format"):
+            flat["llm_api_format"] = matched[1]
+    if not flat.get("llm_api_format"):
+        flat["llm_api_format"] = DEFAULT_API_FORMAT
+    return flat
+
+
 def get_runtime_config() -> dict:
     """返回当前生效的运行时配置（扁平结构，脱敏由调用方处理）。
 
@@ -104,7 +144,7 @@ def get_runtime_config() -> dict:
     profile = next((p for p in data["profiles"] if p["id"] == active), data["profiles"][0])
     flat = {k: v for k, v in data.items() if k in ("llm_mode", "llm_max_tokens")}
     flat.update({k: v for k, v in profile.items() if k in PROFILE_KEYS})
-    return flat
+    return _with_target(flat)
 
 
 # 兼容别名（T34）：测试与既有调用方会访问 `_load_from_disk.cache_clear()`，
@@ -201,11 +241,33 @@ def is_masked_key(key: str) -> bool:
     return "****" in key
 
 
+def _providers_payload() -> dict:
+    """供应商预设表（下发前端）。
+
+    既有三键 `name` / `base_url` / `model` 原样保留（老前端 bundle 仍能跑），
+    T48 新增字段由 profiles.provider_payload 提供；旧键（moonshot）保留为
+    **不渲染的别名**——只增不删，前端按 `deprecated` 跳过。
+    """
+    payload = profiles_payload()
+    for legacy_id, current_id in LEGACY_PROVIDER_ALIASES.items():
+        if current_id in payload:
+            payload[legacy_id] = {**payload[current_id], "deprecated": True}
+    return payload
+
+
+# 兼容既有引用（llm_runtime.PROVIDERS）
+PROVIDERS = _providers_payload()
+
+
 def public_config() -> dict:
-    """对外可见配置（Key 脱敏）+ 供应商预设。"""
+    """对外可见配置（Key 脱敏）+ 供应商预设 + 前端即时校验所需的数据。"""
     cfg = get_runtime_config()
     merged = {key: getattr(get_settings(), key) for key in RUNTIME_KEYS}
     merged.update(cfg)
     merged["llm_api_key"] = mask_api_key(merged.get("llm_api_key") or "")
-    merged["providers"] = PROVIDERS
+    merged["providers"] = _providers_payload()
+    # 前端即时校验用：名单与文案都由后端下发，前端不持有任何规则副本
+    merged["reserved_path_suffixes"] = list(RESERVED_PATH_SUFFIXES)
+    merged["reserved_path_message"] = RESERVED_PATH_MESSAGE
+    merged["api_format_labels"] = dict(API_FORMAT_LABELS)
     return merged

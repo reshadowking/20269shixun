@@ -18,6 +18,10 @@ docs/          开发文档（API 契约、评测口径、部署）
 
 ## 快速开始（本机开发）
 
+**一键（Windows）**：双击 **`dev-setup.bat`**（首次，自动装环境：依赖容器 + venv + npm + .env 模板）
+→ 之后每天双击 **`dev-start.bat`**（起后端 :8000 + 前端 :5173 并自动打开浏览器，均带热重载）。
+登录 `demo / demo123`。LLM 默认 mock（演示模板稿零消耗，dev-setup 自动生成 `backend/.env`）；真实生成：填**你自己的** DeepSeek Key——各人自备，不随仓库分发——并把 `LLM_MODE` 改为 `real`（或用 `/api-config` 页）。
+
 0. **克隆后一次性**：`powershell -ExecutionPolicy Bypass -File scripts/install-hooks.ps1`
    —— 把 `scripts/precommit.ps1` 挂成 git pre-commit hook（停用：`git config --unset core.hooksPath`）。
 

@@ -49,6 +49,18 @@
       "mode": "generate",
       "instruction": "设计一个简洁的登录页，主色蓝色，含账号/密码输入框与登录按钮",
       "expect": { "max_touched": 0, "max_seconds": 45, "max_tokens": 8000 }
+    },
+    {
+      "id": "generate-pagination-dialog",
+      "mode": "generate",
+      "instruction": "设计一个商品搜索结果页，主色蓝色，含商品卡片网格、底部分页条和「加入购物车成功」的弹窗提示",
+      "expect": { "max_touched": 0, "max_seconds": 45, "max_tokens": 8000 }
+    },
+    {
+      "id": "edit-build-admin-blocks",
+      "mode": "edit",
+      "instruction": "桌面端后台个人中心，静谧暗黑风格。左侧侧边菜单，主区域卡片展示账号信息与功能选项，文字柔和，局部亮色作为强调，整体沉稳低调。",
+      "expect": { "max_touched": 20, "max_seconds": 45, "max_tokens": 12000 }
     }
   ]
 }

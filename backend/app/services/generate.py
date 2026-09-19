@@ -22,8 +22,9 @@ from .ai_gateway import GenerationDeadline
 from .beautify import preset_value, vocabulary_text
 from .compliance import compliance_rate, enforce_compliance
 from .edit_guard import structure_loss_reason
-from .llm import LLMClient, describe_api_error, to_llm_dict
-from .ops import OP_TYPES, apply_ops
+from .llm import LLMClient, describe_api_error, prompt_version, to_llm_dict
+from .ops import MAX_INSERT_DEPTH, MAX_INSERT_NODES, MAX_OPS, OP_TYPES, _subtree_size, apply_ops
+from .style_keys import style_keys_text
 from .templates import KEYWORD_MAP, TEMPLATES, free_default_design
 
 logger = logging.getLogger(__name__)
@@ -54,7 +55,16 @@ INTENT_SYSTEM = """你是设计意图解析器。把用户的自然语言设计�
 表单/登记/问卷 → form；列表/订单/管理 → list；文章/博客/资讯 → article；
 登录/注册 → login；个人/主页/中心 → profile；其余 → landing。""" + INSTRUCTION_BOUNDARY
 
-FILL_SYSTEM = """你是 AI 设计生成器。基于给定的模板骨架 JSON 与设计令牌，输出一张完整可渲染的 DesignNode 树。
+# T53 收尾批：白名单外元素"如实后果"描述——FILL/FREE/INCREMENTAL 三处共用该常量
+# （历史教训：三处独立字符串曾 replace 漏改一处，被 test_prompt_honesty 连抓两次；
+#   抽常量后改一处全生效。注意：源码中常量名只允许出现 4 次——1 定义 + 3 引用，
+#   注释里引用全称会让 test_contract_note_single_sourced 误红，注释写"该常量"即可）。
+_CONTRACT_VIOLATION_NOTE = (
+    "（如 pagination/dialog——写了该节点会降级为普通容器：组件参数丢失、布局样式保留，"
+    "仅可见文字以文本节点保留，并记入能力缺口台账）"
+)
+
+FILL_SYSTEM = ("""你是 AI 设计生成器。基于给定的模板骨架 JSON 与设计令牌，输出一张完整可渲染的 DesignNode 树。
 组件白名单（只能使用这 18 种 componentType，禁止新增其他类型）：
 button, card, input, select, table, chart, stat-block, navbar, sidebar, avatar, tag, divider, title-text, hero, image, icon, switch, tabs
 硬约束：
@@ -79,12 +89,16 @@ button, card, input, select, table, chart, stat-block, navbar, sidebar, avatar, 
     不要大段缩进（如每行 16 空格）、不要重复冗余字段；输出越长越容易在尾部出错。
     目标是整棵树的输出 token 越少越好。
 12. 需求里出现分页、弹窗等组件白名单外的元素：禁止自创 componentType
-    （如 pagination/dialog，会导致整稿被拒）；用最接近的合法组件表达——
+    """
+    + _CONTRACT_VIOLATION_NOTE
+    + """；用最接近的合法组件表达——
     分页→一排 button、弹窗→frame + 按钮。
 13. 图片地址（**有没有可选图片都生效**）：image 组件的 props.src **只能**逐字取自
     本提示词里给出的图片 url；**没有给任何图片时就不要写 src**（画布会显示占位图）。
     禁止编造外链或占位图服务地址（picsum/unsplash/placehold/example.com 之类），
-    否则导出产物里是一堆打不开的图，而且离线打开时全裂。""" + INSTRUCTION_BOUNDARY
+    否则导出产物里是一堆打不开的图，而且离线打开时全裂。"""
+    + INSTRUCTION_BOUNDARY
+)
 
 # 用户指定色提取：prompt 中的 hex（品牌色不被合规检查器拉回，v2.2 §4.5）
 HEX_RE = re.compile(r"#[0-9a-fA-F]{3,8}\b")
@@ -146,14 +160,26 @@ def icon_prompt_section() -> str:
     return (
         "\n\n## 可用图标（icon 组件的 props.name 只能从中逐字选）\n"
         + icon_names_text()
-        + "\n不在上列的名字会被渲染为兜底占位（不会导致整稿被拒），所以禁止编造图标名。"
+        + "\n不在上列的名字会被渲染为兜底占位（不会降级、不进缺口台账），所以禁止编造图标名。"
     )
 
 
 # ---- T18：组件字段契约（shared/component-library.json，唯一来源，禁止手抄进提示词正文）----
+# 约定（T53 收尾批）：组件级可用 `_note` 字段承载人类可读说明——加载器忽略、契约不引用、
+# 测试不校验；说明性内容优先放这里而不是改默认值（例：icon 的 props.name 默认 star 为
+# 通用插入场景，推荐系统按场景覆盖，见 recommender.py）。
 COMPONENT_LIBRARY_FILE = ROOT / "shared" / "component-library.json"
 with COMPONENT_LIBRARY_FILE.open(encoding="utf-8") as _cf:
     COMPONENT_LIBRARY: dict[str, Any] = json.load(_cf)
+
+# T52：各组件声明的合法 props 键（台账"契约外字段"的判定依据，与 component_contract_section 同源）。
+# _COMMON_PROPS_KEYS：不在组件声明里、但链路合法写进 props 的公共键——name（图层树重命名对任意
+# 节点写 props.name）。props 层声明 name 的组件（icon，component-library.json:469——图标名）
+# 本就落在声明集合里，并集语义无冲突。
+_COMPONENT_PROPS_KEYS: dict[str, frozenset] = {
+    spec.get("type", ""): frozenset((spec.get("props") or {}).keys()) for spec in COMPONENT_LIBRARY.get("components", [])
+}
+_COMMON_PROPS_KEYS = frozenset({"name"})
 
 _SHAPE_PARENS_RE = re.compile(r"\[(.*?)\]")
 
@@ -215,8 +241,19 @@ def component_contract_section() -> str:
         props = spec.get("props") or {}
         fields = "；".join(f"{name}{_shape_of(value)}" for name, value in props.items())
         name = spec.get("name") or ""
-        lines.append(f"- {spec['type']} {name}：{fields}" if fields else f"- {spec['type']} {name}：无字段")
+        # T51：把库里现成的"适用场景"description 注进提示词——模型选组件全靠猜是
+        # A 类结构问题最可能的根因之一，而这个数据本来就在（不新增事实源）。
+        desc = f"（{spec.get('description')}）" if spec.get("description") else ""
+        lines.append(f"- {spec['type']} {name}{desc}：{fields}" if fields else f"- {spec['type']} {name}{desc}：无字段")
     lines.append("字段名写错不会报错，但组件会回退到默认值渲染（等于内容丢失）。")
+    # T51 验收反馈：实测模型会写 componentType: "text"（text 是**节点类型**，不是组件）→ 曾三处降级。
+    # 双保险：repair 已加**自动转正**（componentType 为节点类型 → 转成该节点，不降级），
+    # 这里仍给出正确写法从源头减少（"pagination" 这类真缺失的组件另列入组件库完善清单）。
+    lines.append(
+        "type 是节点类型（frame / text / rect / component）；**组件**只有上面列出的这些——"
+        '文本请直接用 type: "text" 的节点，不要写 componentType: "text"（写了也会自动转回文本节点）。'
+        "分组/容器一律用 frame（不要写 group，写了也会按 frame 落地）。"
+    )
     return "\n".join(lines) + COMPONENT_FEW_SHOT
 
 
@@ -258,6 +295,49 @@ def form_page_section() -> str:
         "错误态是用户交互后才出现的状态，静态设计稿默认展示会让人误以为页面坏了。\n"
         "- 正文/说明文字用 text 类型；title-text 只用于页面标题与区块标题（它渲染成标题标签，正文用它会造成层级混乱）。"
     )
+
+
+# ---- T51：表单段条件注入的判据素材（此前是无条件注入，非表单页也在花这段预算）----
+_FORM_COMPONENT_TYPES = frozenset({"input", "select", "switch"})
+_FORM_TEMPLATE_NAMES = frozenset({"login"})
+_FORM_TEXT_KEYWORDS = ("表单", "输入框", "登录", "注册", "密码", "账号", "填写", "搜索", "筛选", "下拉")
+
+
+def needs_form_rules(
+    *,
+    design: dict[str, Any] | None = None,
+    intent: dict[str, Any] | None = None,
+    template_name: str = "",
+    text: str = "",
+) -> bool:
+    """是否注入"表单页约束"段（T51：此前为无条件注入）。
+
+    判据（命中任一即 True）：
+    ① 现有树里已含表单组件（**编辑模式最可靠**——改的就是这张表单页）；
+    ② 意图声明了表单组件；
+    ③ 模板名属表单类；
+    ④ 文本命中表单关键词（编辑模式"加个搜索框"同样命中）。
+
+    **不明确 → True（保守注入）**：宁可多花约 500 字符，也不能让表单页失去
+    "输入框双边框"这条护栏——它同时守着合规指标（input 控件级样式会动视觉）。
+    """
+    if design is None and intent is None and not template_name and not text:
+        return True  # 完全没有判据素材 → 保守
+    if design is not None:
+        stack: list[dict[str, Any]] = [design]
+        while stack:
+            node = stack.pop()
+            if str(node.get("componentType") or "").lower() in _FORM_COMPONENT_TYPES:
+                return True
+            stack.extend(node.get("children") or [])
+    if intent is not None:
+        for comp in intent.get("components") or []:
+            name = comp if isinstance(comp, str) else str((comp or {}).get("componentType") or (comp or {}).get("type") or "")
+            if name.lower() in _FORM_COMPONENT_TYPES:
+                return True
+    if template_name and template_name.lower() in _FORM_TEMPLATE_NAMES:
+        return True
+    return any(k in (text or "") for k in _FORM_TEXT_KEYWORDS)
 
 
 # 样式数值边界（与 shared/design-schema.json 一致；超界自动 clamp，不整树回退）
@@ -416,7 +496,7 @@ def _salvage_text_child(node: dict) -> dict | None:
     return None
 
 
-def _degrade_to_frame(node: dict, reason: str, degraded: list[str] | None) -> None:
+def _degrade_to_frame(node: dict, reason: str, degraded: list[str] | None, gap_rows: list[dict] | None = None) -> None:
     """T8：未知组件/未知节点类型降级为 frame——保留 id/style/x/y/hidden/children；
     可见文本（props.text/label/name）抢救为 text 子节点追加末尾，其余 props 删除
     （避免把未知组件的语义塞进 frame）。每次降级写生成日志（评测脚本消费生成日志）。"""
@@ -432,20 +512,28 @@ def _degrade_to_frame(node: dict, reason: str, degraded: list[str] | None) -> No
         node["children"] = children
     if degraded is not None:
         degraded.append(f"{reason}@{node.get('id', '?')}")
+    # T52：结构化台账行——与上面的 degraded 字符串**同一位置相邻写入**（防双口径漂移）；
+    # 字符串是前端外显契约（changeList.describeDegraded 按 lastIndexOf('@') 解析），台账是 DB 契约。
+    if gap_rows is not None:
+        gap_rows.append({"gap_type": "degraded", "detail": str(reason), "node_id": str(node.get("id", "?"))})
     gen_logger.info("未知节点降级为 frame：%s（id=%s，可见文本%s）", reason, node.get("id"), "已抢救" if salvaged else "无")
 
 
-def repair_design(node: dict, degraded: list[str] | None = None) -> dict:
+def repair_design(node: dict, degraded: list[str] | None = None, gap_rows: list[dict] | None = None) -> dict:
     """宽容化修复 LLM 产物的常见格式错误（T8：未知组件/未知类型降级 frame、未知键裁剪，
     不再原样放行拖垮整棵树；仍无法修复的形态交由 Schema 校验回退兜底）。
 
-    修复范围：组件名误写进 type（如 {"type": "divider"}）转正；样式数值超界 clamp；
-    未知 componentType（如自创 "icon"）与裸未知 type（如 "tabs"）降级 frame；
+    修复范围：组件名误写进 type（如 {"type": "divider"}）转正；节点类型误写进 componentType
+    （如 componentType:"text"）转正；group 归一化为 frame（面板只开放 frame，新稿不再产生 group）；
+    样式数值超界 clamp；未知 componentType（如自创 "icon"）与裸未知 type（如 "tabs"）降级 frame；
     节点级未知键（如 "content"，Additional properties 报错来源）裁剪。
     这类错误只占整棵树的少数节点，修复后可保留 LLM 的其余成果，避免整棵回退。
 
     degraded：可选降级清单累积器（generate_design 传入以向 API 外显降级明细，
     形如 ["icon@节点id"]）；直接调用方（测试等）不传则不收集。
+    gap_rows：T52 可选**结构化**缺口行累积器（{"gap_type","detail","node_id"}，零 @ 解析）——
+    收集降级 + 节点级未知键 + 契约外 props 字段三类；detail/node_id 的净化在落库前由
+    ai_ledger._sanitize_detail 统一执行，这里只收集原文（原文进日志供人工排查）。
     """
     node = dict(node)
     t = node.get("type")
@@ -457,22 +545,48 @@ def repair_design(node: dict, degraded: list[str] | None = None) -> dict:
         node["componentType"] = t
     elif ct is not None and t is None:
         node["type"] = "component"
+    # T51 验收反馈：模型会把"节点类型"写进 componentType（实测 componentType:"text" ×3，
+    # 被降级成空 frame——而 text 能力本来就存在，type:"text" 就是它）。
+    # 与上面的"组件名误写进 type 转正"互为对称：capability 存在，只是写法错了 → 转正，不降级。
+    if node.get("type") == "component" and node.get("componentType") in KNOWN_NODE_TYPES - {"component"}:
+        node["type"] = node["componentType"]
+        node.pop("componentType", None)
+    # 基元开放决策（2026-09-19）：group 与 frame 在渲染器是同一分支（画面零差异），面板只开放
+    # frame——新稿不再产生 group：裸 type:"group" 与 componentType:"group"（上面已转正为 type）
+    # 都在此归一化为 frame，props/children 保留。schema enum 与前端渲染层的 group 分支保留
+    # 仅为旧稿校验/渲染兼容，历史数据原样不改写。
+    if node.get("type") == "group":
+        node["type"] = "frame"
     # T8：先转正再判合法性（{"type":"button"} 已在上面转成合法组件，不会被误伤）。
     # componentType 缺失的 component 节点 Schema 本就合法，不在降级之列。
     if node.get("type") == "component" and isinstance(node.get("componentType"), str) and node["componentType"] not in COMPONENT_TYPE_NAMES:
-        _degrade_to_frame(node, node["componentType"], degraded)
+        _degrade_to_frame(node, node["componentType"], degraded, gap_rows)
     elif node.get("type") not in KNOWN_NODE_TYPES:
-        _degrade_to_frame(node, str(node.get("type")), degraded)
+        _degrade_to_frame(node, str(node.get("type")), degraded, gap_rows)
     # T9：icon 合法化后不再降级；未知名 Schema 不拒（渲染层兜底占位），这里只记日志便于排查
     if node.get("type") == "component" and node.get("componentType") == "icon":
         props = node.get("props")
         name = props.get("name") if isinstance(props, dict) else None
         if isinstance(name, str) and name and name not in icon_names():
             gen_logger.warning("icon 组件未知图标名 %r（id=%s）→ 渲染层将兜底为 help-circle", name, node.get("id"))
+    # T52：契约外 props 字段（模型写了组件契约里没有的键——渲染时静默回退默认值，内容等于丢失）。
+    # 只对比 component-library.json 声明的键 ∪ 公共键 name（图层树重命名对任意节点合法；
+    # icon 的 props.name 本就是声明键，component-library.json:469）。
+    if node.get("type") == "component" and gap_rows is not None:
+        allowed = _COMPONENT_PROPS_KEYS.get(node.get("componentType") or "")
+        props = node.get("props")
+        if allowed is not None and isinstance(props, dict):
+            for key in props:
+                if key not in allowed and key not in _COMMON_PROPS_KEYS:
+                    gap_rows.append(
+                        {"gap_type": "unknown_prop", "detail": f"props.{key}", "node_id": str(node.get("id", "?"))}
+                    )
     # T8：节点级未知键裁剪（"Additional properties are not allowed" 历史报错的来源）
     for key in [k for k in node if k not in NODE_KEYS]:
         node.pop(key)
         gen_logger.debug("裁剪节点级未知键 %s（id=%s）", key, node.get("id"))
+        if gap_rows is not None:
+            gap_rows.append({"gap_type": "unknown_prop", "detail": str(key), "node_id": str(node.get("id", "?"))})
     _clamp_style(node)
     _repair_props(node)
     children = node.get("children")
@@ -488,7 +602,7 @@ def repair_design(node: dict, degraded: list[str] | None = None) -> dict:
                         child = dict(child)
                         child["id"] = f"{node.get('id', 'n')}-c{i}"
                         gen_logger.debug("修复 children 元素缺 id → %s", child["id"])
-                    child = repair_design(child, degraded)
+                    child = repair_design(child, degraded, gap_rows)
                 else:
                     # 字符串等非对象元素 → text 节点（模型把菜单项/标签直接写进 children）
                     child = {"id": f"{node.get('id', 'n')}-c{i}", "type": "text", "props": {"text": str(child)}}
@@ -548,7 +662,7 @@ def unwrap_design(payload: Any) -> tuple[dict[str, Any] | None, str]:
 # 自由生成触发词（E3-1：显式指令优先于模板匹配）
 FREE_TRIGGER_KEYWORDS = ("自由生成", "不用模板", "不要模板", "自由发挥", "随意发挥")
 
-FREE_SYSTEM = """你是 AI 设计生成器。直接根据用户需求生成一张完整可渲染的 DesignNode 树（不使用任何预置模板）。
+FREE_SYSTEM = ("""你是 AI 设计生成器。直接根据用户需求生成一张完整可渲染的 DesignNode 树（不使用任何预置模板）。
 组件白名单（只能使用这 18 种 componentType，禁止新增其他类型）：
 button, card, input, select, table, chart, stat-block, navbar, sidebar, avatar, tag, divider, title-text, hero, image, icon, switch, tabs
 硬约束：
@@ -566,11 +680,15 @@ button, card, input, select, table, chart, stat-block, navbar, sidebar, avatar, 
 9. 输出体积（严格遵守）：使用紧凑 JSON——嵌套层级之间允许必要换行，不要空行、不要大段缩进；
    输出越长越容易在尾部出错，整棵树输出 token 越少越好。
 10. 需求里出现分页、弹窗等组件白名单外的元素：禁止自创 componentType
-    （如 pagination/dialog，会导致整稿被拒）；用最接近的合法组件表达——
+    """
+    + _CONTRACT_VIOLATION_NOTE
+    + """；用最接近的合法组件表达——
     分页→一排 button、弹窗→frame + 按钮。
 11. 图片地址（**有没有可选图片都生效**）：image 组件的 props.src **只能**逐字取自
     本提示词里给出的图片 url；**没有给任何图片时就不要写 src**（画布会显示占位图）。
-    禁止编造外链或占位图服务地址（picsum/unsplash/placehold/example.com 之类）。""" + INSTRUCTION_BOUNDARY
+    禁止编造外链或占位图服务地址（picsum/unsplash/placehold/example.com 之类）。"""
+    + INSTRUCTION_BOUNDARY
+)
 
 
 def extract_user_colors(prompt: str) -> list[str]:
@@ -595,7 +713,7 @@ def extract_user_colors(prompt: str) -> list[str]:
 SUMMARY_THRESHOLD = 400  # 字符数：超过则先摘要再进参数填充
 
 # 增量修改（P0-1：基于当前树只改用户指定部分，其他节点保持不变）
-INCREMENTAL_SYSTEM = """你是 AI 设计修改器。基于给定的 DesignNode 树（current_design），根据用户要求做【最小修改】。
+INCREMENTAL_SYSTEM = ("""你是 AI 设计修改器。基于给定的 DesignNode 树（current_design），根据用户要求做【最小修改】。
 硬约束：
 1. 只修改用户明确要求的节点（文本/颜色/尺寸/位置/间距等），其余所有节点必须【逐字段保持原值】——
    文本、颜色、字号、圆角、布局、顺序、id 一律不变。
@@ -612,13 +730,24 @@ INCREMENTAL_SYSTEM = """你是 AI 设计修改器。基于给定的 DesignNode �
 7. 输出必须是合法 JSON，不要输出任何其他内容；JSON 语法必须正确（属性间逗号、对象闭合）；
    输出什么形态由下文「修改指令的输出形态」一节规定，不要自行换一种形态。
 8. 需求里出现分页、弹窗等组件白名单外的元素：禁止自创 componentType
-   （如 pagination/dialog，会导致整稿被拒）；用最接近的合法组件表达——
+   """
+   + _CONTRACT_VIOLATION_NOTE
+   + """；用最接近的合法组件表达——
    分页→一排 button、弹窗→frame + 按钮。
 9. 若用户要求与界面设计无关（例如写诗、算术、闲聊），保持 current_design 原样不变，不要为了
    "完成指令"去改动任何节点。
 10. 图片地址（**有没有可选图片都生效**）：image 组件的 props.src **只能**逐字取自本提示词里
    给出的图片 url；用户要求换图但没有给任何图片时，保持原 src 不变并说明"没有可用图片"，
-   禁止编造外链或占位图服务地址（picsum/unsplash/placehold/example.com 之类）。""" + INSTRUCTION_BOUNDARY
+   禁止编造外链或占位图服务地址（picsum/unsplash/placehold/example.com 之类）。"""
+   + INSTRUCTION_BOUNDARY
+)
+
+# T53 收尾批：提示词"版本" = **基础文案**的 sha（不含 needs_form/assets/locked 等运行期注入段）。
+# 参数化段随请求变化——若参与哈希，同一文案在不同请求下会算出不同 sha，台账"按版本分组"就失去
+# 意义（评审定案：版本只锚定文案主体，参数差异由请求级字段记录）。启动打印/golden/台账三处同源。
+PROMPT_VERSION_FILL = prompt_version(FILL_SYSTEM)
+PROMPT_VERSION_FREE = prompt_version(FREE_SYSTEM)
+PROMPT_VERSION_INCREMENTAL = prompt_version(INCREMENTAL_SYSTEM)
 
 # T4 批2：锁定阶段的额外约束段（仅 locked=True 时追加到增量提示词末尾）
 LOCKED_STAGE_SECTION = """
@@ -652,8 +781,20 @@ def ops_prompt_section() -> str:
         '{"op":"set_style","id":"buy","key":"width","value":200},{"op":"set_style","id":"buy","key":"height","value":48}]}'
     )
     lines.append(
-        "约束：节点 id 必须逐字取自 current_design；props 字段名必须来自组件库契约；"
+        '约束：节点 id 必须逐字取自 current_design；props 字段名必须来自组件库契约；'
         '删除节点只能用 remove 显式声明；无改动时返回空数组 {"ops":[]}。'
+    )
+    # T53 收尾批（P0）：首次把 ops 体量上限告知模型——此前闸门（ops.py MAX_*）一直存在但
+    # 模型不知情，实测两次整页需求撞闸门失败（35/4、27/4）。数字从 ops.py 常量注入，禁止手抄。
+    lines.append(
+        f"体量上限（严格遵守，超限整批拒绝，画布保持原样）：单条 insert 的子树 ≤ {MAX_INSERT_NODES} 个节点、"
+        f"深度 ≤ {MAX_INSERT_DEPTH}；ops 总数 ≤ {MAX_OPS} 条。宁可拆成多条小 insert，不要一条大 insert。"
+    )
+    lines.append(
+        "整页需求拆分示例——反例：insert(root, 整页 39 个节点、深度 5) → 整批拒绝"
+        "（节点数 39 > 20、深度 5 > 4，真实发生过）；\n"
+        "正例：① insert(root, 侧栏容器 + 4 个菜单项)（5 节点/深度 2）→ ② insert(root, 主区容器)（1 节点）→ "
+        "③ insert(主区, 账户卡片 + 6 个文本)（7 节点/深度 2）→ ④ 功能卡片分批，每批 ≤ 10 节点。"
     )
     lines.append(
         "移动节点（自由画布）：用 set_style + key=x / key=y（画布单位，相对父容器左上角），"
@@ -674,7 +815,7 @@ def legacy_tree_prompt_section() -> str:
     )
 
 
-def incremental_system(locked: bool = False, assets: list[dict[str, Any]] | None = None) -> str:
+def incremental_system(locked: bool = False, assets: list[dict[str, Any]] | None = None, needs_form: bool = True) -> str:
     """组装增量修改 system 提示词（T4 批2）：既有约束 + 效果词典 + 图标清单 +（locked 时）锁定约束段。
 
     - INCREMENTAL_SYSTEM 既有约束文本逐字保留（多处测试断言依赖），词典为追加式拼装；
@@ -690,9 +831,12 @@ def incremental_system(locked: bool = False, assets: list[dict[str, Any]] | None
         INCREMENTAL_SYSTEM
         + "\n\n## 可用美化效果（只能从中选，禁止自创 CSS 值）\n"
         + vocabulary_text()
+        # T49（C6）：告诉模型渲染层真正认哪些 style 键——从源头减少"写了个渲染不出来的键"
+        + "\n\n## 可用的样式键（style 的键名，只能用这些）\n"
+        + style_keys_text()
         + icon_prompt_section()
         + component_contract_section()
-        + form_page_section()
+        + (form_page_section() if needs_form else "")
         + assets_prompt_section(assets)
         + token_prompt_section()
         + color_word_section()
@@ -729,13 +873,13 @@ def token_prompt_section() -> str:
     return "\n".join(lines)
 
 
-def fill_system_text(assets: list[dict[str, Any]] | None = None) -> str:
+def fill_system_text(assets: list[dict[str, Any]] | None = None, needs_form: bool = True) -> str:
     """FILL_SYSTEM + 运行期注入段（图标 T9 + 组件字段契约 T18 + 表单页/资产 + 令牌色值 + 对话上下文规则 T24）。"""
     return (
         FILL_SYSTEM
         + icon_prompt_section()
         + component_contract_section()
-        + form_page_section()
+        + (form_page_section() if needs_form else "")
         + assets_prompt_section(assets)
         + token_prompt_section()
         + color_word_section()
@@ -743,18 +887,27 @@ def fill_system_text(assets: list[dict[str, Any]] | None = None) -> str:
     )
 
 
-def free_system_text(assets: list[dict[str, Any]] | None = None) -> str:
+def free_system_text(assets: list[dict[str, Any]] | None = None, needs_form: bool = True) -> str:
     """FREE_SYSTEM + 运行期注入段（同上）。"""
     return (
         FREE_SYSTEM
         + icon_prompt_section()
         + component_contract_section()
-        + form_page_section()
+        + (form_page_section() if needs_form else "")
         + assets_prompt_section(assets)
         + token_prompt_section()
         + color_word_section()
         + HISTORY_USAGE_SECTION
     )
+
+
+# T53 收尾批（P0）：提示词"版本" = **静态组装 sha**——base + 静态注入段（效果词典/样式键/图标/
+# 组件契约/令牌/色系），**排除请求参数化段**（needs_form/assets/locked——随请求变化，参与哈希
+# 会让"按版本分组"失效）。模块加载时求值一次；--reload 热重载随模块重载重算；常驻进程改代码
+# 需重启（与所有代码变更一致）。启动打印/台账/golden 三处同源。
+PROMPT_VERSION_FILL = prompt_version(fill_system_text(assets=None, needs_form=False))
+PROMPT_VERSION_FREE = prompt_version(free_system_text(assets=None, needs_form=False))
+PROMPT_VERSION_INCREMENTAL = prompt_version(incremental_system(locked=False, assets=None, needs_form=False))
 
 SUMMARY_SYSTEM = """你是需求摘要器。把用户的长篇设计需求压缩为简洁的结构化需求描述（200 字以内），供下游生成设计稿。
 硬约束：
@@ -818,6 +971,9 @@ class GenerateResult:
     violations_detail: list = field(default_factory=list)
     # T8：本轮降级明细（["icon@节点id"]，无降级为空）——前端聊天面板消费（T8 收尾）
     degraded: list[str] = field(default_factory=list)
+    # T52：能力缺口台账行（[{"gap_type","detail","node_id","llm_model",...}]，结构化零解析）
+    # ——由路由层落库到 ai_capability_gaps（旁路，不影响返回，不进 API 响应）。
+    gaps: list[dict] = field(default_factory=list)
     # T21：本次生成的模型调用记录（由路由层落库到 ai_calls；不含用户文本）
     ai_calls: list[dict] = field(default_factory=list)
     # T23：本轮 ops 落地的受影响节点 id（空表示走的是整树兼容路径）
@@ -843,6 +999,13 @@ _MOCK_EDIT_EFFECTS: list[tuple[tuple[str, ...], str, str]] = [
 ]
 _MOCK_EDIT_TEXT_KEYWORDS = ("文案", "文字", "标题", "改成")
 
+# 没命中任何关键词时的**兜底效果**用的预置档位。
+# 不能用第一档「极轻」：它与 card 组件的内置默认阴影逐字相同
+# （frontend `styleTokens.ts` 的 CARD_SHADOW 就是取 shadow 预置的第 0 档），
+# 于是演示模式下"点一次美化 → 已应用修改 ✓ → 画面完全没变"。
+# 兜底效果必须肉眼可见，否则用户会合理地怀疑功能没生效。
+MOCK_DEFAULT_SHADOW_LABEL = "中"
+
 
 def _mock_first_node(tree: dict, pred) -> dict | None:
     """前序遍历找第一个满足条件的节点。"""
@@ -866,9 +1029,14 @@ def mock_edited_design(prompt: str, tree: dict[str, Any]) -> dict[str, Any]:
     """mock 模式增量修改：按关键词规则产出确定性改写树（纯规则、无 LLM）。
 
     规则顺序（命中即返回）：效果关键词（阴影/渐变/圆角/动效）→ 文案改写
-    （改第一个 type=text 节点的 props.text）→ 默认施加"极轻"阴影（无害效果）。
+    （改第一个 type=text 节点的 props.text）→ 默认施加一档**可见**阴影。
     硬约束：绝不产生结构变更（不增删/重排/改父级）；效果值一律经
     preset_value 取自 beautify-effects.json（运行时单一来源）。
+
+    2026-09-18 改：默认效果从「极轻」提到 `MOCK_DEFAULT_SHADOW_LABEL`。原因：
+    「极轻」的值与 card 组件的**内置默认阴影**逐字相同（frontend `styleTokens.ts`
+    就是取这一档），于是演示模式下"点一次美化 → 已应用修改 ✓ → 画面完全没变"，
+    用户会合理地怀疑功能没生效。默认效果必须看得见。
     """
     new_tree = copy.deepcopy(tree)
     for keywords, key, label in _MOCK_EDIT_EFFECTS:
@@ -881,9 +1049,9 @@ def mock_edited_design(prompt: str, tree: dict[str, Any]) -> dict[str, Any]:
         if node is not None:
             node.setdefault("props", {})["text"] = MOCK_EDIT_TEXT
             return new_tree
-    gentle = preset_value("shadow", "极轻")
-    if gentle is not None:
-        return _mock_apply_style(new_tree, "shadow", gentle)
+    visible = preset_value("shadow", MOCK_DEFAULT_SHADOW_LABEL)
+    if visible is not None:
+        return _mock_apply_style(new_tree, "shadow", visible)
     return new_tree
 
 
@@ -941,6 +1109,7 @@ def generate_design(
     error = ""
     is_edit = current_design is not None
     degraded: list[str] = []  # T8：本轮降级明细（["icon@节点id"]），随结果外显
+    gap_rows: list[dict] = []  # T52：结构化缺口行（与 degraded 同事件双口径——字符串外显、结构化入库）
     start_all = time.perf_counter()
     gen_logger.info("生成开始 prompt=%d字符 mode=%s", len(prompt), "edit" if is_edit else "full")
 
@@ -973,7 +1142,7 @@ def generate_design(
                         kind="intent",
                     )
                 except Exception as exc:  # noqa: BLE001 - 网络/限流等异常 → 兜底并记录原因
-                    error = f"意图解析调用失败：{describe_api_error(exc)}"
+                    error = f"意图解析调用失败：{describe_api_error(exc)}（当前：{client.context_hint()}）"
                     intent = None
                 if intent is None and not error:
                     # 意图解析失败：仅记录原因，不视为降级（模板选择仍可走关键词/自由生成，填充由 LLM 完成）
@@ -1009,17 +1178,29 @@ def generate_design(
     # ---- 调用 2：参数填充 + 智能文案（增量修改用 INCREMENTAL_SYSTEM，基于当前树）----
     t0 = time.perf_counter()
     with tracer.start_as_current_span("param_fill"):
+        # T51：表单段按需注入——编辑模式看现有树 + 指令；新建看模板/意图 + 指令
+        needs_form = (
+            needs_form_rules(design=current_design, text=prompt)
+            if is_edit
+            else needs_form_rules(intent=intent, template_name=template_name, text=prompt)
+        )
         if is_edit:
             default = current_design  # 增量失败兜底：返回原树（画布不变，不丢用户调整）
             user_payload = {"user_request": fill_prompt, "current_design": current_design, "history": history or []}
-            fill_system = incremental_system(locked, assets)
+            fill_system = incremental_system(locked, assets, needs_form=needs_form)
+            fill_version = PROMPT_VERSION_INCREMENTAL
         else:
             is_free = template_name == "free"
             default = free_default_design(prompt) if is_free else TEMPLATES.get(template_name, TEMPLATES["landing"])
             user_payload = {"user_request": fill_prompt, "intent": intent, "history": history or []}
             if not is_free:
                 user_payload["template_skeleton"] = default
-            fill_system = free_system_text(assets) if is_free else fill_system_text(assets)
+            fill_system = (
+                free_system_text(assets, needs_form=needs_form)
+                if is_free
+                else fill_system_text(assets, needs_form=needs_form)
+            )
+            fill_version = PROMPT_VERSION_FREE if is_free else PROMPT_VERSION_FILL
         if circuit_open:
             fallback = True
             error = "AI 服务暂时不可用（已自动降级）"
@@ -1047,9 +1228,11 @@ def generate_design(
                     history=history,
                     deadline=deadline,
                     kind="fill",
+                    # T53：版本口径 = 基础文案 sha（参数化注入段不参与哈希，见 PROMPT_VERSION_* 注释）
+                    prompt_version_override=fill_version,
                 )
             except Exception as exc:  # noqa: BLE001
-                error = f"参数填充调用失败：{describe_api_error(exc)}"
+                error = f"参数填充调用失败：{describe_api_error(exc)}（当前：{client.context_hint()}）"
                 filled = None
         ops_applied: list[str] = []
         # 必须与 ops_applied 一起初始化在分支外：兜底路径（filled is None）会跳过下面的 else，
@@ -1077,9 +1260,27 @@ def generate_design(
                     no_change = True
                     filled = default
                 else:
-                    filled, ops_applied, ops_removed, ops_reason = apply_ops(current_design or {}, filled["ops"])
+                    # 先捕获 ops 列表：apply_ops 的元组解包会重绑 filled（变成落地结果树）
+                    ops_list = filled["ops"]
+                    filled, ops_applied, ops_removed, ops_reason = apply_ops(current_design or {}, ops_list)
                     if ops_reason:
                         gen_logger.warning("ops 落地被拒绝：%s", ops_reason)
+                        # T53 收尾批（P0）：逐 op 行（上限 5）——insert 记尺寸（_subtree_size 实算；
+                        # 节点数/深度是结构量非用户文本，P2 的上限调优看这个分布）。人话原因仍只在
+                        # error 字段与本地日志（含模型产物 repr，属泄漏面）。
+                        op_rows: list[dict] = []
+                        for op in ops_list:
+                            if not isinstance(op, dict):
+                                op_rows.append({"gap_type": "ops_rejected", "detail": "ops:malformed", "node_id": ""})
+                                continue
+                            kind_name = str(op.get("op", "?"))
+                            if kind_name == "insert":
+                                nodes, depth = _subtree_size(op.get("node"))
+                                detail = f"ops:insert.node{nodes}.depth{depth}"
+                            else:
+                                detail = f"ops:{kind_name}"
+                            op_rows.append({"gap_type": "ops_rejected", "detail": detail, "node_id": ""})
+                        gap_rows.extend(op_rows[:5])
                         fallback = True
                         error = f"AI 修改指令无法落地（{ops_reason}），画布保持原样"
                         filled = default
@@ -1094,7 +1295,7 @@ def generate_design(
                     filled = unwrapped
                 # LLM 产物先宽容修复常见格式错误（type 误写/数值超界/枚举非法/props 类型），
                 # T8 起未知组件/未知类型降级、未知键裁剪（不再整树回退），再过 Schema
-                filled = repair_design(filled, degraded)
+                filled = repair_design(filled, degraded, gap_rows)
                 # T16：编辑结果必须保留既有节点——空壳树能过 Schema，但会把画布清空；
                 # T23：只有 remove op 显式声明过的 id 允许消失
                 reason = (
@@ -1137,6 +1338,25 @@ def generate_design(
         template_name, fallback, rate, times["total"],
         {k: round(v, 2) for k, v in times.items()},
     )
+    # T51 验收反馈：把"模型想要但链路表达不了"的能力**聚合成一行**，方便按能力完善组件库。
+    # （repair_design 里已有逐条 INFO；这里是汇总口径—— grep "本轮降级" 即可看到全部。）
+    if degraded:
+        gen_logger.warning("本轮降级 %s 项（模型想要但链路表达不了）：%s", len(degraded), "、".join(degraded))
+
+    # T52：缺口台账——归因取最后一次模型调用。口径：gap 全部产自 fill 产物（repair 只在填充
+    # 结果上运行），calls[-1] 即产生 gap 的那次调用；净化在落库前由 ai_ledger._sanitize_detail
+    # 统一执行。
+    # TODO(multi-turn): 若加多轮生成（一次请求多次产出设计），calls[-1] 归因必须回来重审。
+    last_call = client.calls[-1] if client.calls else {}
+    for gap in gap_rows:
+        gap["llm_model"] = last_call.get("model", "")
+        gap["prompt_version"] = last_call.get("prompt_version", "")
+        gap["profile_id"] = last_call.get("profile_id", "")
+        gap["api_format"] = last_call.get("api_format", "")
+    if gap_rows:
+        gen_logger.warning(
+            "本轮能力缺口 %s 项：%s", len(gap_rows), "、".join(f"{g['gap_type']}:{g['detail']}" for g in gap_rows)
+        )
 
     # T21：一次生成的多条记录共享同一兜底状态；span 上挂业务属性（Jaeger 里能直接看出是否降级）
     for call in client.calls:
@@ -1151,6 +1371,11 @@ def generate_design(
     span.set_attribute("degraded_count", len(degraded))
     span.set_attribute("model", client.calls[-1]["model"] if client.calls else "")
     span.set_attribute("prompt_version", client.calls[-1]["prompt_version"] if client.calls else "")
+    # T48：API 格式与供应商预设也要上 span——排查"Kimi + Anthropic 时 temperature 为什么没了"
+    # 必须同时看到这两项。⚠️ OTel 是**逐键** set_attribute，与 ai_ledger 的 _FIELDS 白名单
+    # 无关：内存 dict 里多了键不会自动出现在 span 里，必须显式加行。
+    span.set_attribute("api_format", client.calls[-1].get("api_format", "") if client.calls else "")
+    span.set_attribute("profile_id", client.calls[-1].get("profile_id", "") if client.calls else "")
 
     return GenerateResult(
         design=design,
@@ -1164,6 +1389,7 @@ def generate_design(
         error=error,
         violations_detail=[asdict(f) for f in fixes],
         degraded=degraded,
+        gaps=gap_rows,
         ai_calls=client.calls,
         ops_applied=ops_applied,
         ops_removed=sorted(ops_removed),

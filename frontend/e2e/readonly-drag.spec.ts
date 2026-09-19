@@ -84,7 +84,18 @@ async function openAs(context: BrowserContext, token: string, url: string): Prom
 
 /** 把节点拖动 (dx,dy) 像素 */
 async function dragNode(page: Page, testId: string, dx: number, dy: number) {
-  const box = await page.getByTestId(testId).boundingBox()
+  const node = page.getByTestId(testId)
+  // 画布挂载后会重新居中/等尺寸稳定，节点屏幕位置会移动；先等它连续两次读数一致，
+  // 避免"量到旧位置 → 鼠标落在节点外 → 拖空"（实测偶发：位移断言仍过、反馈断言红）
+  let prev = ''
+  for (let i = 0; i < 20; i++) {
+    const b = await node.boundingBox()
+    const key = b ? `${Math.round(b.x)},${Math.round(b.y)}` : ''
+    if (key && key === prev) break
+    prev = key
+    await page.waitForTimeout(150)
+  }
+  const box = await node.boundingBox()
   expect(box, `找不到节点 ${testId} 的位置`).toBeTruthy()
   const cx = box!.x + box!.width / 2
   const cy = box!.y + box!.height / 2
@@ -128,6 +139,13 @@ test('T46a-3e：owner 拖得动（对照组），viewer 拖不动且位置分毫
     expect(Math.abs(afterViewer!.y - beforeViewer!.y)).toBeLessThanOrEqual(1)
     // 给了一次明确反馈（而不是"拖了完全没反应"）。注意不要用 "只读访客：" 这种宽泛匹配——
     // 进页面时那条"可以查看实时协作…"的提示也含它，会假绿；这里匹配拖拽专属措辞。
+    //
+    // 有界重试：手势偶发没落到节点上（量位置与落点之间的布局抖动，实测 ~1/3 概率；
+    // 此时位移断言照样过、只有反馈断言红）→ 重试一次手势。**两次手势都无反馈仍判红**，
+    // 所以"拖了完全没反应"这个 bug 依然被这条断言抓住（改动前就是 2/2 必红）。
+    if ((await viewer.getByText(/拖动\/缩放不会生效/).count()) === 0) {
+      await dragNode(viewer, 'node-drag-a', 60, 40)
+    }
     await expect(viewer.getByText(/拖动\/缩放不会生效/)).toBeVisible()
 
     // 刷新后仍是原位置（排除"只是本地没重渲染"）

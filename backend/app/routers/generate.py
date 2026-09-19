@@ -9,7 +9,7 @@ from ..config import get_settings
 from ..db import get_db
 from ..security import get_current_user
 from ..services.ai_gateway import GatewayBusy, GenerationDeadline, run_generation
-from ..services.ai_ledger import quota_exceeded, record_calls
+from ..services.ai_ledger import quota_exceeded, record_calls, record_capability_gaps
 from ..services.compliance import compliance_rate, enforce_compliance
 from ..services.design_guard import GUARD_REPLY, is_design_request
 from ..services.generate import generate_design
@@ -57,6 +57,18 @@ class GenerateResponse(BaseModel):
     violations_detail: list = []
     # T8：本轮降级明细（["icon@节点id"]）——附加字段，前端聊天面板消费（T8 收尾）
     degraded: list = []
+    # T51 批2：反馈归因字段（取本次最后一次模型调用；**没调模型 → null**，
+    # 覆盖熔断开路 / mock / 填充前失败——汇总脚本把 null 单列成"无模型调用"）
+    llm_model: str | None = None
+    llm_prompt_version: str | None = None
+    api_format: str | None = None
+    profile_id: str | None = None
+    # T52 收尾批：能力缺口统计摘要（{"degraded": n, "unknown_prop": n, "ops_rejected": n}）。
+    # 决策翻转说明：明细（detail/node_id）只进 DB + capability_gap_detail.log，API **只下发计数**
+    # ——满足"用户即时看到发生了什么"，不泄漏模型产物文本。null 口径与归因字段一致；
+    # 结果层判定：result.gaps 为空即 None（mock 与真实无缺口统一，不依赖配置层；
+    # mock 另有 SourceBadge"演示模板稿"专属提示，用户不会把 null 误读为"生成很干净"）。
+    gaps_summary: dict[str, int] | None = None
 
 
 @router.post("/api/generate", response_model=GenerateResponse)
@@ -91,6 +103,18 @@ async def generate(req: GenerateRequest, _user: str = Depends(get_current_user),
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"AI 生成失败：{exc}") from exc
     record_calls(result.ai_calls, req.session_key, _user)  # T21：记账（内部吞异常，不影响返回）
+    # T52：能力缺口台账（同旁路范式）。有意只接在成功路径——生成链路异常中断（502/503）
+    # 无产物、无 repair，也就没有可记录的缺口；与 ai_calls 现状同口径。
+    record_capability_gaps(result.gaps, req.session_key, _user)
+    # T52：缺口统计摘要（结果层判定：gaps 空即 None）。ops_rejected 计数 = "被拒批次的去重
+    # op 类型数"（记录上限 5——超过 5 类时 N ≤ 实际类数），非拒绝次数；保留它的理由：
+    # error 通道只传达整体拒绝原因，摘要告知用户"被拒几类"。前端文案须用"类"而非"次"。
+    gaps_summary: dict[str, int] | None = None
+    if result.gaps:
+        gaps_summary = {}
+        for gap in result.gaps:
+            gaps_summary[gap["gap_type"]] = gaps_summary.get(gap["gap_type"], 0) + 1
+    last_call = result.ai_calls[-1] if result.ai_calls else {}
     return GenerateResponse(
         design=result.design,
         template=result.template,
@@ -102,6 +126,12 @@ async def generate(req: GenerateRequest, _user: str = Depends(get_current_user),
         error=result.error,
         violations_detail=result.violations_detail,
         degraded=result.degraded,
+        gaps_summary=gaps_summary,
+        # T51 批2：反馈归因字段（**没调模型 → null**，不是空串——汇总脚本按 null 单列分组）
+        llm_model=last_call.get("model") or None,
+        llm_prompt_version=last_call.get("prompt_version") or None,
+        api_format=last_call.get("api_format"),
+        profile_id=last_call.get("profile_id"),
     )
 
 
@@ -252,6 +282,9 @@ async def explore_options(req: ExploreRequest, _user: str = Depends(get_current_
     degraded = False
     for result in results:
         record_calls(result.ai_calls, req.session_key, _user)  # T21：两方案各自记账
+        # T52：explore 复用同一 generate_design（经过 repair/降级/契约对比），缺口同样成立
+        record_capability_gaps(result.gaps, req.session_key, _user)
+        # TODO(L2-panel): explore 路径暂不下发 gaps_summary（缺口已入台账），与主路径统一时再加。
     for (label, _), result in zip(variants, results):
         if result.fallback:
             degraded = True

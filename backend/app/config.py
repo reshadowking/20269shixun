@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     llm_max_tokens: int = 16384  # 输出上限：42K 字符的完整 DesignNode 树 ≈ 8200 token，8192 会截断（finish_reason=length）
     llm_temperature_parse: float = 0.2
     llm_temperature_fill: float = 0.6  # 0.3 太死板（相同提示词结果雷同），0.6 平衡多样与稳定
+    # T48：供应商预设与 API 格式（可选，用环境变量覆盖即可；不设时读侧按 base_url 反推）
+    llm_provider: str = "custom"  # deepseek | kimi | qwen | custom
+    llm_api_format: str = "chat"  # chat | responses | anthropic
     llm_history_max_chars: int = 1200  # T24：会话历史进提示词的字符预算（超出丢最旧一轮）
     # 2026-09-18：会话历史**保留几轮**（一轮 = 一条 user + 一条 assistant）。
     # 实测：典型一轮（"把按钮颜色改成红色" + 机器摘要"已按指令修改画布"）≈ 23 字符，
